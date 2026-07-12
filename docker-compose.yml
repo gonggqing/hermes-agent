@@ -55,6 +55,17 @@ services:
     environment:
       - HERMES_UID=${HERMES_UID:-10000}
       - HERMES_GID=${HERMES_GID:-10000}
+      # Dashboard runs INSIDE this container (s6 supervises it alongside the
+      # gateway). Single-container mode is required for the dashboard's
+      # "Restart Gateway" action: it drives the local s6 slot
+      # /run/service/gateway-default, which only exists here — a separate
+      # dashboard container has no such slot and the button 404s.
+      # Under network_mode:host the dashboard binds the HOST loopback
+      # directly (my.hermes -> 127.0.0.1:9119; loopback bind = token auth,
+      # no login page), and the /api/finance/* reverse proxy reaches the
+      # host-run Finance service at its default http://127.0.0.1:9319.
+      - HERMES_DASHBOARD=1
+      - HERMES_DASHBOARD_HOST=127.0.0.1
       # To expose the OpenAI-compatible API server beyond localhost,
       # uncomment BOTH lines (API_SERVER_KEY is mandatory for auth):
       # - API_SERVER_HOST=0.0.0.0
@@ -77,37 +88,9 @@ services:
       # - GOOGLE_CHAT_ALLOWED_USERS=${GOOGLE_CHAT_ALLOWED_USERS}
     command: ["gateway", "run"]
 
-  dashboard:
-    image: hermes-agent
-    container_name: hermes-dashboard
-    restart: unless-stopped
-    depends_on:
-      - gateway
-    # Publish only to the macOS loopback interface.  /etc/hosts maps the
-    # local development name my.hermes to 127.0.0.1; this is not a LAN or
-    # internet-facing endpoint.
-    ports:
-      - "127.0.0.1:9119:9119"
-    # The dashboard binds to all interfaces *inside* the container so Docker
-    # can forward the loopback-only host port.  Hermes therefore enables its
-    # built-in auth gate; credentials remain in ~/.hermes/.env.
-    env_file:
-      - ${HOME}/.hermes/.env
-    volumes:
-      - ~/.hermes:/opt/data
-    environment:
-      - HERMES_UID=${HERMES_UID:-10000}
-      - HERMES_GID=${HERMES_GID:-10000}
-      # The Finance service (trader/: `python -m swing_trader serve`) runs on
-      # the HOST in Phase 0; inside the container 127.0.0.1 is the container
-      # itself, so the /api/finance/* reverse proxy must target the host.
-      - HERMES_FINANCE_SERVICE_URL=http://host.docker.internal:9319
-    extra_hosts:
-      # Native on Docker Desktop (macOS); required on Linux engines.
-      - "host.docker.internal:host-gateway"
-    # Localhost-only at the Docker boundary. For remote access, use a VPN or
-    # a separately authenticated reverse proxy; do not expose this port.
-    command: ["dashboard", "--host", "0.0.0.0", "--no-open"]
+  # NOTE: the dashboard deliberately has NO separate service. It runs inside
+  # the gateway container (HERMES_DASHBOARD=1 above) so the dashboard's
+  # "Restart Gateway" action can drive the shared s6 supervision tree.
 
   # --------------------------------------------------------------------------
   # hermes-finance-vector — private Qdrant vector store for the Finance

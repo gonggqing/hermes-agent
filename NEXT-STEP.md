@@ -68,10 +68,15 @@ anything advances (Loop.md §0 rule 4).
 - Host: `swing_trader serve --check-now` running (nohup, `trader/serve.log`,
   ledger `trader/trader.db`, port 9319). LLM analyst ENABLED (DeepSeek-v4-flash;
   GLM5-turbo fallback; keys from `~/.hermes/.env`).
-- Docker: image rebuilt WITH the Finance web tab; `hermes-dashboard` restarted
-  with `HERMES_FINANCE_SERVICE_URL=http://host.docker.internal:9319`;
-  `hermes-finance-vector` (Qdrant) up. Visit http://my.hermes:9119/finance
-  (login with the dashboard basic-auth from ~/.hermes/.env).
+- Docker topology (changed 2026-07-12): SINGLE container — the dashboard runs
+  INSIDE the gateway container (`HERMES_DASHBOARD=1`, s6-supervised alongside
+  `gateway-default`). Required for the dashboard's "Restart Gateway" button,
+  which drives the LOCAL s6 slot (a separate dashboard container has no such
+  slot → "no such gateway 'default'"). Under `network_mode: host` the
+  dashboard binds host loopback directly (`HERMES_DASHBOARD_HOST=127.0.0.1`,
+  token auth — no login page) and the /api/finance/* proxy reaches the
+  host-run Finance service at its default `http://127.0.0.1:9319`.
+  `hermes-finance-vector` (Qdrant) up. Visit http://my.hermes:9119/finance.
 - Env: **~/.hermes/.env is the single source of truth for all secrets**
   (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, DEEPSEEK_API_KEY, GLM_API_KEY,
   dashboard basic-auth). trader/.env was removed; `serve` loads
