@@ -1250,7 +1250,125 @@ export const api = {
     fetchJSON<SkillHubScan>(
       `/api/skills/hub/scan?identifier=${encodeURIComponent(identifier)}`,
     ),
+
+  // ── Finance (Loop.md §5.9) ──────────────────────────────────────────
+  // The dashboard reverse-proxies /api/finance/* to the Finance service's
+  // /v1/* (trader/swing_trader/api.py). The service may be offline — read
+  // calls then throw (proxy 502/503) and the Finance page renders its
+  // offline panel instead of the data sections.
+  financeHealth: () => fetchJSON<FinanceHealth>("/api/finance/v1/health"),
+  financeAccount: (mode?: FinanceMode) =>
+    fetchJSON<FinanceAccountResponse>(
+      `/api/finance/v1/account${financeQuery({ mode })}`,
+    ),
+  financeOrders: (activeOnly = false, mode?: FinanceMode) =>
+    fetchJSON<FinanceOrder[]>(
+      `/api/finance/v1/orders${financeQuery({ active_only: activeOnly || undefined, mode })}`,
+    ),
+  financeFills: (mode?: FinanceMode) =>
+    fetchJSON<FinanceFill[]>(`/api/finance/v1/fills${financeQuery({ mode })}`),
+  financeTrades: (openOnly = false, mode?: FinanceMode) =>
+    fetchJSON<FinanceTrade[]>(
+      `/api/finance/v1/trades${financeQuery({ open_only: openOnly || undefined, mode })}`,
+    ),
+  financeStats: (mode?: FinanceMode) =>
+    fetchJSON<FinanceStats>(`/api/finance/v1/stats${financeQuery({ mode })}`),
+  financeSnapshots: (limit = 90, mode?: FinanceMode) =>
+    fetchJSON<FinanceSnapshot[]>(
+      `/api/finance/v1/snapshots${financeQuery({ limit, mode })}`,
+    ),
+  financeMarket: () =>
+    fetchJSON<FinanceMarketSnapshot>("/api/finance/v1/market"),
+  financeWatchlist: () =>
+    fetchJSON<FinanceWatchlistItem[]>("/api/finance/v1/watchlist"),
+  financeLatestReports: () =>
+    fetchJSON<FinanceReports>("/api/finance/v1/reports/latest"),
+  financeCandidates: (status?: string, mode?: FinanceMode) =>
+    fetchJSON<FinanceCandidate[]>(
+      `/api/finance/v1/candidates${financeQuery({ status, mode })}`,
+    ),
+  financePendingCandidates: () =>
+    fetchJSON<FinancePendingCandidate[]>("/api/finance/v1/candidates/pending"),
+  financeAudit: (candidateId?: string) =>
+    fetchJSON<FinanceAuditEvent[]>(
+      `/api/finance/v1/audit${financeQuery({ candidate_id: candidateId })}`,
+    ),
+  /**
+   * POST a human approve/reject/edit action for a pending candidate.
+   *
+   * Unlike the read endpoints this does NOT throw on non-2xx: the service
+   * expresses domain outcomes as status codes with a structured body
+   * (403 window_closed, 409 terminal/version_conflict, 422 invalid edit,
+   * 404 unknown, 503 service inactive) that the approval UI must render
+   * as notices rather than crashes. Network/proxy failures still throw so
+   * callers can retry with the SAME idempotency key.
+   */
+  financeCandidateAction: async (
+    id: string,
+    body: FinanceActionRequest,
+  ): Promise<FinanceActionOutcome> => {
+    const res = await authedFetch(
+      `/api/finance/v1/candidates/${encodeURIComponent(id)}/action`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Finance-Surface": "web",
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    let parsed: unknown = null;
+    try {
+      parsed = await res.json();
+    } catch {
+      /* non-JSON body (e.g. proxy 502 page) — normalized below */
+    }
+    if (parsed && typeof parsed === "object" && "code" in parsed) {
+      const p = parsed as {
+        ok?: boolean;
+        code: string;
+        message?: string;
+        version?: number | null;
+        candidate?: FinanceCandidate | null;
+      };
+      return {
+        status: res.status,
+        ok: p.ok === true,
+        code: p.code,
+        message: p.message ?? "",
+        version: p.version ?? null,
+        candidate: p.candidate ?? null,
+      };
+    }
+    // FastAPI HTTPException ({"detail": ...}) or an opaque proxy error.
+    let detail = res.statusText || `HTTP ${res.status}`;
+    if (parsed && typeof parsed === "object" && "detail" in parsed) {
+      const d = (parsed as { detail: unknown }).detail;
+      detail = typeof d === "string" ? d : JSON.stringify(d);
+    }
+    return {
+      status: res.status,
+      ok: false,
+      code: res.status === 503 ? "service_unavailable" : `http_${res.status}`,
+      message: detail,
+      version: null,
+      candidate: null,
+    };
+  },
 };
+
+/** Build a query string from defined params only ("" when none). */
+function financeQuery(
+  params: Record<string, string | number | boolean | undefined>,
+): string {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined) qs.set(k, String(v));
+  }
+  const s = qs.toString();
+  return s ? `?${s}` : "";
+}
 
 /** Identity payload returned by ``GET /api/auth/me`` (Phase 7).
  *
@@ -2493,4 +2611,245 @@ export interface AgentPluginUpdateResponse {
 export interface PluginProvidersPutRequest {
   memory_provider?: string;
   context_engine?: string;
+}
+
+// ── Finance types (Loop.md §5.9; shapes from trader/swing_trader/api.py) ─
+
+export type FinanceMode = "paper" | "live";
+
+export type FinanceBreakerState = "NORMAL" | "TRIPPED";
+
+export interface FinanceHealth {
+  status: string;
+  mode: FinanceMode;
+  loop_attached: boolean;
+  breaker: FinanceBreakerState | "UNKNOWN";
+  ts: string;
+}
+
+export interface FinancePosition {
+  symbol: string;
+  qty: number;
+  avg_px: number;
+  mkt_px: number | null;
+  upnl: number | null;
+  pool: string;
+}
+
+export interface FinanceOpenOrder {
+  symbol: string;
+  side: "BUY" | "SELL";
+  qty: number;
+  order_type: string;
+  limit: number | null;
+  stop: number | null;
+  status: string;
+}
+
+export interface FinanceStats {
+  n_closed: number;
+  n_wins: number;
+  win_rate: number;
+  avg_win: number | null;
+  avg_loss: number | null;
+  payoff_ratio: number | null;
+  expectancy: number;
+  total_pnl: number;
+  avg_hold_days: number | null;
+  max_drawdown_pct: number;
+}
+
+export interface FinanceSnapshot {
+  ts: string;
+  mode: FinanceMode;
+  equity: number;
+  cash: number;
+  upnl: number;
+  day_pnl: number;
+  drawdown_pct: number;
+  breaker_state: FinanceBreakerState;
+}
+
+/** Full account view when the daily loop is attached to the service. */
+export interface FinanceAccountView {
+  mode: FinanceMode;
+  ts: string;
+  equity: number;
+  cash: number;
+  upnl: number;
+  day_pnl: number;
+  drawdown_pct: number;
+  breaker_state: FinanceBreakerState;
+  positions: FinancePosition[];
+  open_orders: FinanceOpenOrder[];
+  stats: FinanceStats;
+}
+
+/** Ledger-only fallback when the loop is idle (evenings, weekends). */
+export interface FinanceAccountLedger {
+  mode: FinanceMode;
+  snapshot: FinanceSnapshot | null;
+  stats: FinanceStats;
+  source: "ledger";
+}
+
+export type FinanceAccountResponse = FinanceAccountView | FinanceAccountLedger;
+
+export interface FinanceOrder {
+  id: string;
+  ts: string;
+  mode: FinanceMode;
+  symbol: string;
+  side: "BUY" | "SELL";
+  qty: number;
+  order_type: string;
+  limit: number | null;
+  stop: number | null;
+  tp: number | null;
+  tif: string;
+  status: string;
+  broker_ref: string | null;
+  parent_order_id: string | null;
+  oca_group: string | null;
+  filled_qty: number;
+  avg_fill_px: number | null;
+}
+
+export interface FinanceFill {
+  id: string;
+  ts: string;
+  order_id: string;
+  symbol: string;
+  side: "BUY" | "SELL";
+  qty: number;
+  px: number;
+  commission: number;
+  mode: FinanceMode;
+}
+
+export interface FinanceTrade {
+  id: string;
+  mode: FinanceMode;
+  symbol: string;
+  qty: number;
+  entry_order_id: string;
+  exit_order_id: string | null;
+  entry_px: number;
+  exit_px: number | null;
+  pnl: number | null;
+  r_multiple: number | null;
+  hold_days: number | null;
+  rationale: string;
+  ts?: string;
+  entry_ts?: string;
+  exit_ts: string | null;
+  is_open?: boolean;
+}
+
+/** Latest MarketSnapshot dump, or ``{status: "no snapshot yet"}``. */
+export interface FinanceMarketSnapshot {
+  ts?: string;
+  risk_on_off?: "risk_on" | "neutral" | "risk_off";
+  vix?: number | null;
+  breadth_pct_above_50dma?: number;
+  indices?: Record<string, Record<string, number | null>>;
+  status?: string;
+}
+
+export interface FinanceWatchlistItem {
+  symbol: string;
+  theme: string;
+  ai_phase: string;
+  role: string;
+  enabled: boolean;
+}
+
+/** kind -> plain-text report (e.g. ``{morning: "..."}``). */
+export type FinanceReports = Record<string, string>;
+
+export type FinanceCandidateStatus =
+  | "proposed"
+  | "risk_approved"
+  | "risk_vetoed"
+  | "pushed"
+  | "approved"
+  | "edited"
+  | "rejected"
+  | "expired"
+  | "placed";
+
+export interface FinanceCandidate {
+  id: string;
+  ts: string;
+  symbol: string;
+  side: "BUY" | "SELL";
+  qty: number;
+  order_type: "LMT" | "STP" | "MOC" | "LOC" | "BRACKET";
+  limit: number | null;
+  stop: number | null;
+  tp: number | null;
+  sl: number | null;
+  tif: string;
+  rationale: string;
+  confidence: number;
+  signal_ids: string[];
+  ref_px: number | null;
+  valid_until: string | null;
+  status: FinanceCandidateStatus;
+  risk_note: string;
+  pool: string;
+}
+
+export interface FinancePendingCandidate {
+  candidate: FinanceCandidate;
+  version: number;
+  window_open: boolean;
+}
+
+export interface FinanceAuditEvent {
+  ts: string;
+  mode: string;
+  candidate_id: string;
+  action: string;
+  actor: string;
+  surface: string;
+  version: number;
+  idempotency_key: string;
+  prev_status: string;
+  new_status: string;
+  applied: boolean;
+  detail: string;
+}
+
+/** Human edits allowed on a pending candidate (server re-validates). */
+export interface FinanceCandidateEdits {
+  qty?: number;
+  limit?: number;
+  stop?: number;
+  sl?: number;
+  tp?: number;
+}
+
+export interface FinanceActionRequest {
+  action: "approve" | "reject" | "edit";
+  actor: string;
+  idempotency_key: string;
+  expected_version?: number;
+  edits?: FinanceCandidateEdits;
+}
+
+/**
+ * Normalized outcome of {@link api.financeCandidateAction}: service result
+ * codes (``applied``/``replayed``/``window_closed``/``terminal``/
+ * ``version_conflict``/``unknown_candidate``/``invalid_edit``) plus the
+ * synthesized ``service_unavailable``/``http_*`` codes for non-envelope
+ * error responses.
+ */
+export interface FinanceActionOutcome {
+  status: number;
+  ok: boolean;
+  code: string;
+  message: string;
+  version: number | null;
+  candidate: FinanceCandidate | null;
 }

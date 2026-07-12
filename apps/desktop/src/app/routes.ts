@@ -9,6 +9,7 @@ export const CRON_ROUTE = '/cron'
 export const PROFILES_ROUTE = '/profiles'
 export const AGENTS_ROUTE = '/agents'
 export const STARMAP_ROUTE = '/starmap'
+export const FINANCE_ROUTE = '/finance'
 
 export type AppView =
   | 'agents'
@@ -16,6 +17,7 @@ export type AppView =
   | 'chat'
   | 'command-center'
   | 'cron'
+  | 'finance'
   | 'messaging'
   | 'profiles'
   | 'settings'
@@ -27,6 +29,7 @@ export type AppRouteId =
   | 'artifacts'
   | 'command-center'
   | 'cron'
+  | 'finance'
   | 'messaging'
   | 'new'
   | 'profiles'
@@ -47,6 +50,9 @@ export const APP_ROUTES = [
   { id: 'skills', path: SKILLS_ROUTE, view: 'skills' },
   { id: 'messaging', path: MESSAGING_ROUTE, view: 'messaging' },
   { id: 'artifacts', path: ARTIFACTS_ROUTE, view: 'artifacts' },
+  // Permanent Finance portal (Loop.md §5.9) — a full view like skills/
+  // messaging/artifacts, deliberately NOT in OVERLAY_VIEWS.
+  { id: 'finance', path: FINANCE_ROUTE, view: 'finance' },
   { id: 'cron', path: CRON_ROUTE, view: 'cron' },
   { id: 'profiles', path: PROFILES_ROUTE, view: 'profiles' },
   { id: 'agents', path: AGENTS_ROUTE, view: 'agents' },

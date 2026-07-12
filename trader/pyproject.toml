@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "swing-trader"
+version = "0.0.1"
+description = "Human-in-the-loop, daily-cadence swing-trading assistant (Loop.md v0, Phase 0: paper only)"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "pydantic>=2.9,<3",
+  "pydantic-settings>=2.5,<3",
+  "python-dotenv>=1.0,<2",
+  "sqlmodel>=0.0.21,<0.1",
+  "yfinance>=0.2.40,<0.3",
+]
+
+[project.optional-dependencies]
+# The Finance HTTP service (Loop.md §5.6/§8): optional so the core trading
+# library stays dependency-light and extractable.
+service = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.30,<1",
+]
+# Knowledge store vector layer (Loop.md §5.10): embedded/local Qdrant.
+knowledge = [
+  "qdrant-client>=1.9,<2",
+]
+dev = [
+  "pytest>=8",
+  "pytest-cov>=5",
+  "ruff>=0.6",
+  "httpx>=0.27,<1",  # FastAPI TestClient
+]
+
+[tool.setuptools.packages.find]
+include = ["swing_trader*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100

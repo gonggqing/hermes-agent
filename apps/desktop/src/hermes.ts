@@ -1206,3 +1206,352 @@ export function runDebugShare(): Promise<DebugShareResponse> {
     timeoutMs: 120_000
   })
 }
+
+// ---------------------------------------------------------------------------
+// Finance service (Loop.md §5.6/§5.9). The Hermes backend reverse-proxies
+// /api/finance/* to the swing-trader service's /v1/* (hermes_cli/
+// finance_proxy.py), so these calls inherit dashboard auth like every other
+// /api path. The service runs as its own process and is routinely OFFLINE
+// (evenings, weekends, not started): the proxy then answers 503 with a JSON
+// hint. Callers must treat that as an expected offline state, never a crash.
+//
+// The wire shapes below mirror trader/swing_trader (schemas.py, reporter.py,
+// ledger.py, monitors.py, watchlist.py, api.py). They live here rather than in
+// types/hermes.ts because they are owned by the finance service's versioned
+// API, not by the Hermes gateway.
+// ---------------------------------------------------------------------------
+
+export type FinanceMode = 'live' | 'paper'
+
+export type FinanceBreakerState = 'NORMAL' | 'TRIPPED' | 'UNKNOWN'
+
+export type FinanceCandidateStatus =
+  | 'approved'
+  | 'edited'
+  | 'expired'
+  | 'placed'
+  | 'proposed'
+  | 'pushed'
+  | 'rejected'
+  | 'risk_approved'
+  | 'risk_vetoed'
+
+export type FinanceOrderType = 'BRACKET' | 'LMT' | 'LOC' | 'MOC' | 'STP'
+
+export type FinanceSide = 'BUY' | 'SELL'
+
+export interface FinanceHealth {
+  status: string
+  mode: FinanceMode
+  loop_attached: boolean
+  breaker: FinanceBreakerState
+  ts: string
+}
+
+export interface FinancePosition {
+  symbol: string
+  qty: number
+  avg_px: number
+  mkt_px: null | number
+  upnl: null | number
+  pool: string
+}
+
+export interface FinanceOpenOrder {
+  symbol: string
+  side: FinanceSide
+  qty: number
+  order_type: FinanceOrderType
+  limit: null | number
+  stop: null | number
+  status: string
+}
+
+export interface FinanceStats {
+  n_closed: number
+  n_wins: number
+  win_rate: number
+  avg_win: null | number
+  avg_loss: null | number
+  payoff_ratio: null | number
+  expectancy: number
+  total_pnl: number
+  avg_hold_days: null | number
+  max_drawdown_pct: number
+}
+
+export interface FinanceSnapshot {
+  ts: string
+  mode: FinanceMode
+  equity: number
+  cash: number
+  upnl: number
+  day_pnl: number
+  drawdown_pct: number
+  breaker_state: FinanceBreakerState
+}
+
+// Loop attached: the full live AccountView. Loop idle (or the non-active
+// mode): a ledger fallback of last snapshot + stats. Discriminate on `source`.
+export interface FinanceAccountLive {
+  mode: FinanceMode
+  ts: string
+  equity: number
+  cash: number
+  upnl: number
+  day_pnl: number
+  drawdown_pct: number
+  breaker_state: FinanceBreakerState
+  positions: FinancePosition[]
+  open_orders: FinanceOpenOrder[]
+  stats: FinanceStats
+  source?: undefined
+}
+
+export interface FinanceAccountLedger {
+  mode: FinanceMode
+  snapshot: FinanceSnapshot | null
+  stats: FinanceStats
+  source: 'ledger'
+}
+
+export type FinanceAccount = FinanceAccountLedger | FinanceAccountLive
+
+export interface FinanceOrderRow {
+  id: string
+  ts: string
+  mode: FinanceMode
+  symbol: string
+  side: FinanceSide
+  qty: number
+  order_type: FinanceOrderType
+  limit: null | number
+  stop: null | number
+  tp: null | number
+  tif: string
+  status: string
+  broker_ref: null | string
+  filled_qty: number
+  avg_fill_px: null | number
+}
+
+export interface FinanceFill {
+  id: string
+  order_id: string
+  symbol: string
+  side: FinanceSide
+  qty: number
+  px: number
+  commission: number
+  mode: FinanceMode
+  ts: string
+}
+
+export interface FinanceTrade {
+  id: string
+  mode: FinanceMode
+  symbol: string
+  qty: number
+  entry_px: number
+  exit_px: null | number
+  pnl: null | number
+  r_multiple: null | number
+  hold_days: null | number
+  rationale: string
+  is_open: boolean
+  ts: string
+  exit_ts: null | string
+}
+
+export interface FinanceMarketSnapshot {
+  // `{"status": "no snapshot yet"}` before the loop's first market poll.
+  status?: string
+  ts?: string
+  indices?: Record<string, Record<string, null | number>>
+  vix?: null | number
+  breadth_pct_above_50dma?: number
+  risk_on_off?: 'neutral' | 'risk_off' | 'risk_on'
+}
+
+export interface FinanceWatchlistItem {
+  symbol: string
+  theme: string
+  ai_phase: string
+  role: string
+  enabled: boolean
+}
+
+export interface FinanceCandidate {
+  id: string
+  ts: string
+  symbol: string
+  side: FinanceSide
+  qty: number
+  order_type: FinanceOrderType
+  limit: null | number
+  stop: null | number
+  tp: null | number
+  sl: null | number
+  tif: string
+  rationale: string
+  confidence: number
+  signal_ids: string[]
+  ref_px: null | number
+  valid_until: null | string
+  status: FinanceCandidateStatus
+  risk_note: string
+  pool: string
+}
+
+export interface FinancePendingCandidate {
+  candidate: FinanceCandidate
+  version: number
+  window_open: boolean
+}
+
+export interface FinanceAuditEvent {
+  ts: string
+  mode: string
+  candidate_id: string
+  action: string
+  actor: string
+  surface: string
+  version: number
+  idempotency_key: string
+  prev_status: string
+  new_status: string
+  applied: boolean
+  detail: string
+}
+
+// Human edits are limited to these five fields (confirmation.py re-validates
+// through CandidateOrder, so protection can never be stripped server-side).
+export interface FinanceCandidateEdits {
+  qty?: number
+  limit?: number
+  stop?: number
+  sl?: number
+  tp?: number
+}
+
+export interface FinanceActionPayload {
+  action: 'approve' | 'edit' | 'reject'
+  actor: string
+  // Generated ONCE per user intent (crypto.randomUUID()) and reused on retry,
+  // so the service replays instead of double-applying (Loop.md §5.6).
+  idempotency_key: string
+  expected_version?: number
+  edits?: FinanceCandidateEdits
+  // The IPC bridge cannot set the X-Finance-Surface header, so the service
+  // accepts the surface in the request body as a fallback (header wins).
+  surface?: 'desktop' | 'web' | 'telegram'
+}
+
+export interface FinanceActionResult {
+  ok: boolean
+  code: 'applied' | 'replayed'
+  message: string
+  version: null | number
+  candidate: FinanceCandidate | null
+}
+
+function financeQuery(params: Record<string, boolean | number | string | undefined>): string {
+  const query = new URLSearchParams()
+
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== '') {
+      query.set(key, String(value))
+    }
+  }
+
+  const suffix = query.toString()
+
+  return suffix ? `?${suffix}` : ''
+}
+
+export function getFinanceHealth(): Promise<FinanceHealth> {
+  return window.hermesDesktop.api<FinanceHealth>({ path: '/api/finance/v1/health' })
+}
+
+export function getFinanceAccount(mode?: FinanceMode): Promise<FinanceAccount> {
+  return window.hermesDesktop.api<FinanceAccount>({ path: `/api/finance/v1/account${financeQuery({ mode })}` })
+}
+
+export function getFinanceOrders(opts: { activeOnly?: boolean; mode?: FinanceMode } = {}): Promise<FinanceOrderRow[]> {
+  return window.hermesDesktop.api<FinanceOrderRow[]>({
+    path: `/api/finance/v1/orders${financeQuery({ active_only: opts.activeOnly, mode: opts.mode })}`
+  })
+}
+
+export function getFinanceFills(mode?: FinanceMode): Promise<FinanceFill[]> {
+  return window.hermesDesktop.api<FinanceFill[]>({ path: `/api/finance/v1/fills${financeQuery({ mode })}` })
+}
+
+export function getFinanceTrades(opts: { mode?: FinanceMode; openOnly?: boolean } = {}): Promise<FinanceTrade[]> {
+  return window.hermesDesktop.api<FinanceTrade[]>({
+    path: `/api/finance/v1/trades${financeQuery({ mode: opts.mode, open_only: opts.openOnly })}`
+  })
+}
+
+export function getFinanceStats(mode?: FinanceMode): Promise<FinanceStats> {
+  return window.hermesDesktop.api<FinanceStats>({ path: `/api/finance/v1/stats${financeQuery({ mode })}` })
+}
+
+// Equity series for the account sparkline; newest-last, at most `limit` rows.
+export function getFinanceSnapshots(opts: { limit?: number; mode?: FinanceMode } = {}): Promise<FinanceSnapshot[]> {
+  return window.hermesDesktop.api<FinanceSnapshot[]>({
+    path: `/api/finance/v1/snapshots${financeQuery({ limit: opts.limit, mode: opts.mode })}`
+  })
+}
+
+export function getFinanceMarket(): Promise<FinanceMarketSnapshot> {
+  return window.hermesDesktop.api<FinanceMarketSnapshot>({ path: '/api/finance/v1/market' })
+}
+
+export function getFinanceWatchlist(): Promise<FinanceWatchlistItem[]> {
+  return window.hermesDesktop.api<FinanceWatchlistItem[]>({ path: '/api/finance/v1/watchlist' })
+}
+
+// kind -> plain-text report (e.g. { morning: "..." }).
+export function getFinanceReports(): Promise<Record<string, string>> {
+  return window.hermesDesktop.api<Record<string, string>>({ path: '/api/finance/v1/reports/latest' })
+}
+
+export function getFinanceCandidates(
+  opts: { mode?: FinanceMode; status?: FinanceCandidateStatus } = {}
+): Promise<FinanceCandidate[]> {
+  return window.hermesDesktop.api<FinanceCandidate[]>({
+    path: `/api/finance/v1/candidates${financeQuery({ mode: opts.mode, status: opts.status })}`
+  })
+}
+
+export function getFinancePendingCandidates(): Promise<FinancePendingCandidate[]> {
+  return window.hermesDesktop.api<FinancePendingCandidate[]>({ path: '/api/finance/v1/candidates/pending' })
+}
+
+export function getFinanceAudit(
+  opts: { candidateId?: string; mode?: FinanceMode } = {}
+): Promise<FinanceAuditEvent[]> {
+  return window.hermesDesktop.api<FinanceAuditEvent[]>({
+    path: `/api/finance/v1/audit${financeQuery({ candidate_id: opts.candidateId, mode: opts.mode })}`
+  })
+}
+
+// Relay a HUMAN approve/reject/edit to the confirmation service (Loop.md §3:
+// this is the only write surface; nothing here places orders). Non-2xx answers
+// (403 window closed, 404 unknown, 409 terminal/version conflict, 422 invalid
+// edit, 503 service not active) reject with `Error("<status>: <json body>")` —
+// parse via parseFinanceError in app/finance/lib.
+//
+// The desktop IPC bridge (electron/main.ts fetchJson) forwards only
+// method/body/timeout — custom headers are dropped — so the surface rides in
+// the request body instead; the service treats body.surface as the fallback
+// when the X-Finance-Surface header is absent, keeping the audit trail
+// attributed to "desktop" (Loop.md §5.6).
+export function postFinanceCandidateAction(id: string, payload: FinanceActionPayload): Promise<FinanceActionResult> {
+  return window.hermesDesktop.api<FinanceActionResult>({
+    path: `/api/finance/v1/candidates/${encodeURIComponent(id)}/action`,
+    method: 'POST',
+    body: { surface: 'desktop', ...payload }
+  })
+}

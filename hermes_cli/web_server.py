@@ -263,6 +263,13 @@ from hermes_cli.memory_oauth import router as _memory_oauth_router  # noqa: E402
 
 app.include_router(_memory_oauth_router)
 
+# Finance service reverse proxy (Loop.md §5.6/§5.9): the trading loop runs
+# as its own process; /api/finance/* forwards to it and inherits the auth
+# middleware like every other /api/ route.
+from hermes_cli.finance_proxy import router as _finance_proxy_router  # noqa: E402
+
+app.include_router(_finance_proxy_router)
+
 # ---------------------------------------------------------------------------
 # Session token for protecting sensitive endpoints (reveal).
 # The desktop shell mints the token and injects it via

@@ -1,0 +1,361 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type * as React from 'react'
+import { useEffect, useState } from 'react'
+
+import { StatusDot } from '@/components/status-dot'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
+import { ErrorBanner } from '@/components/ui/error-state'
+import { Input } from '@/components/ui/input'
+import {
+  type FinanceActionPayload,
+  type FinanceCandidate,
+  type FinanceCandidateEdits,
+  type FinancePendingCandidate,
+  getFinancePendingCandidates,
+  postFinanceCandidateAction
+} from '@/hermes'
+import { notify, notifyError } from '@/store/notifications'
+
+import {
+  CANDIDATE_STATUS_TONE,
+  FINANCE_ACTOR,
+  FINANCE_KEY,
+  financeKey,
+  fmtPct,
+  fmtPrice,
+  fmtQty,
+  fmtTs,
+  idempotencyKeyFor,
+  parseFinanceError,
+  settleIdempotencyKey,
+  statusLabel
+} from './lib'
+import { FinanceCard, FinancePill, QuerySection } from './primitives'
+
+// Candidates land at 11:30 ET and expire at 12:30 ET (Loop.md §4) with no push
+// signal to this surface, so poll while the tab is mounted.
+const PENDING_POLL_MS = 15_000
+
+export const PENDING_QUERY_KEY = financeKey('candidates', 'pending')
+
+export function usePendingCandidates(enabled: boolean) {
+  return useQuery({
+    enabled,
+    queryFn: getFinancePendingCandidates,
+    queryKey: PENDING_QUERY_KEY,
+    refetchInterval: PENDING_POLL_MS,
+    retry: 1
+  })
+}
+
+interface ActionVars {
+  action: FinanceActionPayload['action']
+  candidate: FinanceCandidate
+  edits?: FinanceCandidateEdits
+  version: number
+}
+
+export function FinanceQueue({ enabled }: { enabled: boolean }) {
+  const queryClient = useQueryClient()
+  const pendingQuery = usePendingCandidates(enabled)
+  const [editing, setEditing] = useState<FinancePendingCandidate | null>(null)
+
+  const actionMutation = useMutation({
+    mutationFn: ({ action, candidate, edits, version }: ActionVars) =>
+      // TODO(finance): should also carry `X-Finance-Surface: desktop`; the IPC
+      // bridge can't attach headers yet (see postFinanceCandidateAction).
+      postFinanceCandidateAction(candidate.id, {
+        action,
+        actor: FINANCE_ACTOR,
+        idempotency_key: idempotencyKeyFor(candidate.id, action, edits),
+        expected_version: version,
+        ...(edits ? { edits } : {})
+      }),
+    onError: (error, { action, candidate, edits }) => {
+      const parsed = parseFinanceError(error)
+
+      // Terminal server verdicts (window closed, unknown, already-terminal,
+      // version conflict, invalid edit): this exact intent can never succeed,
+      // so retire its idempotency key. Network/offline failures keep the key
+      // so a retry replays instead of double-applying.
+      if (parsed.status !== null && parsed.status >= 400 && parsed.status < 500) {
+        settleIdempotencyKey(candidate.id, action, edits)
+      }
+
+      notifyError(new Error(parsed.message), `Failed to ${action} ${candidate.symbol}`)
+    },
+    onSettled: () => {
+      // The action moved server-authoritative state: refresh the queue plus
+      // everything derived from candidate status.
+      void queryClient.invalidateQueries({ queryKey: FINANCE_KEY })
+    },
+    onSuccess: (result, { action, candidate, edits }) => {
+      settleIdempotencyKey(candidate.id, action, edits)
+      setEditing(null)
+      notify({
+        kind: 'success',
+        message: result.message || `${candidate.symbol} ${result.code}`,
+        title: `${candidate.symbol}: ${action} ${result.code}`
+      })
+    }
+  })
+
+  const pending = pendingQuery.data ?? []
+
+  return (
+    <div className="space-y-3">
+      <QuerySection
+        empty="No pending candidates. The queue fills when the daily loop publishes risk-approved candidates (11:30 ET) and empties at the 12:30 ET cutoff."
+        error={pendingQuery.isError ? pendingQuery.error : undefined}
+        isEmpty={pending.length === 0}
+        loading={pendingQuery.isPending}
+      >
+        {pending.map(entry => (
+          <PendingCandidateCard
+            busy={actionMutation.isPending}
+            entry={entry}
+            key={entry.candidate.id}
+            onApprove={() =>
+              actionMutation.mutate({ action: 'approve', candidate: entry.candidate, version: entry.version })
+            }
+            onEdit={() => setEditing(entry)}
+            onReject={() =>
+              actionMutation.mutate({ action: 'reject', candidate: entry.candidate, version: entry.version })
+            }
+          />
+        ))}
+      </QuerySection>
+
+      <EditCandidateDialog
+        entry={editing}
+        onClose={() => setEditing(null)}
+        onSubmit={edits => {
+          if (editing) {
+            actionMutation.mutate({ action: 'edit', candidate: editing.candidate, edits, version: editing.version })
+          }
+        }}
+        submitting={actionMutation.isPending}
+      />
+    </div>
+  )
+}
+
+function CandidatePriceRow({ candidate }: { candidate: FinanceCandidate }) {
+  const parts: Array<[string, null | number]> = [
+    ['Limit', candidate.limit],
+    ['Stop', candidate.stop],
+    ['TP', candidate.tp],
+    ['SL', candidate.sl],
+    ['Ref', candidate.ref_px]
+  ]
+
+  return (
+    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums text-(--ui-text-secondary)">
+      <span>
+        Qty <span className="font-medium text-foreground">{fmtQty(candidate.qty)}</span>
+      </span>
+      {parts
+        .filter(([, value]) => value !== null)
+        .map(([label, value]) => (
+          <span key={label}>
+            {label} <span className="font-medium text-foreground">{fmtPrice(value)}</span>
+          </span>
+        ))}
+      <span>
+        TIF <span className="font-medium text-foreground">{candidate.tif}</span>
+      </span>
+    </div>
+  )
+}
+
+function PendingCandidateCard({
+  busy,
+  entry,
+  onApprove,
+  onEdit,
+  onReject
+}: {
+  busy: boolean
+  entry: FinancePendingCandidate
+  onApprove: () => void
+  onEdit: () => void
+  onReject: () => void
+}) {
+  const { candidate, version, window_open: windowOpen } = entry
+  const actionable = windowOpen && !busy
+
+  return (
+    <FinanceCard className="space-y-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold tracking-tight text-foreground">{candidate.symbol}</span>
+          <FinancePill variant={candidate.side === 'BUY' ? 'default' : 'warn'}>{candidate.side}</FinancePill>
+          <FinancePill variant="outline">{candidate.order_type}</FinancePill>
+          <span className="inline-flex items-center gap-1 text-[0.65rem] text-muted-foreground">
+            <StatusDot tone={CANDIDATE_STATUS_TONE[candidate.status] ?? 'muted'} />
+            {statusLabel(candidate.status)}
+          </span>
+          <span className="text-[0.65rem] tabular-nums text-muted-foreground">
+            confidence {fmtPct(candidate.confidence * 100, 0)} · v{version}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button disabled={!actionable} onClick={onApprove} size="xs">
+            Approve
+          </Button>
+          <Button disabled={!actionable} onClick={onEdit} size="xs" variant="outline">
+            Edit
+          </Button>
+          <Button disabled={!actionable} onClick={onReject} size="xs" variant="destructive">
+            Reject
+          </Button>
+        </div>
+      </div>
+
+      <CandidatePriceRow candidate={candidate} />
+
+      {candidate.rationale ? (
+        <p className="text-xs leading-5 text-(--ui-text-secondary)">{candidate.rationale}</p>
+      ) : null}
+
+      {candidate.risk_note ? (
+        <p className="text-[0.65rem] leading-4 text-amber-600 dark:text-amber-300">Risk: {candidate.risk_note}</p>
+      ) : null}
+
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.62rem] text-muted-foreground/80">
+        <span>pool {candidate.pool}</span>
+        <span>valid until {fmtTs(candidate.valid_until)}</span>
+        <span>proposed {fmtTs(candidate.ts)}</span>
+      </div>
+
+      {!windowOpen && (
+        <ErrorBanner>Confirmation window is closed (11:30–12:30 ET) — actions are disabled.</ErrorBanner>
+      )}
+    </FinanceCard>
+  )
+}
+
+// Editing is limited to qty/limit/stop/sl/tp (Loop.md §5.6); the service
+// re-validates the result through CandidateOrder before accepting.
+const EDIT_FIELDS = [
+  { key: 'qty', label: 'Quantity' },
+  { key: 'limit', label: 'Limit' },
+  { key: 'stop', label: 'Stop' },
+  { key: 'sl', label: 'Stop-loss (SL)' },
+  { key: 'tp', label: 'Take-profit (TP)' }
+] as const satisfies ReadonlyArray<{ key: keyof FinanceCandidateEdits; label: string }>
+
+const emptyValues = { limit: '', qty: '', sl: '', stop: '', tp: '' }
+
+function EditCandidateDialog({
+  entry,
+  onClose,
+  onSubmit,
+  submitting
+}: {
+  entry: FinancePendingCandidate | null
+  onClose: () => void
+  onSubmit: (edits: FinanceCandidateEdits) => void
+  submitting: boolean
+}) {
+  const open = entry !== null
+  const [values, setValues] = useState<Record<keyof FinanceCandidateEdits, string>>(emptyValues)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (entry) {
+      setValues({
+        limit: entry.candidate.limit?.toString() ?? '',
+        qty: entry.candidate.qty.toString(),
+        sl: entry.candidate.sl?.toString() ?? '',
+        stop: entry.candidate.stop?.toString() ?? '',
+        tp: entry.candidate.tp?.toString() ?? ''
+      })
+      setError('')
+    }
+  }, [entry])
+
+  function handleSubmit(event: React.FormEvent) {
+    event.preventDefault()
+    const edits: FinanceCandidateEdits = {}
+
+    for (const { key, label } of EDIT_FIELDS) {
+      const raw = values[key].trim()
+
+      if (!raw) {
+        continue
+      }
+
+      const parsed = Number(raw)
+
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        setError(`${label} must be a positive number.`)
+
+        return
+      }
+
+      edits[key] = parsed
+    }
+
+    if (Object.keys(edits).length === 0) {
+      setError('Enter at least one value to edit.')
+
+      return
+    }
+
+    setError('')
+    onSubmit(edits)
+  }
+
+  return (
+    <Dialog onOpenChange={value => !value && !submitting && onClose()} open={open}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Edit candidate{entry ? ` · ${entry.candidate.symbol}` : ''}</DialogTitle>
+          <DialogDescription>
+            Adjust quantity and prices, then approve. The risk engine re-validates every edit before submission —
+            protection can never be removed.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form className="grid gap-3" onSubmit={handleSubmit}>
+          <div className="grid grid-cols-2 gap-3">
+            {EDIT_FIELDS.map(({ key, label }) => (
+              <div className="grid gap-1.5" key={key}>
+                <label className="text-xs font-medium text-foreground" htmlFor={`finance-edit-${key}`}>
+                  {label}
+                </label>
+                <Input
+                  id={`finance-edit-${key}`}
+                  inputMode="decimal"
+                  onChange={event => setValues(prev => ({ ...prev, [key]: event.target.value }))}
+                  placeholder="—"
+                  value={values[key]}
+                />
+              </div>
+            ))}
+          </div>
+
+          {error && <ErrorBanner>{error}</ErrorBanner>}
+
+          <DialogFooter>
+            <Button disabled={submitting} onClick={onClose} type="button" variant="outline">
+              Cancel
+            </Button>
+            <Button disabled={submitting} type="submit">
+              {submitting ? 'Saving…' : 'Save & approve'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}

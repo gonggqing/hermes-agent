@@ -19,6 +19,7 @@ import {
   Bookmark,
   BookmarkFilled,
   Download,
+  LayoutDashboard,
   MessageCircle,
   Trash2,
   Wrench
@@ -34,6 +35,7 @@ import { useRefreshHotkey } from '../hooks/use-refresh-hotkey'
 import { useRouteEnumParam } from '../hooks/use-route-enum-param'
 import { OverlayMain, OverlayNav, OverlaySplitLayout } from '../overlays/overlay-split-layout'
 import { OverlayView } from '../overlays/overlay-view'
+import { FINANCE_ROUTE } from '../routes'
 
 import { MaintenancePanel } from './maintenance'
 
@@ -51,7 +53,8 @@ interface CommandCenterViewProps {
   initialSection?: CommandCenterSection
   onClose: () => void
   onDeleteSession: (sessionId: string) => Promise<void>
-  // Accepted for call-site parity; navigation lives in the global Cmd+K palette.
+  // Used by nav entries that leave the command center (e.g. Finance); primary
+  // navigation still lives in the global Cmd+K palette.
   onNavigateRoute?: (path: string) => void
   onOpenSession: (sessionId: string) => void
 }
@@ -124,7 +127,13 @@ function EmptyPanel({ action, description, title }: { action?: ReactNode; descri
   )
 }
 
-export function CommandCenterView({ initialSection, onClose, onDeleteSession, onOpenSession }: CommandCenterViewProps) {
+export function CommandCenterView({
+  initialSection,
+  onClose,
+  onDeleteSession,
+  onNavigateRoute,
+  onOpenSession
+}: CommandCenterViewProps) {
   const { t } = useI18n()
   const cc = t.commandCenter
   const sessions = useStore($sessions)
@@ -296,20 +305,34 @@ export function CommandCenterView({ initialSection, onClose, onDeleteSession, on
     <OverlayView closeLabel={cc.close} onClose={onClose}>
       <OverlaySplitLayout>
         <OverlayNav
-          groups={SECTIONS.map(value => ({
-            active: section === value,
-            icon:
-              value === 'sessions'
-                ? MessageCircle
-                : value === 'system'
-                  ? Activity
-                  : value === 'maintenance'
-                    ? Wrench
-                    : BarChart3,
-            id: value,
-            label: cc.sections[value],
-            onSelect: () => setSection(value)
-          }))}
+          groups={[
+            ...SECTIONS.map(value => ({
+              active: section === value,
+              icon:
+                value === 'sessions'
+                  ? MessageCircle
+                  : value === 'system'
+                    ? Activity
+                    : value === 'maintenance'
+                      ? Wrench
+                      : BarChart3,
+              id: value,
+              label: cc.sections[value],
+              onSelect: () => setSection(value)
+            })),
+            {
+              // The Finance portal (Loop.md §5.9) is a full view, not a
+              // command-center section — this entry only makes it discoverable
+              // here and navigates away. Literal label: cc.sections is a closed
+              // i18n record owned by the command-center sections above.
+              active: false,
+              gapBefore: true,
+              icon: LayoutDashboard,
+              id: 'finance',
+              label: 'Finance',
+              onSelect: () => onNavigateRoute?.(FINANCE_ROUTE)
+            }
+          ]}
         />
 
         <OverlayMain>

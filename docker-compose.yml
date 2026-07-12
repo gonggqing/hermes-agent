@@ -98,6 +98,83 @@ services:
     environment:
       - HERMES_UID=${HERMES_UID:-10000}
       - HERMES_GID=${HERMES_GID:-10000}
+      # The Finance service (trader/: `python -m swing_trader serve`) runs on
+      # the HOST in Phase 0; inside the container 127.0.0.1 is the container
+      # itself, so the /api/finance/* reverse proxy must target the host.
+      - HERMES_FINANCE_SERVICE_URL=http://host.docker.internal:9319
+    extra_hosts:
+      # Native on Docker Desktop (macOS); required on Linux engines.
+      - "host.docker.internal:host-gateway"
     # Localhost-only at the Docker boundary. For remote access, use a VPN or
     # a separately authenticated reverse proxy; do not expose this port.
     command: ["dashboard", "--host", "0.0.0.0", "--no-open"]
+
+  # --------------------------------------------------------------------------
+  # hermes-finance-vector — private Qdrant vector store for the Finance
+  # knowledge store (Loop.md §5.10, "local vector index").
+  #
+  #   - INTERNAL ONLY: no published host port (deliberately no `ports:`
+  #     mapping), and the service sits alone on the `finance-internal`
+  #     network. ONLY Finance-service containers may join `finance-internal`;
+  #     the gateway, the dashboard, the host LAN, and everything else must
+  #     stay off it.
+  #   - FAIL CLOSED: the vector index is storage/search infrastructure, not
+  #     an execution dependency. When this service is down, trading must
+  #     block research-dependent NEW entries (fail closed) and must never
+  #     lose or alter Ledger records; the facts layer and the SQLite ledger
+  #     are unaffected by vector outages (Loop.md §5.10).
+  #   - BACK UP BEFORE UPGRADES: snapshot the hermes-finance-vector-data
+  #     volume with docker/finance/backup-vector.sh before changing the image
+  #     tag (Qdrant storage-format migrations are one-way). Full backup /
+  #     restore drill: docs/finance-vector.md.
+  # --------------------------------------------------------------------------
+  hermes-finance-vector:
+    # v1.15.4 — latest stable Qdrant release known as of 2025-09. Check the
+    # release notes AND take a volume backup before bumping this tag.
+    image: qdrant/qdrant:v1.15.4
+    container_name: hermes-finance-vector
+    restart: unless-stopped
+    networks:
+      - finance-internal
+    volumes:
+      - hermes-finance-vector-data:/qdrant/storage
+    environment:
+      # finance-internal is `internal: true` (no egress), so telemetry could
+      # never leave the host anyway; disable it explicitly.
+      - QDRANT__TELEMETRY_DISABLED=true
+    healthcheck:
+      # The qdrant image ships neither curl nor wget, so use bash's /dev/tcp
+      # to hit the readiness endpoint (/readyz) on the container-internal
+      # HTTP port 6333.
+      test:
+        - CMD-SHELL
+        - "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333 && printf \"GET /readyz HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3 && head -c 512 <&3 | grep -q \"200 OK\"'"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # Example — how a future Finance-service container joins the private
+  # network (uncomment and adapt when the Finance service is containerized;
+  # ONLY Finance-service containers may join finance-internal):
+  # finance-service:
+  #   image: hermes-finance
+  #   restart: unless-stopped
+  #   networks:
+  #     - finance-internal
+  #   environment:
+  #     - QDRANT_URL=http://hermes-finance-vector:6333
+
+volumes:
+  # Qdrant persistence for the Finance knowledge store. Back this volume up
+  # (docker/finance/backup-vector.sh) before every image upgrade and on a
+  # regular schedule; see docs/finance-vector.md.
+  hermes-finance-vector-data:
+
+networks:
+  # Private network for the Finance knowledge store (Loop.md §5.10).
+  # `internal: true` means Docker attaches no gateway: nothing on this
+  # network is reachable from the host/LAN and nothing on it has outbound
+  # internet access. ONLY Finance-service containers may join this network.
+  finance-internal:
+    internal: true
