@@ -33,6 +33,18 @@ services:
     container_name: hermes
     restart: unless-stopped
     network_mode: host
+    # Current Hermes runtime secrets live on the host at ~/.hermes/.env.
+    # Docker mounts that directory at /opt/data, while env_file exports the
+    # values into the supervised gateway process (including Telegram and
+    # model-provider keys such as GLM_API_KEY / DEEPSEEK_API_KEY).
+    # Model routing belongs in ~/.hermes/config.yaml, not here: this local
+    # profile currently uses Z.AI GLM-5.1 as primary and DeepSeek subagents.
+    # This is NOT the final finance deployment location: trader/ is still an
+    # independent paper-trading core and has not yet been adapted to Hermes.
+    # Its own future runtime secrets/config must be wired through a dedicated
+    # Hermes finance skill/adapter, never copied into the repository.
+    env_file:
+      - ${HOME}/.hermes/.env
     volumes:
       - ~/.hermes:/opt/data
     environment:
