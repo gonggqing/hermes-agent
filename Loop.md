@@ -101,6 +101,8 @@ Order-type policy for approvals: **entries** = GTC limit or MOC/LOC; **protectio
 
 **5.9 Finance portal (Desktop + Web)** — add a permanent `Finance` tab to the existing Hermes Desktop and Web applications. Match their current UI/UX, routes, design tokens, state patterns, and shared components; do not create a second dashboard or re-implement chat. The tab is a native, structured companion surface with paper/live mode switch, market regime/watchlist, positions, open orders, risk/breaker state, candidate approval queue, fills/audit timeline, daily reports, and historical research search. Start read-only; write actions are limited to the same Confirmation service described in §5.6.
 
+**Research-first information architecture (Phase 0.5 requirement):** the Finance landing view is **Investment Research**, not an order queue. A human operator should see, in priority order: (1) a dated market/risk pulse — regime, VIX/breadth, breaker, data freshness, and material exposure/cash warnings; (2) a concise daily investment brief — macro/theme changes, watchlist movers, earnings/events, news, bull/bear synthesis, confidence and uncertainty; (3) supporting source citations and links into the historical knowledge store; and only then (4) an intentionally compact **Actions requiring attention** section for pending confirmations, expiring cutoffs, failed orders, and risk exceptions. The approval queue remains immediately reachable and badged, but is never the default Desktop tab or top Web section. Every displayed claim must identify its as-of time and source/absence of source; stale or unavailable data is an explicit warning, never silently presented as current.
+
 **5.10 Finance knowledge store (historical research + semantic retrieval)** — persist collected daily research, financial news, earnings/quarterly reports, company filings, strategy notes, monitor snapshots, decision rationales, and post-trade reviews. Use three layers:
 - **facts:** immutable source files and normalized structured data, partitioned by event date/trading date (JSONL/Parquet for market/news snapshots; SQLite ledger for trading records);
 - **research documents:** normalized text with source URL/publisher, retrieval date, content hash, symbol/theme, event timestamp, trading date (ET), document type, entitlement/license status, and parser/model version;
@@ -132,6 +134,11 @@ Paper and live share identical schemas (only the `mode` tag differs) so paper-vs
 - **Goal:** full daily loop runs on `PaperBroker` + free data + Telegram, honoring the 11:30 ET push window.
 - **Build:** broker abstraction, PaperBroker, DataFeed, Ledger, Risk Engine (+ full tests), monitors, decision core (rule-based first, then LLM), Telegram gateway, execution, scheduler, reporter, IBKRBroker stub.
 - **Exit criteria:** ≥ 20 trading days of paper trades logged end-to-end; all tests green; Risk Engine unit-test coverage 100%; reporter produces a daily summary; schemas frozen for paper=live parity.
+
+### Phase 0.5 — Research-first operator experience & resilience (AFTER Phase-0 build review; while paper data accumulates)
+- **Goal:** make Finance useful to a human reader every day before it becomes a busy order console: research and risk awareness are primary; execution controls are deliberate secondary actions.
+- **Build:** PaperBroker restart rehydration; an Investment Research briefing contract/API; Desktop and Web research-first landing views; source-linked knowledge ingestion/search; earnings/event calendar; explicit data-freshness and risk-warning model; dedicated Finance Telegram bot before interactive mobile approvals.
+- **Acceptance:** Desktop defaults to `Investment Research`; Web presents the same research/risk summary before any queue; Queue is a compact badged action area rather than the primary canvas; all briefs show as-of time, citations/unknowns, PAPER/LIVE mode, and actionable risk warnings; no UI path gains authority beyond §3/§5.6.
 
 ### Phase 1 — Shadow & tiny live (AFTER IBKR opens & funds)
 - **Goal:** implement `IBKRBroker` (ib_async); run on **IBKR paper first**, then **tiny real money (a few hundred USD)**.
@@ -194,6 +201,15 @@ Python 3.11 · `ib_async` (later) · `alpaca-py` (optional) · `yfinance` · `pa
 - [x] Backtest harness (walk-forward OOS)
 - [x] Phase-0 end-to-end paper dry run for N days ⛔ **Review Gate — AWAITING HUMAN REVIEW (see NEXT-STEP.md)**
 
+### Phase 0.5 backlog (do not start until the Phase-0 build review is approved)
+
+- [ ] PaperBroker rehydration from Ledger across Finance-service restart, including open orders/protective stops + tests
+- [ ] Research-first `Investment Research` briefing API/model: dated market regime, risk/freshness warnings, themes/movers, events/earnings, news/debate synthesis, confidence/uncertainty, and provenance links
+- [ ] Desktop: make `Investment Research` the default Finance tab; move Queue to a secondary badged action tab
+- [ ] Web: make the research/risk brief the top Finance section; render Queue as compact `Actions requiring attention`, expanded only for pending/expiring/problem states
+- [ ] Knowledge ingestion and semantic search: daily research/news/earnings → facts/documents/vector index; source-linked research search in Desktop/Web
+- [ ] Dedicated Finance Telegram bot + authenticated interactive approval adapter (existing Hermes bot remains gateway-only)
+
 ---
 
 ## 11. Watchlist universe (monitored set, NOT a buy list)
@@ -244,6 +260,7 @@ Each symbol is tagged `{theme, ai_phase(infra|memory|network|power|application|c
 
 ## 13. Progress log (building agent appends; newest first)
 
+- 2026-07-12 — Operator UX decision for Phase 0.5: Finance is an **Investment Research** product before it is an order console. Current Desktop defaults to `Queue` and current Web renders `ApprovalQueue` first; both must be inverted after Phase-0 review. New landing order: dated market/risk pulse → daily investment research brief with sources/uncertainty → compact actions requiring attention. Queue stays reachable/badged but is not the default surface. Added explicit Phase-0.5 roadmap/backlog and acceptance criteria; no order authority changes.
 - 2026-07-12 (evening) — Deployment + LLM upgrade: `llm.py` LLMAnalyst (OpenAI-compatible; DeepSeek-v4-flash default, GLM5-turbo fallback via FINANCE_LLM_PROVIDER; analysis-only voice in the debate, confidence capped 0.8, ANY failure ⇒ no signal — rule-based agents remain in charge; keys from ~/.hermes/.env, never logged; 9 tests, suite 623). Docker image rebuilt w/ Finance web tab; dashboard gets HERMES_FINANCE_SERVICE_URL=http://host.docker.internal:9319 (container→host proxy verified: /api/finance/v1/health routes + auth-gates). hermes-finance-vector container started. Telegram "Hermes Finance" GROUP verified for OUTBOUND cards/reports; interactive getUpdates conflicts with the Hermes gateway holding the same bot token ⇒ approvals via portal for now (dedicated finance bot token = Phase 0.5 TODO). `serve --check-now` runs a one-shot monitors+report cycle at startup.
 - 2026-07-12 — **Phase 0 build COMPLETE — ⛔ Review Gate reached; awaiting human review.** Backlog "E2E dry run" done: `dailyloop.py` orchestrates §4 (morning report → monitors → sub-agents/debate → decision core → RiskEngine → ConfirmationService publish → human surfaces → cutoff execution → close fills); `simulate.py` + `python -m swing_trader simulate --days 22 --crash-day 12` (crash: stops fire, risk-off blocks entries, max DD 5.39%); E2E test drives 22 simulated days with REAL HTTP web approvals + Telegram mock approvals + rejections + server-side expiry + never-naked-position invariant checked daily. `python -m swing_trader serve` = production paper loop + Finance API :9319. Suite 614 green. Fixed /v1/trades serialization (entry_ts) + body-surface fallback so Desktop audits as "desktop". Known Phase-0 limitations: PaperBroker state is in-memory (serve restart resets paper account; ledger keeps history — rehydration is a 0.5 TODO); LLM decision/analysis cores are stubs (rule-based v0 active).
 - 2026-07-12 — Backlog "Finance surfaces + knowledge + vector" done: Web tab (`web/src/pages/FinancePage.tsx` + finance/* — approval queue w/ idempotent actions, breaker banner, offline panel; typecheck/test/build green, lint-scoped clean). Desktop view (`apps/desktop/src/app/finance/*` — react-query, non-overlay route, command-center entry; typecheck green; surface rides in body due to IPC header limitation). `knowledge.py` (FactsArchive dated JSONL append-only; DocumentStore w/ mandatory provenance, restricted-license refusal, sha256 dedupe; Qdrant `finance_knowledge` index embedded/remote w/ HashingEmbedder placeholder + KnowledgeUnavailable FAIL-CLOSED; 25 tests). `hermes-finance-vector` compose service (pinned image, no published ports, internal network, named volume) + backup/restore scripts + `docs/finance-vector.md` drill.

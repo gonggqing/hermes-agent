@@ -12,7 +12,7 @@ anything advances (Loop.md §0 rule 4).
 
 - All trading code: `trader/` (self-contained package `swing_trader`, zero
   Hermes-internal imports, extractable to its own repo before Phase 1).
-- **614 tests green**: `cd trader && uv run --no-sync pytest`
+- **623 tests green**: `cd trader && uv run --no-sync pytest`
 - RiskEngine 100% branch coverage gate:
   `uv run --no-sync pytest tests/test_risk_engine.py --cov=swing_trader.risk --cov-branch --cov-fail-under=100`
 - Offline E2E demo: `uv run python -m swing_trader simulate --days 22 --crash-day 12`
@@ -123,23 +123,38 @@ anything advances (Loop.md §0 rule 4).
 
 1. **PaperBroker rehydration from ledger** (`serve` restart safety) — replay
    fills/orders to rebuild cash/positions/resting orders; add tests.
-2. **LLM upgrade path**: implement `LLMAnalysisAgent` and `LLMDecisionCore`
+2. **Research-first Finance home (human priority)** — do not start from an
+   order queue. Build a dated `Investment Research` briefing API/model with:
+   market regime/VIX/breadth; breaker, concentration/cash and data-freshness
+   warnings; macro/theme changes; watchlist movers; earnings/events; sourced
+   news and bull/bear synthesis; confidence/uncertainty; and links to the
+   underlying knowledge documents. Desktop must default to this tab. Web must
+   show the same brief first. `Queue` becomes a compact, badged **Actions
+   requiring attention** surface, expanded only for pending confirmations,
+   approaching cutoff, failed orders, or risk exceptions. Preserve clear
+   PAPER/LIVE labels and never manufacture a source or current timestamp.
+3. **Knowledge ingestion pipeline**: NewsMonitor/daily research/earnings →
+   FactsArchive + DocumentStore + vector index; surface
+   `/v1/knowledge/search` in the API and source-linked research search in both
+   Finance clients (endpoint currently absent by design).
+4. **Earnings calendar** in NewsMonitor (`get_earnings_calendar` returns []).
+5. **LLM upgrade path**: implement `LLMAnalysisAgent` and `LLMDecisionCore`
    (model-agnostic via config; Loop.md §8) — analysis quality only; RiskEngine
    and confirmation flow unchanged. Wire Hermes memory adapter behind
    `MemoryStore` (currently `JsonMemory`).
-3. **Earnings calendar** in NewsMonitor (`get_earnings_calendar` returns []).
-4. **Knowledge ingestion pipeline**: NewsMonitor/daily research → FactsArchive
-   + DocumentStore + vector index; surface `/v1/knowledge/search` in the API
-   and a search box in the Finance tab (endpoint currently absent by design).
-5. **Desktop IPC header pass-through** (electron/main.ts fetchJson) so
+6. **Dedicated Finance Telegram bot** for authenticated interactive approval;
+   do not share the Hermes gateway token, because two `getUpdates` consumers
+   evict one another. The existing Finance group remains outbound-only until
+   this is done.
+7. **Desktop IPC header pass-through** (electron/main.ts fetchJson) so
    X-Finance-Surface replaces the body-surface fallback; real user identity
    for `actor` (currently "hermes-user").
-6. **Docker**: a `finance` compose service running `swing_trader serve` +
+8. **Docker**: a `finance` compose service running `swing_trader serve` +
    image rebuild so the deployed dashboard at my.hermes:9119 shows the tab;
    join it to `finance-internal` for Qdrant.
-7. Reporter cosmetic: morning summary "as of" uses wall clock (shows real
+9. Reporter cosmetic: morning summary "as of" uses wall clock (shows real
    time in simulations; correct in production).
-8. Known pre-existing repo noise (NOT ours): web lint has 32 baseline
+10. Known pre-existing repo noise (NOT ours): web lint has 32 baseline
    problems; desktop vitest has 47 failing files at HEAD — both verified
    pre-existing by the agents; don't chase them into our files.
 
@@ -165,8 +180,9 @@ docker compose config -q                        # qdrant service valid
 
 ## Session bookkeeping
 
-- Everything is uncommitted in the working tree (user commits themselves).
-  Suggested commit split: trader core / finance service+proxy / web tab /
-  desktop view / knowledge+qdrant / Loop.md+NEXT-STEP.md.
+- Phase-0 implementation is committed as `2faf51615` (with subsequent
+  deployment, Finance UX, Desktop-navigation, and persona commits on `main`).
+  Check `git status --short` before editing; preserve unrelated user work and
+  commit a focused Phase-0.5 change only after its tests pass.
 - Memory notes for future sessions live in the Claude memory dir
   (`swing-trader-phase0`, `gongqing-investor-profile`).
