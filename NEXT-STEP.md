@@ -91,6 +91,34 @@ anything advances (Loop.md §0 rule 4).
   DEDICATED finance bot, put its token in trader/.env, set
   FINANCE_TELEGRAM_POLL=true.
 
+## Getting REAL data into the Finance tab (do these, in order)
+
+1. **Keep the service alive permanently.** It currently runs from a nohup
+   shell (`trader/serve.log`) and DIES on reboot/logout. Make it a launchd
+   agent (macOS):
+   `~/Library/LaunchAgents/com.hermes.finance.plist` running
+   `cd <repo>/trader && uv run --no-sync python -m swing_trader serve --db trader.db`
+   with `KeepAlive=true` — or move it into a docker `finance` service later.
+   Check: `curl http://127.0.0.1:9319/v1/health` → `loop_attached: true`.
+2. **Wait for a US trading day.** The loop is schedule-driven (§4): Mon–Fri
+   21:30 Beijing monitors poll → 23:00–23:30 decide → 23:30 candidates appear
+   in the tab's Approval Queue + Telegram group → you approve/edit/reject
+   before 00:30 → orders place → fills at 04:00 (US close) → morning report
+   09:00 ET. Today's tab already shows the one-shot check data (market
+   regime/VIX/watchlist/snapshot); positions/orders/trades stay empty until
+   the first approved candidate fills.
+3. **Actually approve something** (paper money) in the 23:30–00:30 window —
+   that populates Orders → Fills → Positions → Trades → Stats → Audit.
+   Refresh data anytime with a manual one-shot:
+   `pkill -f "swing_trader serve" && nohup uv run --no-sync python -m swing_trader serve --check-now --db trader.db > serve.log 2>&1 &`
+4. **Let it run ≥20 trading days** (~1 month) — that satisfies the Phase-0
+   exit criterion and gives the stats block real win-rate/expectancy numbers.
+5. Known gaps that limit data quality (Phase 0.5 queue below): PaperBroker
+   state resets on service restart (ledger history survives; avoid restarts
+   mid-position or rehydrate first), fundamentals provider is empty (agent
+   returns None), earnings calendar returns [], knowledge search not yet
+   wired into the tab.
+
 ## Phase 0.5 TODO queue (in priority order, after human approval)
 
 1. **PaperBroker rehydration from ledger** (`serve` restart safety) — replay
