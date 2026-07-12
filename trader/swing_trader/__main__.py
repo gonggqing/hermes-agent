@@ -79,20 +79,36 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
     telegram = None
     notify = None
-    if settings.telegram_bot_token and settings.telegram_chat_id:
-        import os
+    import os
 
-        transport = HttpTransport(settings.telegram_bot_token)
-        # Default OUTBOUND-ONLY: the Hermes gateway long-polls getUpdates
-        # with the same bot token; a second consumer 409-kicks it offline.
-        # Set FINANCE_TELEGRAM_POLL=true only with a DEDICATED finance bot.
-        interactive = os.environ.get("FINANCE_TELEGRAM_POLL", "").lower() in ("1", "true")
+    # A DEDICATED finance bot token enables interactive approvals; the
+    # shared gateway bot stays OUTBOUND-ONLY (a second getUpdates consumer
+    # 409-kicks the Hermes gateway offline). Loop.md Phase 0.5 backlog 6.
+    dedicated = os.environ.get("FINANCE_TELEGRAM_BOT_TOKEN", "").strip()
+    token = dedicated or (
+        settings.telegram_bot_token.get_secret_value()
+        if settings.telegram_bot_token else ""
+    )
+    if token and settings.telegram_chat_id:
+        from pydantic import SecretStr
+
+        transport = HttpTransport(SecretStr(token))
+        interactive = bool(dedicated) or (
+            os.environ.get("FINANCE_TELEGRAM_POLL", "").lower() in ("1", "true")
+        )
+        allowed = {
+            u for u in os.environ.get("TELEGRAM_ALLOWED_USERS", "").split(",")
+            if u.strip()
+        }
         telegram = TelegramSurfaceAdapter(
-            transport, settings.telegram_chat_id, interactive=interactive
+            transport, settings.telegram_chat_id,
+            interactive=interactive, allowed_users=allowed,
         )
         notify = lambda text: transport.send_message(settings.telegram_chat_id, text)
         logger.info("telegram surface attached",
-                    extra={"interactive": interactive})
+                    extra={"interactive": interactive,
+                           "dedicated_bot": bool(dedicated),
+                           "n_allowed_users": len(allowed)})
     else:
         logger.warning("telegram not configured; portal-only confirmations")
 

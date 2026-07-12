@@ -73,16 +73,31 @@ class TelegramSurfaceAdapter:
         transport: TelegramTransport,
         chat_id: str,
         interactive: bool = True,
+        allowed_users: Optional[set[str]] = None,
     ) -> None:
         """``interactive=False`` = OUTBOUND ONLY (cards/reports are sent, but
         poll() is a no-op). Required when the Hermes gateway long-polls
         getUpdates with the SAME bot token — two consumers would 409 each
-        other off Telegram. Approvals then happen via the portal."""
+        other off Telegram. Use a DEDICATED finance bot token for interactive
+        approvals (Loop.md Phase 0.5).
+
+        ``allowed_users``: Telegram usernames/ids permitted to act (§5.6:
+        authenticated actor). Interactive mode with an EMPTY allowlist
+        refuses every action — auth must be explicit, never open."""
         self._transport = transport
         self._chat_id = chat_id
         self.interactive = interactive
+        self._allowed_users = {u.strip().lower().lstrip("@")
+                               for u in (allowed_users or set()) if u.strip()}
         self._by_short_id: dict[str, str] = {}
         self._offset: Optional[int] = None
+
+    def _is_authorized(self, sender: dict) -> bool:
+        username = str(sender.get("username", "")).lower()
+        user_id = str(sender.get("id", ""))
+        return bool(self._allowed_users) and (
+            username in self._allowed_users or user_id in self._allowed_users
+        )
 
     def push_cards(self, candidates: list[CandidateOrder], preamble: str = "") -> None:
         if preamble:
@@ -121,6 +136,15 @@ class TelegramSurfaceAdapter:
                     self._transport.answer_callback(cb_id, "unknown candidate")
                 continue
             sender = callback.get("from", {}) or {}
+            if not self._is_authorized(sender):
+                logger.warning(
+                    "unauthorized telegram action refused",
+                    extra={"sender_id": str(sender.get("id", "?"))},
+                )
+                self._transport.answer_callback(
+                    cb_id, "not authorized for finance approvals"
+                )
+                continue
             actor = f"telegram:{sender.get('username') or sender.get('id') or 'user'}"
             result = service.act(
                 full_id, action, actor=actor, surface=Surface.TELEGRAM,

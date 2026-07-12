@@ -88,7 +88,8 @@ def e2e(tmp_path_factory):
         days[0], time(8, 0), tzinfo=ET).astimezone(timezone.utc))
     runtime = FinanceRuntime(ledger=ledger, broker=broker, clock=clock)
     transport = MockTelegramTransport()
-    telegram = TelegramSurfaceAdapter(transport, chat_id="42")
+    telegram = TelegramSurfaceAdapter(transport, chat_id="42",
+                                      allowed_users={"gongqing"})
     reports: list[str] = []
     loop = DailyLoop(feed, broker, ledger, symbols=SYMBOLS, clock=clock,
                      runtime=runtime, telegram=telegram,
