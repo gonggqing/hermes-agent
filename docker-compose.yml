@@ -81,13 +81,23 @@ services:
     image: hermes-agent
     container_name: hermes-dashboard
     restart: unless-stopped
-    network_mode: host
     depends_on:
       - gateway
+    # Publish only to the macOS loopback interface.  /etc/hosts maps the
+    # local development name my.hermes to 127.0.0.1; this is not a LAN or
+    # internet-facing endpoint.
+    ports:
+      - "127.0.0.1:9119:9119"
+    # The dashboard binds to all interfaces *inside* the container so Docker
+    # can forward the loopback-only host port.  Hermes therefore enables its
+    # built-in auth gate; credentials remain in ~/.hermes/.env.
+    env_file:
+      - ${HOME}/.hermes/.env
     volumes:
       - ~/.hermes:/opt/data
     environment:
       - HERMES_UID=${HERMES_UID:-10000}
       - HERMES_GID=${HERMES_GID:-10000}
-    # Localhost-only. For remote access, tunnel via `ssh -L 9119:localhost:9119`.
-    command: ["dashboard", "--host", "127.0.0.1", "--no-open"]
+    # Localhost-only at the Docker boundary. For remote access, use a VPN or
+    # a separately authenticated reverse proxy; do not expose this port.
+    command: ["dashboard", "--host", "0.0.0.0", "--no-open"]
