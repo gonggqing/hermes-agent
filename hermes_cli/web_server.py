@@ -394,7 +394,16 @@ def _require_token(request: Request) -> None:
 # request whose Host isn't one we bound for. See GHSA-ppp5-vxwm-4cf7.
 _LOOPBACK_HOST_VALUES: frozenset = frozenset({
     "localhost", "127.0.0.1", "::1",
-})
+}) | frozenset(
+    # Operator-declared extra loopback aliases (e.g. a my.hermes /etc/hosts
+    # entry pointing at 127.0.0.1). Comma-separated. Only add names that
+    # resolve to loopback on YOUR machine — anything here bypasses the
+    # DNS-rebinding Host check below and, if used as the bind host, the
+    # loopback auth exemption in should_require_auth().
+    h.strip().lower()
+    for h in os.environ.get("HERMES_DASHBOARD_EXTRA_HOSTS", "").split(",")
+    if h.strip()
+)
 
 
 def should_require_auth(host: str, allow_public: bool = False) -> bool:

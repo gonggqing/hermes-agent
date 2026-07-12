@@ -66,6 +66,9 @@ services:
       # host-run Finance service at its default http://127.0.0.1:9319.
       - HERMES_DASHBOARD=1
       - HERMES_DASHBOARD_HOST=127.0.0.1
+      # my.hermes is a host /etc/hosts alias for 127.0.0.1; declare it so the
+      # DNS-rebinding Host-header check accepts it on the loopback bind.
+      - HERMES_DASHBOARD_EXTRA_HOSTS=my.hermes
       # To expose the OpenAI-compatible API server beyond localhost,
       # uncomment BOTH lines (API_SERVER_KEY is mandatory for auth):
       # - API_SERVER_HOST=0.0.0.0
