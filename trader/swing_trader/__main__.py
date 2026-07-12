@@ -68,8 +68,12 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         # Phase 0 hard stop (Loop.md §7): only the PaperBroker exists.
         raise SystemExit("Phase 0 supports BROKER=paper only")
 
+    from swing_trader.rehydrate import rehydrate_from_ledger
+
     ledger = Ledger(url=f"sqlite:///{args.db or settings.db_path}")
     broker = PaperBroker(starting_cash=args.starting_cash)
+    rehydration = rehydrate_from_ledger(broker, ledger, settings.mode)
+    print(rehydration.summary(), flush=True)
     feed = YFinanceFeed()
     runtime = FinanceRuntime(ledger=ledger, broker=broker, mode=settings.mode)
 
@@ -104,6 +108,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         runtime=runtime, telegram=telegram, notify=notify,
         llm_analyst=llm_analyst,
     )
+    if rehydration.performed:
+        loop.execution.seed_synced_fills(rehydration.fill_ids)
+        loop.execution.seed_protective_stops(broker.get_orders(active_only=True))
     runner = DailyLoopRunner(loop.callbacks(), clock=runtime.clock)
 
     app = create_app(runtime)

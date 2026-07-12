@@ -436,6 +436,77 @@ class PaperBroker(BrokerInterface):
 
     # ------------------------------------------------------------------ day boundaries
 
+    def restore_state(
+        self,
+        cash: float,
+        positions: list[Position],
+        orders: list[Order],
+        day_open_equity: Optional[float] = None,
+    ) -> list[str]:
+        """Load replayed state into a FRESH broker (Loop.md Phase 0.5:
+        rehydration across Finance-service restarts).
+
+        Only :mod:`swing_trader.rehydrate` should call this, with state
+        replayed from the Ledger. Must be called before any trading activity;
+        refuses to run on a broker that already has state. Returns a list of
+        human-readable warnings (never raises for recoverable oddities —
+        protection must come back up even if a reservation cannot).
+        """
+        if self._orders or self._positions or self._fills:
+            raise RuntimeError("restore_state requires a fresh PaperBroker")
+        warnings: list[str] = []
+        self._cash = cash
+        for pos in positions:
+            if pos.qty <= 0:
+                continue
+            self._positions[pos.symbol] = pos.model_copy(deep=True)
+        for order in orders:
+            self._orders[order.id] = order.model_copy(deep=True)
+        # Rebuild bracket parent -> children wiring.
+        for order in self._orders.values():
+            if order.parent_order_id:
+                self._children.setdefault(order.parent_order_id, []).append(order.id)
+        # Rebuild BUY-side cash reservations for resting orders.
+        for order in self._orders.values():
+            if order.side is not Side.BUY or order.status not in _RESTING:
+                continue
+            ref = self._buy_reference_px(order)
+            if ref is None:
+                warnings.append(
+                    f"no reference price to reserve cash for resting BUY "
+                    f"{order.id[:8]} ({order.symbol} {order.order_type.value})"
+                )
+                continue
+            self._buy_ref_px[order.id] = ref
+            # Write the reservation directly: _update_buy_reservation only
+            # refreshes EXISTING entries (it early-returns on unknown ids).
+            remaining = order.qty - order.filled_qty
+            self._reserved[order.id] = (
+                remaining * ref + self.commission_per_order
+            )
+        # Sanity: resting SELLs must be covered by restored positions.
+        for symbol in {o.symbol for o in self._orders.values()}:
+            held = self._positions.get(symbol)
+            reserved = self._reserved_sell_qty(symbol)
+            if reserved > (held.qty if held else 0.0) + _EPS:
+                warnings.append(
+                    f"resting SELL qty {reserved:g} exceeds held "
+                    f"{held.qty if held else 0:g} in {symbol}"
+                )
+        self._day_open_equity = (
+            day_open_equity if day_open_equity is not None else self._equity()
+        )
+        logger.info(
+            "broker state restored",
+            extra={
+                "cash": round(self._cash, 2),
+                "n_positions": len(self._positions),
+                "n_orders": len(self._orders),
+                "n_warnings": len(warnings),
+            },
+        )
+        return warnings
+
     def start_of_day(self) -> None:
         """Reset the day-open equity anchor to current equity."""
         self._day_open_equity = self._equity()

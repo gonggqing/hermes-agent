@@ -141,6 +141,18 @@ class ExecutionEngine:
             )
         return report
 
+    def seed_synced_fills(self, fill_ids: set[str]) -> None:
+        """Mark ledger-known fills as already synced (rehydration path) so
+        sync_fills() never re-records history after a service restart."""
+        self._synced_fill_ids |= set(fill_ids)
+
+    def seed_protective_stops(self, orders: list[Order]) -> None:
+        """Rebuild the order-id -> protective-stop map after rehydration so
+        entry fills on pre-restart orders still record r_multiple risk."""
+        for order in orders:
+            if order.side is Side.BUY and order.stop is not None:
+                self._stop_by_order[order.id] = order.stop
+
     def sync_fills(self) -> int:
         """Pull new fills + order states from the broker into the ledger.
 
