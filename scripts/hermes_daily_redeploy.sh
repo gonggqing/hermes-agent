@@ -13,6 +13,8 @@ state_dir="${HOME}/.hermes/automation"
 state_file="${state_dir}/hermes-deployed-commit"
 log_dir="${HOME}/.hermes/logs"
 lock_dir="${state_dir}/hermes-daily-redeploy.lock"
+review_workspace="${HOME}/.hermes/workspace/hermes-agent"
+review_context="${review_workspace}/.hermes-review-context.md"
 dry_run=false
 if [[ "${1:-}" == "--dry-run" ]]; then
   dry_run=true
@@ -22,6 +24,35 @@ mkdir -p "$state_dir" "$log_dir"
 
 timestamp() {
   date '+%Y-%m-%dT%H:%M:%S%z'
+}
+
+sync_review_workspace() {
+  mkdir -p "$review_workspace"
+  rsync -a --delete \
+    --exclude='.git/' \
+    --exclude='.env' \
+    --exclude='*/.env' \
+    --exclude='.venv/' \
+    --exclude='venv/' \
+    --exclude='node_modules/' \
+    --exclude='__pycache__/' \
+    --exclude='.pytest_cache/' \
+    --exclude='*.egg-info/' \
+    --exclude='.coverage' \
+    "$repo_dir/" "$review_workspace/"
+
+  {
+    echo "# Hermes review workspace context"
+    echo
+    echo "Generated: $(timestamp)"
+    echo "Committed HEAD: $(git -C "$repo_dir" rev-parse HEAD)"
+    echo
+    echo "## Latest commit"
+    git -C "$repo_dir" log -1 --format='%h %s (%ad)' --date=iso
+    echo
+    echo "## Working tree status (names only)"
+    git -C "$repo_dir" status --short
+  } > "$review_context"
 }
 
 if ! mkdir "$lock_dir" 2>/dev/null; then
@@ -34,6 +65,7 @@ cd "$repo_dir"
 current_commit="$(git rev-parse HEAD)"
 previous_commit="$(cat "$state_file" 2>/dev/null || true)"
 dirty_count="$(git status --porcelain | wc -l | tr -d ' ')"
+sync_review_workspace
 
 dashboard_healthy() {
   docker compose exec -T dashboard \

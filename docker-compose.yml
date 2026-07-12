@@ -47,6 +47,11 @@ services:
       - ${HOME}/.hermes/.env
     volumes:
       - ~/.hermes:/opt/data
+      # Read-only, secret-filtered source mirror for Telegram/cron code review.
+      # scripts/hermes_daily_redeploy.sh refreshes it; never mount the raw
+      # checkout because trader/.env and other local secret files must remain
+      # outside the agent's readable workspace.
+      - ${HOME}/.hermes/workspace/hermes-agent:/workspace/hermes-agent:ro
     environment:
       - HERMES_UID=${HERMES_UID:-10000}
       - HERMES_GID=${HERMES_GID:-10000}
