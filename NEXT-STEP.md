@@ -138,7 +138,19 @@ maintenance as a recurring engineering task, not a one-time migration:
    returns None), earnings calendar returns [], knowledge search not yet
    wired into the tab.
 
-## Phase 0.5 TODO queue (in priority order, after human approval)
+## Phase 0.5 status (2026-07-13)
+
+DONE: broker rehydration (restarts safe), launchd keep-alive
+(com.hermes.finance), research brief API (/v1/research/brief) + research-first
+Web/Desktop views (full en+zh i18n), knowledge ingestion + /v1/knowledge/search
+wired into both UIs, upstream sync dry run (67 commits, zero conflicts,
+docs/upstream-sync/2026-07-13.md; branch sync/upstream-2026-07-13 awaits the
+reviewed weekend merge).
+REMAINING: dedicated Finance Telegram bot — human creates it via BotFather,
+puts FINANCE_TELEGRAM_BOT_TOKEN in ~/.hermes/.env (TELEGRAM_ALLOWED_USERS
+gates who may approve); interactive approvals then enable automatically.
+
+## Phase 0.5 TODO queue (original, superseded by the status above)
 
 1. **PaperBroker rehydration from ledger** (`serve` restart safety) — replay
    fills/orders to rebuild cash/positions/resting orders; add tests.

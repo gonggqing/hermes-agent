@@ -117,6 +117,11 @@ export const fmtQty = (value: null | number | undefined): string =>
 export const fmtPct = (value: null | number | undefined, digits = 1): string =>
   value === null || value === undefined || !Number.isFinite(value) ? '—' : `${value.toFixed(digits)}%`
 
+export const fmtSignedPct = (value: null | number | undefined, digits = 1): string =>
+  value === null || value === undefined || !Number.isFinite(value)
+    ? '—'
+    : `${value > 0 ? '+' : ''}${value.toFixed(digits)}%`
+
 export function fmtTs(iso?: null | string): string {
   if (!iso) {
     return '—'

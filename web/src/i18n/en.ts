@@ -1,4 +1,152 @@
-import type { Translations } from "./types";
+import type { FinanceTranslations, Translations } from "./types";
+
+// Exported separately so the Finance pages (`useFinanceT()`) can fall back
+// to English for locales that have not translated the section yet.
+export const financeEn: FinanceTranslations = {
+  page: {
+    breakerTrippedTitle: "CIRCUIT BREAKER TRIPPED",
+    breakerTrippedBody:
+      "— daily drawdown limit hit; no new entries today (Loop.md §3).",
+    loopAttached: "loop attached",
+    loopIdle: "loop idle",
+    offline: "offline",
+    updatedAt: "updated {time}",
+    serviceOfflineTitle: "Finance service offline",
+    serviceOfflineBody:
+      "The dashboard could not reach the trading service. Start it on this machine, then refresh:",
+    serviceOfflineStartLabel: "Start the Finance service",
+    modePaper: "PAPER",
+    modeLive: "LIVE",
+  },
+  brief: {
+    title: "Investment research brief",
+    tradingDate: "Trading date",
+    asOf: "as of {time}",
+    unavailable:
+      "Research brief unavailable — the research endpoint did not answer.",
+    staleWarningsTitle: "Data freshness warnings",
+    risk: {
+      title: "Risk",
+      equity: "Equity",
+      cash: "Cash",
+      dayPnl: "Day PnL",
+      drawdown: "Drawdown",
+      breaker: "Breaker",
+      poolExposure: "Pool exposure",
+      winRate: "Win rate",
+      expectancy: "Expectancy",
+      maxDrawdown: "Max DD",
+      closedTrades: "{n} closed trades",
+      unavailable:
+        "No risk data yet — no monitor snapshot and no ledger account snapshot.",
+    },
+    regime: {
+      title: "Market regime",
+      vix: "VIX",
+      breadth: "Breadth >50dma",
+      unavailable: "No market regime snapshot — the market monitor has not run.",
+    },
+    movers: {
+      title: "Watchlist movers",
+      top: "Top",
+      bottom: "Bottom",
+      symbol: "Symbol",
+      last: "Last",
+      vsSma20: "vs SMA20",
+      vsSma50: "vs SMA50",
+      theme: "Theme",
+      role: "Role",
+      empty: "No movers yet — no watchlist snapshot with SMA data.",
+    },
+    themes: {
+      title: "Themes",
+      symbols: "{n} symbols",
+      leaders: "leaders",
+      empty: "No theme data yet.",
+    },
+    news: {
+      title: "News digest",
+      empty: "No news items in the latest snapshot.",
+      sentiment: "sentiment",
+    },
+    signals: {
+      title: "Signals today",
+      empty: "No signals recorded for today's trading date.",
+      confidence: "confidence {pct}%",
+    },
+    uncertainty: {
+      title: "Unknowns & uncertainty",
+      empty: "Nothing flagged.",
+    },
+    provenance: {
+      title: "Sources",
+    },
+    search: {
+      title: "Research search",
+      placeholder: "Search research knowledge (min 2 characters)…",
+      searching: "Searching…",
+      offline:
+        "Research search is offline — the knowledge index is unavailable right now.",
+      noResults: "No matching research documents.",
+    },
+  },
+  queue: {
+    title: "Actions requiring attention",
+    pendingCount: "{count} pending",
+    earliestExpiry: "earliest expiry {time}",
+    expand: "Show approval queue",
+    collapse: "Hide approval queue",
+  },
+  account: {
+    title: "Account",
+    ledgerFallback: "last ledger snapshot",
+    empty: "No account snapshot recorded yet.",
+    emptyWithStats: "No account snapshot recorded yet (ledger stats below).",
+    equity: "Equity",
+    cash: "Cash",
+    upnl: "uPnL",
+    dayPnl: "Day PnL",
+    drawdown: "Drawdown",
+    equityCurve: "Equity curve",
+    notEnoughSnapshots: "Not enough snapshots yet for an equity curve.",
+  },
+  positions: {
+    title: "Positions",
+    loopOnly: "Positions are shown while the daily loop is attached.",
+    empty: "No open positions.",
+    symbol: "Symbol",
+    qty: "Qty",
+    avgPx: "Avg px",
+    mktPx: "Mkt px",
+    upnl: "uPnL",
+    pool: "Pool",
+  },
+  orders: {
+    title: "Open orders",
+    loopOnly: "Open orders are shown while the daily loop is attached.",
+    empty: "No working orders.",
+    symbol: "Symbol",
+    side: "Side",
+    qty: "Qty",
+    type: "Type",
+    limit: "Limit",
+    stop: "Stop",
+    status: "Status",
+  },
+  market: {
+    title: "Market & watchlist",
+    vix: "VIX",
+    breadth: "Breadth >50dma",
+    asOf: "as of {time}",
+    noSnapshot:
+      "No market snapshot yet — the MarketMonitor publishes one while the daily loop runs.",
+  },
+  reports: {
+    title: "Latest report",
+    empty:
+      "No report generated yet — the reporter runs each morning after overnight fills settle.",
+  },
+};
 
 export const en: Translations = {
   common: {
@@ -75,6 +223,7 @@ export const en: Translations = {
       config: "Config",
       cron: "Cron",
       documentation: "Documentation",
+      finance: "Finance",
       keys: "Keys",
       logs: "Logs",
       models: "Models",
@@ -661,6 +810,8 @@ export const en: Translations = {
       tweet_text: "Just unlocked {tier_part}\"{name}\" in Hermes Agent ☤",
     },
   },
+
+  finance: financeEn,
 
   kanban: {
     loading: "Loading Kanban board…",

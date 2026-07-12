@@ -177,7 +177,12 @@ const BUILTIN_NAV_REST: NavItem[] = [
     label: "Analytics",
     icon: BarChart3,
   },
-  { path: "/finance", label: "Finance", icon: CandlestickChart },
+  {
+    path: "/finance",
+    labelKey: "finance",
+    label: "Finance",
+    icon: CandlestickChart,
+  },
   {
     path: "/models",
     labelKey: "models",

@@ -2,12 +2,16 @@ import { useQuery } from '@tanstack/react-query'
 
 import { StatusDot } from '@/components/status-dot'
 import { getFinanceMarket, getFinanceWatchlist } from '@/hermes'
+import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 
-import { financeKey, fmtPct, fmtPrice, fmtTs, REGIME_TONE, statusLabel } from './lib'
+import { financeKey, fmtPct, fmtPrice, fmtSignedPct, fmtTs, REGIME_TONE, statusLabel } from './lib'
 import { FinanceCard, FinancePill, FinanceSectionLabel, QuerySection, StatTile } from './primitives'
 
 export function FinanceMarketTab({ enabled, query }: { enabled: boolean; query: string }) {
+  const { t } = useI18n()
+  const copy = t.finance.market
+
   const marketQuery = useQuery({
     enabled,
     queryFn: getFinanceMarket,
@@ -59,9 +63,9 @@ export function FinanceMarketTab({ enabled, query }: { enabled: boolean; query: 
   return (
     <div className="space-y-5">
       <section className="space-y-2">
-        <FinanceSectionLabel>Market regime</FinanceSectionLabel>
+        <FinanceSectionLabel>{copy.regimeTitle}</FinanceSectionLabel>
         <QuerySection
-          empty="No market snapshot yet — the loop publishes one after its first market poll of the day."
+          empty={copy.regimeEmpty}
           error={marketQuery.isError ? marketQuery.error : undefined}
           isEmpty={!hasSnapshot}
           loading={marketQuery.isPending}
@@ -70,13 +74,13 @@ export function FinanceMarketTab({ enabled, query }: { enabled: boolean; query: 
             <FinanceCard className="flex items-center gap-2">
               <StatusDot tone={REGIME_TONE[regime] ?? 'muted'} />
               <div className="min-w-0">
-                <div className="text-[0.65rem] font-medium text-(--ui-text-tertiary)">Regime</div>
+                <div className="text-[0.65rem] font-medium text-(--ui-text-tertiary)">{copy.regime}</div>
                 <div className="truncate text-sm font-semibold text-foreground">{statusLabel(regime)}</div>
               </div>
             </FinanceCard>
-            <StatTile label="VIX" value={fmtPrice(market?.vix)} />
-            <StatTile label="Breadth > 50DMA" value={fmtPct(market?.breadth_pct_above_50dma)} />
-            <StatTile label="As of" value={fmtTs(market?.ts)} />
+            <StatTile label={copy.vix} value={fmtPrice(market?.vix)} />
+            <StatTile label={copy.breadth} value={fmtPct(market?.breadth_pct_above_50dma)} />
+            <StatTile label={copy.asOfLabel} value={fmtTs(market?.ts)} />
           </div>
 
           {Object.keys(indices).length > 0 && (
@@ -93,7 +97,7 @@ export function FinanceMarketTab({ enabled, query }: { enabled: boolean; query: 
                   >
                     {data.sma50_dist_pct === null || data.sma50_dist_pct === undefined
                       ? '—'
-                      : `${data.sma50_dist_pct >= 0 ? '+' : ''}${data.sma50_dist_pct.toFixed(1)}% vs 50DMA`}
+                      : copy.vs50dma(fmtSignedPct(data.sma50_dist_pct))}
                   </div>
                 </FinanceCard>
               ))}
@@ -104,10 +108,11 @@ export function FinanceMarketTab({ enabled, query }: { enabled: boolean; query: 
 
       <section className="space-y-2">
         <FinanceSectionLabel>
-          Watchlist universe{watchlist.length > 0 ? ` · ${watchlist.length}` : ''} (monitored set, not a buy list)
+          {copy.watchlistTitle}
+          {watchlist.length > 0 ? ` · ${watchlist.length}` : ''} {copy.watchlistNote}
         </FinanceSectionLabel>
         <QuerySection
-          empty={needle ? 'No watchlist entries match the search.' : 'Watchlist unavailable.'}
+          empty={needle ? copy.watchlistEmptySearch : copy.watchlistEmpty}
           error={watchlistQuery.isError ? watchlistQuery.error : undefined}
           isEmpty={visibleWatchlist.length === 0}
           loading={watchlistQuery.isPending}
@@ -122,7 +127,7 @@ export function FinanceMarketTab({ enabled, query }: { enabled: boolean; query: 
                   {items.map(item => (
                     <FinancePill key={item.symbol} variant={item.enabled ? 'outline' : 'muted'}>
                       {item.symbol}
-                      {!item.enabled && ' (off)'}
+                      {!item.enabled && ` ${copy.disabledTag}`}
                     </FinancePill>
                   ))}
                 </div>

@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/error-state'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { type FinanceHealth, type FinanceMode, getFinanceHealth } from '@/hermes'
+import { useI18n } from '@/i18n'
 import { AlertTriangle, RefreshCw } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 
@@ -23,39 +24,37 @@ import { FinanceMarketTab } from './market'
 import { FinancePill } from './primitives'
 import { FinanceQueue, usePendingCandidates } from './queue'
 import { FinanceReportsTab } from './reports'
+import { FinanceResearchTab } from './research'
 
 // Permanent Finance portal (Loop.md §5.9): a native, structured companion
-// surface over the swing-trader service — approval queue, account/positions,
-// market regime, history/audit, daily reports. Read-only except the
-// confirmation-service candidate actions in the queue tab (Loop.md §5.6).
+// surface over the swing-trader service. Phase 0.5 (Loop.md §7) makes the
+// Investment Research brief the DEFAULT canvas — research and risk awareness
+// are primary; the approval queue is a compact, badged SECONDARY action area
+// (approve/edit/reject only, Loop.md §5.6); account/market/history/reports
+// live under a third Portfolio tab.
 
-const TABS = ['queue', 'account', 'market', 'history', 'reports'] as const
+const TABS = ['research', 'queue', 'portfolio'] as const
 
 type FinanceTabId = (typeof TABS)[number]
 
-const TAB_LABELS: Record<FinanceTabId, string> = {
-  account: 'Account',
-  history: 'History',
-  market: 'Market',
-  queue: 'Queue',
-  reports: 'Reports'
-}
+// Portfolio sub-sections (the Phase-0 tabs, demoted under one tab).
+const PORTFOLIO_SECTIONS = ['account', 'market', 'history', 'reports'] as const
 
-// Tabs where the shared search field filters rows by symbol/theme.
-const SEARCHABLE_TABS: ReadonlySet<FinanceTabId> = new Set(['account', 'history', 'market'])
+type PortfolioSectionId = (typeof PORTFOLIO_SECTIONS)[number]
 
-const MODE_OPTIONS = [
-  { id: 'paper', label: 'Paper' },
-  { id: 'live', label: 'Live' }
-] as const
+// Portfolio sections where the shared search field filters rows by symbol/theme.
+const SEARCHABLE_SECTIONS: ReadonlySet<PortfolioSectionId> = new Set(['account', 'history', 'market'])
 
 interface FinanceViewProps extends React.ComponentProps<'section'> {
   setStatusbarItemGroup?: SetStatusbarItemGroup
 }
 
 export function FinanceView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...props }: FinanceViewProps) {
+  const { t } = useI18n()
+  const copy = t.finance
   const queryClient = useQueryClient()
-  const [tab, setTab] = useRouteEnumParam('tab', TABS, 'queue')
+  const [tab, setTab] = useRouteEnumParam('tab', TABS, 'research')
+  const [section, setSection] = useRouteEnumParam('view', PORTFOLIO_SECTIONS, 'account')
   const [query, setQuery] = useState('')
   // null = follow the service's own mode from /health; set = explicit override.
   const [modeOverride, setModeOverride] = useState<FinanceMode | null>(null)
@@ -83,7 +82,7 @@ export function FinanceView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...
 
   useRefreshHotkey(refreshAll)
 
-  const searchable = SEARCHABLE_TABS.has(tab) && online
+  const searchable = tab === 'portfolio' && SEARCHABLE_SECTIONS.has(section) && online
 
   return (
     <PageSearchShell
@@ -101,11 +100,13 @@ export function FinanceView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...
       onSearchChange={setQuery}
       onTabChange={next => setTab(next as FinanceTabId)}
       searchHidden={!searchable}
-      searchPlaceholder="Filter by symbol or theme"
+      searchPlaceholder={copy.searchPlaceholder}
       searchValue={query}
       tabs={TABS.map(id => ({
         id,
-        label: TAB_LABELS[id],
+        label: copy.tabs[id],
+        // The queue tab is the badged action area (Loop.md §7 Phase 0.5): its
+        // label always carries the pending count while the service is up.
         meta: id === 'queue' && online ? (pendingQuery.isPending ? null : pendingCount || undefined) : undefined
       }))}
     >
@@ -114,7 +115,7 @@ export function FinanceView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...
           {health?.breaker === 'TRIPPED' && <BreakerBanner />}
 
           {healthQuery.isPending ? (
-            <PageLoader label="Connecting to finance service…" />
+            <PageLoader label={copy.connecting} />
           ) : offline ? (
             <FinanceOfflinePanel
               error={healthQuery.error}
@@ -123,16 +124,49 @@ export function FinanceView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...
             />
           ) : (
             <>
+              {tab === 'research' && <FinanceResearchTab enabled={online} onOpenQueue={() => setTab('queue')} />}
               {tab === 'queue' && <FinanceQueue enabled={online} />}
-              {tab === 'account' && <FinanceAccountTab enabled={online} mode={mode} query={query} />}
-              {tab === 'market' && <FinanceMarketTab enabled={online} query={query} />}
-              {tab === 'history' && <FinanceHistoryTab enabled={online} mode={mode} query={query} />}
-              {tab === 'reports' && <FinanceReportsTab enabled={online} />}
+              {tab === 'portfolio' && (
+                <PortfolioTab enabled={online} mode={mode} onSectionChange={setSection} query={query} section={section} />
+              )}
             </>
           )}
         </div>
       </div>
     </PageSearchShell>
+  )
+}
+
+// Account / market / history / reports under one secondary tab — kept intact
+// from Phase 0, just demoted below the research brief (Loop.md §7 Phase 0.5).
+function PortfolioTab({
+  enabled,
+  mode,
+  onSectionChange,
+  query,
+  section
+}: {
+  enabled: boolean
+  mode: FinanceMode
+  onSectionChange: (section: PortfolioSectionId) => void
+  query: string
+  section: PortfolioSectionId
+}) {
+  const { t } = useI18n()
+
+  return (
+    <div className="space-y-4">
+      <SegmentedControl
+        onChange={onSectionChange}
+        options={PORTFOLIO_SECTIONS.map(id => ({ id, label: t.finance.sections[id] }))}
+        value={section}
+      />
+
+      {section === 'account' && <FinanceAccountTab enabled={enabled} mode={mode} query={query} />}
+      {section === 'market' && <FinanceMarketTab enabled={enabled} query={query} />}
+      {section === 'history' && <FinanceHistoryTab enabled={enabled} mode={mode} query={query} />}
+      {section === 'reports' && <FinanceReportsTab enabled={enabled} />}
+    </div>
   )
 }
 
@@ -152,37 +186,49 @@ function FinanceHealthStrip({
   onModeChange: (mode: FinanceMode) => void
   onRefresh: () => void
 }) {
+  const { t } = useI18n()
+  const copy = t.finance
+
   return (
     <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-1.5">
       <span className="inline-flex items-center gap-1.5 text-xs text-(--ui-text-secondary)">
         <StatusDot tone={offline ? 'bad' : health ? 'good' : 'muted'} />
-        {offline ? 'Service offline' : health ? 'Service online' : 'Connecting…'}
+        {offline ? copy.serviceOffline : health ? copy.serviceOnline : copy.serviceConnecting}
       </span>
 
-      <SegmentedControl onChange={onModeChange} options={MODE_OPTIONS} value={mode} />
+      <SegmentedControl
+        onChange={onModeChange}
+        options={[
+          { id: 'paper' as const, label: copy.modePaper },
+          { id: 'live' as const, label: copy.modeLive }
+        ]}
+        value={mode}
+      />
 
       {health && (
         <>
           <FinancePill variant={health.breaker === 'TRIPPED' ? 'destructive' : 'muted'}>
             <StatusDot tone={BREAKER_TONE[health.breaker] ?? 'muted'} />
-            breaker {health.breaker}
+            {copy.breakerPill(health.breaker)}
           </FinancePill>
           <FinancePill variant={health.loop_attached ? 'default' : 'muted'}>
-            {health.loop_attached ? 'loop attached' : 'loop idle'}
+            {health.loop_attached ? copy.loopAttached : copy.loopIdle}
           </FinancePill>
-          <span className="text-[0.62rem] tabular-nums text-muted-foreground/70">as of {fmtTs(health.ts)}</span>
+          <span className="text-[0.62rem] tabular-nums text-muted-foreground/70">{copy.asOf(fmtTs(health.ts))}</span>
         </>
       )}
 
       <Button className="ml-auto" onClick={onRefresh} size="xs" variant="ghost">
         <RefreshCw className="size-3" />
-        Refresh
+        {t.common.refresh}
       </Button>
     </div>
   )
 }
 
 function BreakerBanner() {
+  const { t } = useI18n()
+
   return (
     <div
       className={cn(
@@ -192,11 +238,8 @@ function BreakerBanner() {
     >
       <AlertTriangle className="mt-0.5 size-4 shrink-0" />
       <div>
-        <div className="font-semibold">Circuit breaker TRIPPED — no new entries today.</div>
-        <div className="text-destructive/80">
-          The −4% daily drawdown guardrail halted new entries (Loop.md §3). Exits and resting protection remain
-          active. The breaker resets with the next trading day.
-        </div>
+        <div className="font-semibold">{t.finance.breakerBannerTitle}</div>
+        <div className="text-destructive/80">{t.finance.breakerBannerBody}</div>
       </div>
     </div>
   )
@@ -206,22 +249,17 @@ function BreakerBanner() {
 // the time (evenings/weekends). Render that as a calm empty state, never an
 // error crash; health keeps polling so this heals on its own.
 function FinanceOfflinePanel({ error, onRetry, retrying }: { error: unknown; onRetry: () => void; retrying: boolean }) {
+  const { t } = useI18n()
+  const copy = t.finance
   const parsed = parseFinanceError(error)
 
   return (
     <div className="grid min-h-64 place-items-center py-10">
-      <ErrorState
-        description={
-          parsed.offline
-            ? 'The swing-trader service is not running. Start it with: cd trader && uv run python -m swing_trader serve'
-            : parsed.message
-        }
-        title="Finance service offline"
-      >
+      <ErrorState description={parsed.offline ? copy.offlineHint : parsed.message} title={copy.offlineTitle}>
         <div className="flex justify-center">
           <Button disabled={retrying} onClick={onRetry} size="sm" variant="outline">
             <RefreshCw className={cn('size-3.5', retrying && 'animate-spin')} />
-            {retrying ? 'Checking…' : 'Retry now'}
+            {retrying ? copy.offlineChecking : copy.offlineRetry}
           </Button>
         </div>
       </ErrorState>

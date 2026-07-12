@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 
 import { getFinanceReports } from '@/hermes'
+import { useI18n } from '@/i18n'
 
 import { financeKey } from './lib'
 import { FinanceCard, FinanceSectionLabel, QuerySection } from './primitives'
@@ -10,6 +11,9 @@ import { FinanceCard, FinanceSectionLabel, QuerySection } from './primitives'
 const KIND_ORDER = ['morning']
 
 export function FinanceReportsTab({ enabled }: { enabled: boolean }) {
+  const { t } = useI18n()
+  const copy = t.finance.reports
+
   const reportsQuery = useQuery({
     enabled,
     queryFn: getFinanceReports,
@@ -27,7 +31,7 @@ export function FinanceReportsTab({ enabled }: { enabled: boolean }) {
 
   return (
     <QuerySection
-      empty="No reports yet — the reporter publishes a morning summary each trading day (09:00 ET)."
+      empty={copy.empty}
       error={reportsQuery.isError ? reportsQuery.error : undefined}
       isEmpty={reports.length === 0}
       loading={reportsQuery.isPending}
@@ -35,7 +39,7 @@ export function FinanceReportsTab({ enabled }: { enabled: boolean }) {
       <div className="space-y-4">
         {reports.map(([kind, text]) => (
           <section className="space-y-2" key={kind}>
-            <FinanceSectionLabel>{kind} report</FinanceSectionLabel>
+            <FinanceSectionLabel>{copy.reportKind(kind)}</FinanceSectionLabel>
             <FinanceCard className="overflow-x-auto">
               <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-5 text-(--ui-text-secondary)">
                 {text}

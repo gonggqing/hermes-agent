@@ -16,6 +16,152 @@ export type Locale =
   | "ru"
   | "hu";
 
+/**
+ * Finance tab (research-first, Loop.md §7 Phase 0.5). Kept as a named
+ * interface so the Finance pages can type their fallback resolution: the
+ * section is optional on {@link Translations} (newer-section convention —
+ * locales that have not translated it yet fall back to the English catalog
+ * entry via `useFinanceT()` instead of hard-coded literals).
+ */
+export interface FinanceTranslations {
+  page: {
+    breakerTrippedTitle: string;
+    breakerTrippedBody: string;
+    loopAttached: string;
+    loopIdle: string;
+    offline: string;
+    updatedAt: string; // "updated {time}"
+    serviceOfflineTitle: string;
+    serviceOfflineBody: string;
+    serviceOfflineStartLabel: string;
+    modePaper: string;
+    modeLive: string;
+  };
+  brief: {
+    title: string;
+    tradingDate: string;
+    asOf: string; // "as of {time}"
+    unavailable: string;
+    staleWarningsTitle: string;
+    risk: {
+      title: string;
+      equity: string;
+      cash: string;
+      dayPnl: string;
+      drawdown: string;
+      breaker: string;
+      poolExposure: string;
+      winRate: string;
+      expectancy: string;
+      maxDrawdown: string;
+      closedTrades: string; // "{n} closed trades"
+      unavailable: string;
+    };
+    regime: {
+      title: string;
+      vix: string;
+      breadth: string;
+      unavailable: string;
+    };
+    movers: {
+      title: string;
+      top: string;
+      bottom: string;
+      symbol: string;
+      last: string;
+      vsSma20: string;
+      vsSma50: string;
+      theme: string;
+      role: string;
+      empty: string;
+    };
+    themes: {
+      title: string;
+      symbols: string; // "{n} symbols"
+      leaders: string;
+      empty: string;
+    };
+    news: {
+      title: string;
+      empty: string;
+      sentiment: string;
+    };
+    signals: {
+      title: string;
+      empty: string;
+      confidence: string; // "confidence {pct}%"
+    };
+    uncertainty: {
+      title: string;
+      empty: string;
+    };
+    provenance: {
+      title: string;
+    };
+    search: {
+      title: string;
+      placeholder: string;
+      searching: string;
+      offline: string;
+      noResults: string;
+    };
+  };
+  queue: {
+    title: string;
+    pendingCount: string; // "{count} pending"
+    earliestExpiry: string; // "earliest expiry {time}"
+    expand: string;
+    collapse: string;
+  };
+  account: {
+    title: string;
+    ledgerFallback: string;
+    empty: string;
+    emptyWithStats: string;
+    equity: string;
+    cash: string;
+    upnl: string;
+    dayPnl: string;
+    drawdown: string;
+    equityCurve: string;
+    notEnoughSnapshots: string;
+  };
+  positions: {
+    title: string;
+    loopOnly: string;
+    empty: string;
+    symbol: string;
+    qty: string;
+    avgPx: string;
+    mktPx: string;
+    upnl: string;
+    pool: string;
+  };
+  orders: {
+    title: string;
+    loopOnly: string;
+    empty: string;
+    symbol: string;
+    side: string;
+    qty: string;
+    type: string;
+    limit: string;
+    stop: string;
+    status: string;
+  };
+  market: {
+    title: string;
+    vix: string;
+    breadth: string;
+    asOf: string; // "as of {time}"
+    noSnapshot: string;
+  };
+  reports: {
+    title: string;
+    empty: string;
+  };
+}
+
 export interface Translations {
   // ── Common ──
   common: {
@@ -92,6 +238,7 @@ export interface Translations {
       config: string;
       cron: string;
       documentation: string;
+      finance: string;
       keys: string;
       logs: string;
       models: string;
@@ -672,6 +819,11 @@ export interface Translations {
       tweet_text: string;
     };
   };
+
+  // ── Finance tab (research-first, Loop.md §7 Phase 0.5) ──
+  // Optional: non-English locales fall back to the English catalog entry
+  // in `useFinanceT()` until translated (en + zh are maintained).
+  finance?: FinanceTranslations;
 
   // ── Kanban ──
   kanban: {

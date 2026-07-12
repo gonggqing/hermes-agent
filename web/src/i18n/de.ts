@@ -72,6 +72,7 @@ export const de: Translations = {
       config: "Konfiguration",
       cron: "Cron",
       documentation: "Dokumentation",
+      finance: "Finanzen",
       keys: "Schlüssel",
       logs: "Protokolle",
       models: "Modelle",

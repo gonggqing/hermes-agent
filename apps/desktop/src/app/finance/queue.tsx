@@ -22,6 +22,7 @@ import {
   getFinancePendingCandidates,
   postFinanceCandidateAction
 } from '@/hermes'
+import { useI18n } from '@/i18n'
 import { notify, notifyError } from '@/store/notifications'
 
 import {
@@ -64,9 +65,18 @@ interface ActionVars {
 }
 
 export function FinanceQueue({ enabled }: { enabled: boolean }) {
+  const { t } = useI18n()
+  const copy = t.finance.queue
   const queryClient = useQueryClient()
   const pendingQuery = usePendingCandidates(enabled)
   const [editing, setEditing] = useState<FinancePendingCandidate | null>(null)
+
+  // Localized verbs for notification copy; the wire action stays the enum.
+  const actionLabels: Record<FinanceActionPayload['action'], string> = {
+    approve: copy.approve,
+    edit: copy.edit,
+    reject: copy.reject
+  }
 
   const actionMutation = useMutation({
     mutationFn: ({ action, candidate, edits, version }: ActionVars) =>
@@ -90,7 +100,7 @@ export function FinanceQueue({ enabled }: { enabled: boolean }) {
         settleIdempotencyKey(candidate.id, action, edits)
       }
 
-      notifyError(new Error(parsed.message), `Failed to ${action} ${candidate.symbol}`)
+      notifyError(new Error(parsed.message), copy.actionFailed(actionLabels[action], candidate.symbol))
     },
     onSettled: () => {
       // The action moved server-authoritative state: refresh the queue plus
@@ -103,7 +113,7 @@ export function FinanceQueue({ enabled }: { enabled: boolean }) {
       notify({
         kind: 'success',
         message: result.message || `${candidate.symbol} ${result.code}`,
-        title: `${candidate.symbol}: ${action} ${result.code}`
+        title: copy.actionDone(candidate.symbol, actionLabels[action], result.code)
       })
     }
   })
@@ -113,7 +123,7 @@ export function FinanceQueue({ enabled }: { enabled: boolean }) {
   return (
     <div className="space-y-3">
       <QuerySection
-        empty="No pending candidates. The queue fills when the daily loop publishes risk-approved candidates (11:30 ET) and empties at the 12:30 ET cutoff."
+        empty={copy.empty}
         error={pendingQuery.isError ? pendingQuery.error : undefined}
         isEmpty={pending.length === 0}
         loading={pendingQuery.isPending}
@@ -149,18 +159,21 @@ export function FinanceQueue({ enabled }: { enabled: boolean }) {
 }
 
 function CandidatePriceRow({ candidate }: { candidate: FinanceCandidate }) {
+  const { t } = useI18n()
+  const copy = t.finance.queue
+
   const parts: Array<[string, null | number]> = [
-    ['Limit', candidate.limit],
-    ['Stop', candidate.stop],
-    ['TP', candidate.tp],
-    ['SL', candidate.sl],
-    ['Ref', candidate.ref_px]
+    [copy.limit, candidate.limit],
+    [copy.stop, candidate.stop],
+    [copy.tp, candidate.tp],
+    [copy.sl, candidate.sl],
+    [copy.ref, candidate.ref_px]
   ]
 
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums text-(--ui-text-secondary)">
       <span>
-        Qty <span className="font-medium text-foreground">{fmtQty(candidate.qty)}</span>
+        {copy.qty} <span className="font-medium text-foreground">{fmtQty(candidate.qty)}</span>
       </span>
       {parts
         .filter(([, value]) => value !== null)
@@ -170,7 +183,7 @@ function CandidatePriceRow({ candidate }: { candidate: FinanceCandidate }) {
           </span>
         ))}
       <span>
-        TIF <span className="font-medium text-foreground">{candidate.tif}</span>
+        {copy.tif} <span className="font-medium text-foreground">{candidate.tif}</span>
       </span>
     </div>
   )
@@ -189,6 +202,8 @@ function PendingCandidateCard({
   onEdit: () => void
   onReject: () => void
 }) {
+  const { t } = useI18n()
+  const copy = t.finance.queue
   const { candidate, version, window_open: windowOpen } = entry
   const actionable = windowOpen && !busy
 
@@ -204,18 +219,18 @@ function PendingCandidateCard({
             {statusLabel(candidate.status)}
           </span>
           <span className="text-[0.65rem] tabular-nums text-muted-foreground">
-            confidence {fmtPct(candidate.confidence * 100, 0)} · v{version}
+            {copy.confidenceVersion(fmtPct(candidate.confidence * 100, 0), version)}
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           <Button disabled={!actionable} onClick={onApprove} size="xs">
-            Approve
+            {copy.approve}
           </Button>
           <Button disabled={!actionable} onClick={onEdit} size="xs" variant="outline">
-            Edit
+            {copy.edit}
           </Button>
           <Button disabled={!actionable} onClick={onReject} size="xs" variant="destructive">
-            Reject
+            {copy.reject}
           </Button>
         </div>
       </div>
@@ -227,31 +242,27 @@ function PendingCandidateCard({
       ) : null}
 
       {candidate.risk_note ? (
-        <p className="text-[0.65rem] leading-4 text-amber-600 dark:text-amber-300">Risk: {candidate.risk_note}</p>
+        <p className="text-[0.65rem] leading-4 text-amber-600 dark:text-amber-300">
+          {copy.riskNote(candidate.risk_note)}
+        </p>
       ) : null}
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.62rem] text-muted-foreground/80">
-        <span>pool {candidate.pool}</span>
-        <span>valid until {fmtTs(candidate.valid_until)}</span>
-        <span>proposed {fmtTs(candidate.ts)}</span>
+        <span>{copy.pool(candidate.pool)}</span>
+        <span>{copy.validUntil(fmtTs(candidate.valid_until))}</span>
+        <span>{copy.proposedAt(fmtTs(candidate.ts))}</span>
       </div>
 
-      {!windowOpen && (
-        <ErrorBanner>Confirmation window is closed (11:30–12:30 ET) — actions are disabled.</ErrorBanner>
-      )}
+      {!windowOpen && <ErrorBanner>{copy.windowClosed}</ErrorBanner>}
     </FinanceCard>
   )
 }
 
 // Editing is limited to qty/limit/stop/sl/tp (Loop.md §5.6); the service
 // re-validates the result through CandidateOrder before accepting.
-const EDIT_FIELDS = [
-  { key: 'qty', label: 'Quantity' },
-  { key: 'limit', label: 'Limit' },
-  { key: 'stop', label: 'Stop' },
-  { key: 'sl', label: 'Stop-loss (SL)' },
-  { key: 'tp', label: 'Take-profit (TP)' }
-] as const satisfies ReadonlyArray<{ key: keyof FinanceCandidateEdits; label: string }>
+const EDIT_FIELD_KEYS = ['qty', 'limit', 'stop', 'sl', 'tp'] as const satisfies ReadonlyArray<
+  keyof FinanceCandidateEdits
+>
 
 const emptyValues = { limit: '', qty: '', sl: '', stop: '', tp: '' }
 
@@ -266,9 +277,19 @@ function EditCandidateDialog({
   onSubmit: (edits: FinanceCandidateEdits) => void
   submitting: boolean
 }) {
+  const { t } = useI18n()
+  const copy = t.finance.queue
   const open = entry !== null
   const [values, setValues] = useState<Record<keyof FinanceCandidateEdits, string>>(emptyValues)
   const [error, setError] = useState('')
+
+  const fieldLabels: Record<keyof FinanceCandidateEdits, string> = {
+    limit: copy.fieldLimit,
+    qty: copy.fieldQty,
+    sl: copy.fieldSl,
+    stop: copy.fieldStop,
+    tp: copy.fieldTp
+  }
 
   useEffect(() => {
     if (entry) {
@@ -287,7 +308,7 @@ function EditCandidateDialog({
     event.preventDefault()
     const edits: FinanceCandidateEdits = {}
 
-    for (const { key, label } of EDIT_FIELDS) {
+    for (const key of EDIT_FIELD_KEYS) {
       const raw = values[key].trim()
 
       if (!raw) {
@@ -297,7 +318,7 @@ function EditCandidateDialog({
       const parsed = Number(raw)
 
       if (!Number.isFinite(parsed) || parsed <= 0) {
-        setError(`${label} must be a positive number.`)
+        setError(copy.positiveNumber(fieldLabels[key]))
 
         return
       }
@@ -306,7 +327,7 @@ function EditCandidateDialog({
     }
 
     if (Object.keys(edits).length === 0) {
-      setError('Enter at least one value to edit.')
+      setError(copy.atLeastOneEdit)
 
       return
     }
@@ -319,19 +340,16 @@ function EditCandidateDialog({
     <Dialog onOpenChange={value => !value && !submitting && onClose()} open={open}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Edit candidate{entry ? ` · ${entry.candidate.symbol}` : ''}</DialogTitle>
-          <DialogDescription>
-            Adjust quantity and prices, then approve. The risk engine re-validates every edit before submission —
-            protection can never be removed.
-          </DialogDescription>
+          <DialogTitle>{entry ? copy.editTitleFor(entry.candidate.symbol) : copy.editTitle}</DialogTitle>
+          <DialogDescription>{copy.editDescription}</DialogDescription>
         </DialogHeader>
 
         <form className="grid gap-3" onSubmit={handleSubmit}>
           <div className="grid grid-cols-2 gap-3">
-            {EDIT_FIELDS.map(({ key, label }) => (
+            {EDIT_FIELD_KEYS.map(key => (
               <div className="grid gap-1.5" key={key}>
                 <label className="text-xs font-medium text-foreground" htmlFor={`finance-edit-${key}`}>
-                  {label}
+                  {fieldLabels[key]}
                 </label>
                 <Input
                   id={`finance-edit-${key}`}
@@ -348,10 +366,10 @@ function EditCandidateDialog({
 
           <DialogFooter>
             <Button disabled={submitting} onClick={onClose} type="button" variant="outline">
-              Cancel
+              {t.common.cancel}
             </Button>
             <Button disabled={submitting} type="submit">
-              {submitting ? 'Saving…' : 'Save & approve'}
+              {submitting ? copy.saving : copy.saveApprove}
             </Button>
           </DialogFooter>
         </form>

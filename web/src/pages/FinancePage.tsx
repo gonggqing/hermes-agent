@@ -7,7 +7,10 @@ import {
 } from "react";
 import {
   AlertTriangle,
+  ChevronDown,
+  ChevronRight,
   Globe,
+  ListChecks,
   Newspaper,
   PlugZap,
   RefreshCw,
@@ -24,6 +27,7 @@ import type {
   FinanceMarketSnapshot,
   FinancePendingCandidate,
   FinanceReports,
+  FinanceResearchBrief as FinanceResearchBriefData,
   FinanceSnapshot,
   FinanceStats,
   FinanceWatchlistItem,
@@ -38,8 +42,11 @@ import { Stats } from "@nous-research/ui/ui/components/stats";
 import { Toast } from "@nous-research/ui/ui/components/toast";
 import { useToast } from "@nous-research/ui/hooks/use-toast";
 import { usePageHeader } from "@/contexts/usePageHeader";
+import { useI18n } from "@/i18n";
 import { ApprovalQueue } from "@/pages/finance/ApprovalQueue";
 import { HistorySection } from "@/pages/finance/HistorySection";
+import { ResearchBrief } from "@/pages/finance/ResearchBrief";
+import { useFinanceT } from "@/pages/finance/i18n";
 import {
   fmtMoney,
   fmtPct,
@@ -47,9 +54,9 @@ import {
   fmtSigned,
   fmtTs,
   pnlClass,
+  regimeTone,
   sideTone,
 } from "@/pages/finance/format";
-import type { BadgeTone } from "@/pages/finance/format";
 
 const REFRESH_INTERVAL_MS = 30_000;
 const SNAPSHOT_LIMIT = 120;
@@ -67,22 +74,12 @@ interface AccountNumbers {
   breaker_state: string;
 }
 
-function regimeTone(regime: string | undefined): BadgeTone {
-  switch (regime) {
-    case "risk_on":
-      return "success";
-    case "risk_off":
-      return "destructive";
-    default:
-      return "outline";
-  }
-}
-
 function EquitySparkline({ snapshots }: { snapshots: FinanceSnapshot[] }) {
+  const ft = useFinanceT();
   if (snapshots.length < 2) {
     return (
       <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
-        Not enough snapshots yet for an equity curve.
+        {ft.account.notEnoughSnapshots}
       </p>
     );
   }
@@ -108,7 +105,7 @@ function EquitySparkline({ snapshots }: { snapshots: FinanceSnapshot[] }) {
         preserveAspectRatio="none"
         className="h-20 w-full text-primary"
         role="img"
-        aria-label="Equity curve"
+        aria-label={ft.account.equityCurve}
       >
         <polyline
           points={points}
@@ -138,33 +135,33 @@ function AccountSection({
   snapshots: FinanceSnapshot[];
   ledgerFallback: boolean;
 }) {
+  const ft = useFinanceT();
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
             <Wallet className="h-5 w-5 text-muted-foreground" />
-            <CardTitle className="text-base">Account</CardTitle>
+            <CardTitle className="text-base">{ft.account.title}</CardTitle>
             {ledgerFallback && (
-              <Badge tone="outline">last ledger snapshot</Badge>
+              <Badge tone="outline">{ft.account.ledgerFallback}</Badge>
             )}
           </div>
         </CardHeader>
         <CardContent>
           {numbers === null ? (
             <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
-              No account snapshot recorded yet
               {stats !== null && stats.n_closed > 0
-                ? " (ledger stats below)."
-                : "."}
+                ? ft.account.emptyWithStats
+                : ft.account.empty}
             </p>
           ) : (
             <Stats
               items={[
-                { label: "Equity", value: fmtMoney(numbers.equity) },
-                { label: "Cash", value: fmtMoney(numbers.cash) },
+                { label: ft.account.equity, value: fmtMoney(numbers.equity) },
+                { label: ft.account.cash, value: fmtMoney(numbers.cash) },
                 {
-                  label: "uPnL",
+                  label: ft.account.upnl,
                   value: {
                     key: "upnl",
                     node: (
@@ -175,7 +172,7 @@ function AccountSection({
                   },
                 },
                 {
-                  label: "Day PnL",
+                  label: ft.account.dayPnl,
                   value: {
                     key: "day_pnl",
                     node: (
@@ -185,7 +182,10 @@ function AccountSection({
                     ),
                   },
                 },
-                { label: "Drawdown", value: fmtPct(numbers.drawdown_pct) },
+                {
+                  label: ft.account.drawdown,
+                  value: fmtPct(numbers.drawdown_pct),
+                },
               ]}
             />
           )}
@@ -196,7 +196,7 @@ function AccountSection({
         <CardHeader>
           <div className="flex items-center gap-2">
             <TrendingUp className="h-5 w-5 text-muted-foreground" />
-            <CardTitle className="text-base">Equity curve</CardTitle>
+            <CardTitle className="text-base">{ft.account.equityCurve}</CardTitle>
           </div>
         </CardHeader>
         <CardContent>
@@ -208,32 +208,45 @@ function AccountSection({
 }
 
 function PositionsAndOrders({ view }: { view: FinanceAccountView | null }) {
+  const ft = useFinanceT();
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Positions</CardTitle>
+          <CardTitle className="text-base">{ft.positions.title}</CardTitle>
         </CardHeader>
         <CardContent>
           {view === null ? (
             <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
-              Positions are shown while the daily loop is attached.
+              {ft.positions.loopOnly}
             </p>
           ) : view.positions.length === 0 ? (
             <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
-              No open positions.
+              {ft.positions.empty}
             </p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full font-mondwest normal-case text-sm">
                 <thead>
                   <tr className="border-b border-border text-muted-foreground text-xs">
-                    <th className="text-left py-2 pr-4 font-medium">Symbol</th>
-                    <th className="text-right py-2 px-4 font-medium">Qty</th>
-                    <th className="text-right py-2 px-4 font-medium">Avg px</th>
-                    <th className="text-right py-2 px-4 font-medium">Mkt px</th>
-                    <th className="text-right py-2 px-4 font-medium">uPnL</th>
-                    <th className="text-left py-2 pl-4 font-medium">Pool</th>
+                    <th className="text-left py-2 pr-4 font-medium">
+                      {ft.positions.symbol}
+                    </th>
+                    <th className="text-right py-2 px-4 font-medium">
+                      {ft.positions.qty}
+                    </th>
+                    <th className="text-right py-2 px-4 font-medium">
+                      {ft.positions.avgPx}
+                    </th>
+                    <th className="text-right py-2 px-4 font-medium">
+                      {ft.positions.mktPx}
+                    </th>
+                    <th className="text-right py-2 px-4 font-medium">
+                      {ft.positions.upnl}
+                    </th>
+                    <th className="text-left py-2 pl-4 font-medium">
+                      {ft.positions.pool}
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -265,29 +278,43 @@ function PositionsAndOrders({ view }: { view: FinanceAccountView | null }) {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Open orders</CardTitle>
+          <CardTitle className="text-base">{ft.orders.title}</CardTitle>
         </CardHeader>
         <CardContent>
           {view === null ? (
             <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
-              Open orders are shown while the daily loop is attached.
+              {ft.orders.loopOnly}
             </p>
           ) : view.open_orders.length === 0 ? (
             <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
-              No working orders.
+              {ft.orders.empty}
             </p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full font-mondwest normal-case text-sm">
                 <thead>
                   <tr className="border-b border-border text-muted-foreground text-xs">
-                    <th className="text-left py-2 pr-4 font-medium">Symbol</th>
-                    <th className="text-left py-2 pr-4 font-medium">Side</th>
-                    <th className="text-right py-2 px-4 font-medium">Qty</th>
-                    <th className="text-left py-2 px-4 font-medium">Type</th>
-                    <th className="text-right py-2 px-4 font-medium">Limit</th>
-                    <th className="text-right py-2 px-4 font-medium">Stop</th>
-                    <th className="text-left py-2 pl-4 font-medium">Status</th>
+                    <th className="text-left py-2 pr-4 font-medium">
+                      {ft.orders.symbol}
+                    </th>
+                    <th className="text-left py-2 pr-4 font-medium">
+                      {ft.orders.side}
+                    </th>
+                    <th className="text-right py-2 px-4 font-medium">
+                      {ft.orders.qty}
+                    </th>
+                    <th className="text-left py-2 px-4 font-medium">
+                      {ft.orders.type}
+                    </th>
+                    <th className="text-right py-2 px-4 font-medium">
+                      {ft.orders.limit}
+                    </th>
+                    <th className="text-right py-2 px-4 font-medium">
+                      {ft.orders.stop}
+                    </th>
+                    <th className="text-left py-2 pl-4 font-medium">
+                      {ft.orders.status}
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -330,6 +357,8 @@ function MarketStrip({
   market: FinanceMarketSnapshot | null;
   watchlist: FinanceWatchlistItem[];
 }) {
+  const ft = useFinanceT();
+  const { t } = useI18n();
   const byRole = useMemo(() => {
     const groups = new Map<string, FinanceWatchlistItem[]>();
     for (const item of watchlist) {
@@ -345,17 +374,17 @@ function MarketStrip({
       <CardHeader>
         <div className="flex items-center gap-2">
           <Globe className="h-5 w-5 text-muted-foreground" />
-          <CardTitle className="text-base">Market & watchlist</CardTitle>
+          <CardTitle className="text-base">{ft.market.title}</CardTitle>
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {market !== null && market.status === undefined ? (
           <div className="flex flex-wrap items-center gap-3 font-mondwest normal-case text-sm">
             <Badge tone={regimeTone(market.risk_on_off)}>
-              {market.risk_on_off ?? "unknown"}
+              {market.risk_on_off ?? "—"}
             </Badge>
             <span className="text-muted-foreground">
-              VIX{" "}
+              {ft.market.vix}{" "}
               <span className="text-foreground">
                 {market.vix === null || market.vix === undefined
                   ? "—"
@@ -363,21 +392,20 @@ function MarketStrip({
               </span>
             </span>
             <span className="text-muted-foreground">
-              Breadth &gt;50dma{" "}
+              {ft.market.breadth}{" "}
               <span className="text-foreground">
                 {fmtPct(market.breadth_pct_above_50dma, 0)}
               </span>
             </span>
             {market.ts && (
               <span className="text-xs text-text-tertiary">
-                as of {fmtTs(market.ts)}
+                {ft.market.asOf.replace("{time}", fmtTs(market.ts))}
               </span>
             )}
           </div>
         ) : (
           <p className="font-mondwest normal-case text-sm text-muted-foreground">
-            No market snapshot yet — the MarketMonitor publishes one while the
-            daily loop runs.
+            {ft.market.noSnapshot}
           </p>
         )}
 
@@ -391,7 +419,7 @@ function MarketStrip({
                 {items.map((item) => (
                   <span
                     key={item.symbol}
-                    title={`${item.theme} · ${item.ai_phase}${item.enabled ? "" : " · disabled"}`}
+                    title={`${item.theme} · ${item.ai_phase}${item.enabled ? "" : ` · ${t.common.disabled}`}`}
                     className={cn(
                       "border border-border px-1.5 py-0.5 font-mono-ui text-xs text-foreground",
                       !item.enabled && "opacity-40",
@@ -410,6 +438,7 @@ function MarketStrip({
 }
 
 function ReportsCard({ reports }: { reports: FinanceReports }) {
+  const ft = useFinanceT();
   // Prefer the morning report; fall back to whatever the loop produced last.
   const entry =
     reports.morning !== undefined
@@ -421,15 +450,15 @@ function ReportsCard({ reports }: { reports: FinanceReports }) {
         <div className="flex items-center gap-2">
           <Newspaper className="h-5 w-5 text-muted-foreground" />
           <CardTitle className="text-base">
-            Latest report{entry ? ` — ${entry[0]}` : ""}
+            {ft.reports.title}
+            {entry ? ` — ${entry[0]}` : ""}
           </CardTitle>
         </div>
       </CardHeader>
       <CardContent>
         {entry === undefined ? (
           <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
-            No report generated yet — the reporter runs each morning after
-            overnight fills settle.
+            {ft.reports.empty}
           </p>
         ) : (
           <div className="overflow-x-auto">
@@ -444,22 +473,85 @@ function ReportsCard({ reports }: { reports: FinanceReports }) {
 }
 
 function OfflinePanel() {
+  const ft = useFinanceT();
   return (
     <Card>
       <CardContent className="py-12">
         <div className="mx-auto flex max-w-xl flex-col items-center gap-4 text-center">
           <PlugZap className="h-8 w-8 text-muted-foreground opacity-40" />
           <h2 className="font-mondwest text-display text-base tracking-wider text-foreground">
-            Finance service offline
+            {ft.page.serviceOfflineTitle}
           </h2>
           <p className="font-mondwest normal-case text-sm text-muted-foreground">
-            The dashboard could not reach the trading service. Start it on
-            this machine, then refresh:
+            {ft.page.serviceOfflineBody}
           </p>
-          <CommandBlock label="Start the Finance service" code={SERVICE_START_COMMAND} />
+          <CommandBlock
+            label={ft.page.serviceOfflineStartLabel}
+            code={SERVICE_START_COMMAND}
+          />
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Compact "actions requiring attention" strip (Loop.md §7 Phase 0.5: the
+ * Queue is a badged action area, NOT the primary canvas). Hidden entirely
+ * when nothing is pending; a collapsed summary (count + earliest expiry)
+ * expands to the existing ApprovalQueue, which is still the ONLY execution
+ * surface and only relays approve/edit/reject (Loop.md §3/§5.6).
+ */
+function ActionsStrip({
+  pending,
+  onActed,
+  showToast,
+}: {
+  pending: FinancePendingCandidate[];
+  onActed: () => void;
+  showToast: (message: string, type: "error" | "success") => void;
+}) {
+  const ft = useFinanceT();
+  const [open, setOpen] = useState(false);
+  if (pending.length === 0) return null;
+  // Earliest expiry among pending candidates (ISO strings sort correctly).
+  const earliest = pending
+    .map((p) => p.candidate.valid_until)
+    .filter((v): v is string => v !== null)
+    .sort()[0];
+  return (
+    <section className="flex flex-col gap-3">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex w-full flex-wrap items-center gap-2 border border-warning/60 bg-warning/10 px-4 py-2.5 text-left transition-colors hover:bg-warning/20"
+      >
+        <ListChecks className="h-4 w-4 shrink-0 text-warning" />
+        <span className="font-mondwest normal-case text-sm font-semibold text-foreground">
+          {ft.queue.title}
+        </span>
+        <Badge tone="warning">
+          {ft.queue.pendingCount.replace("{count}", String(pending.length))}
+        </Badge>
+        {earliest !== undefined && (
+          <span className="font-mondwest normal-case text-xs text-muted-foreground">
+            {ft.queue.earliestExpiry.replace("{time}", fmtTs(earliest))}
+          </span>
+        )}
+        <span className="ml-auto flex items-center gap-1 font-mondwest normal-case text-xs text-muted-foreground">
+          {open ? ft.queue.collapse : ft.queue.expand}
+          {open ? (
+            <ChevronDown className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5" />
+          )}
+        </span>
+      </button>
+      {open && (
+        <ApprovalQueue pending={pending} onActed={onActed} showToast={showToast} />
+      )}
+    </section>
   );
 }
 
@@ -467,6 +559,7 @@ export default function FinancePage() {
   const [health, setHealth] = useState<FinanceHealth | null>(null);
   const [offline, setOffline] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [brief, setBrief] = useState<FinanceResearchBriefData | null>(null);
   const [account, setAccount] = useState<FinanceAccountResponse | null>(null);
   const [snapshots, setSnapshots] = useState<FinanceSnapshot[]>([]);
   const [market, setMarket] = useState<FinanceMarketSnapshot | null>(null);
@@ -478,6 +571,8 @@ export default function FinancePage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const { toast, showToast } = useToast();
   const { setAfterTitle, setEnd } = usePageHeader();
+  const ft = useFinanceT();
+  const { t } = useI18n();
 
   // No synchronous setState in load itself: `loading` starts true and the
   // manual refresh button flips it back on before invoking load(), so the
@@ -491,8 +586,9 @@ export default function FinancePage() {
       .then(async (h) => {
         setHealth(h);
         setOffline(false);
-        const [acct, snaps, mkt, wl, rep, pend, cands, fl] =
+        const [rb, acct, snaps, mkt, wl, rep, pend, cands, fl] =
           await Promise.allSettled([
+            api.financeResearchBrief(),
             api.financeAccount(),
             api.financeSnapshots(SNAPSHOT_LIMIT),
             api.financeMarket(),
@@ -502,6 +598,7 @@ export default function FinancePage() {
             api.financeCandidates(),
             api.financeFills(),
           ]);
+        if (rb.status === "fulfilled") setBrief(rb.value);
         if (acct.status === "fulfilled") setAccount(acct.value);
         if (snaps.status === "fulfilled") setSnapshots(snaps.value);
         if (mkt.status === "fulfilled") setMarket(mkt.value);
@@ -528,7 +625,7 @@ export default function FinancePage() {
         {health && !offline && (
           <>
             <Badge tone={health.mode === "live" ? "destructive" : "secondary"}>
-              {health.mode}
+              {health.mode === "live" ? ft.page.modeLive : ft.page.modePaper}
             </Badge>
             <span className="flex items-center gap-1.5 font-mondwest normal-case text-xs text-muted-foreground">
               <span
@@ -539,14 +636,17 @@ export default function FinancePage() {
                     : "bg-muted-foreground/40",
                 )}
               />
-              {health.loop_attached ? "loop attached" : "loop idle"}
+              {health.loop_attached ? ft.page.loopAttached : ft.page.loopIdle}
             </span>
           </>
         )}
-        {offline && <Badge tone="destructive">offline</Badge>}
+        {offline && <Badge tone="destructive">{ft.page.offline}</Badge>}
         {lastUpdated && !offline && (
           <span className="font-mondwest normal-case text-xs text-text-tertiary">
-            updated {lastUpdated.toLocaleTimeString()}
+            {ft.page.updatedAt.replace(
+              "{time}",
+              lastUpdated.toLocaleTimeString(),
+            )}
           </span>
         )}
         <Button
@@ -559,7 +659,7 @@ export default function FinancePage() {
             load();
           }}
           disabled={loading}
-          aria-label="Refresh"
+          aria-label={t.common.refresh}
         >
           {loading ? <Spinner /> : <RefreshCw />}
         </Button>
@@ -570,7 +670,7 @@ export default function FinancePage() {
       setAfterTitle(null);
       setEnd(null);
     };
-  }, [health, offline, lastUpdated, loading, load, setAfterTitle, setEnd]);
+  }, [health, offline, lastUpdated, loading, load, setAfterTitle, setEnd, ft, t]);
 
   const ledgerFallback = account !== null && "source" in account;
   const liveView = account !== null && !("source" in account) ? account : null;
@@ -595,19 +695,24 @@ export default function FinancePage() {
     );
   }
 
+  // Research-first layout (Loop.md §7 Phase 0.5): the brief is the primary
+  // canvas; the approval queue is a compact badged strip below it; account/
+  // positions/orders/history are reference material further down.
   return (
     <div className="flex flex-col gap-6">
       {health?.breaker === "TRIPPED" && (
         <div className="flex items-center gap-3 border border-destructive bg-destructive/10 px-4 py-3 text-destructive">
           <AlertTriangle className="h-5 w-5 shrink-0" />
           <div className="font-mondwest normal-case text-sm">
-            <span className="font-semibold">CIRCUIT BREAKER TRIPPED</span> —
-            daily drawdown limit hit; no new entries today (Loop.md §3).
+            <span className="font-semibold">{ft.page.breakerTrippedTitle}</span>{" "}
+            {ft.page.breakerTrippedBody}
           </div>
         </div>
       )}
 
-      <ApprovalQueue pending={pending} onActed={load} showToast={showToast} />
+      <ResearchBrief brief={brief} />
+
+      <ActionsStrip pending={pending} onActed={load} showToast={showToast} />
 
       <AccountSection
         numbers={accountNumbers}

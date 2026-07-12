@@ -1244,6 +1244,185 @@ export interface Translations {
     copyPath: string
   }
 
+  // Finance portal (Loop.md §5.9/§7 Phase 0.5). Server-owned enum values
+  // (candidate status, breaker state, agent names) render raw; everything a
+  // human reads as UI copy lives here.
+  finance: {
+    title: string
+    tabs: {
+      research: string
+      queue: string
+      portfolio: string
+    }
+    sections: Record<'account' | 'history' | 'market' | 'reports', string>
+    modePaper: string
+    modeLive: string
+    searchPlaceholder: string
+    serviceOnline: string
+    serviceOffline: string
+    serviceConnecting: string
+    breakerPill: (state: string) => string
+    loopAttached: string
+    loopIdle: string
+    asOf: (ts: string) => string
+    connecting: string
+    breakerBannerTitle: string
+    breakerBannerBody: string
+    offlineTitle: string
+    offlineHint: string
+    offlineRetry: string
+    offlineChecking: string
+    queue: {
+      empty: string
+      approve: string
+      edit: string
+      reject: string
+      confidenceVersion: (confidence: string, version: number) => string
+      qty: string
+      limit: string
+      stop: string
+      tp: string
+      sl: string
+      ref: string
+      tif: string
+      riskNote: (note: string) => string
+      pool: (pool: string) => string
+      validUntil: (ts: string) => string
+      proposedAt: (ts: string) => string
+      windowClosed: string
+      actionFailed: (action: string, symbol: string) => string
+      actionDone: (symbol: string, action: string, code: string) => string
+      editTitle: string
+      editTitleFor: (symbol: string) => string
+      editDescription: string
+      fieldQty: string
+      fieldLimit: string
+      fieldStop: string
+      fieldSl: string
+      fieldTp: string
+      positiveNumber: (label: string) => string
+      atLeastOneEdit: string
+      saving: string
+      saveApprove: string
+    }
+    account: {
+      title: string
+      empty: string
+      equity: string
+      cash: string
+      upnl: string
+      dayPnl: string
+      drawdown: string
+      breaker: string
+      sourceLedger: (ts: string) => string
+      sourceLive: (ts: string) => string
+      positionsTitle: string
+      positionsLoopIdle: string
+      positionsEmpty: string
+      ordersTitle: string
+      ordersEmpty: string
+      colSymbol: string
+      colQty: string
+      colAvgPx: string
+      colMktPx: string
+      colUpnl: string
+      colPool: string
+      colSide: string
+      colType: string
+      colLimit: string
+      colStop: string
+      colTif: string
+      colStatus: string
+      colPlaced: string
+      statsTitle: string
+      statClosedWins: string
+      statWinRate: string
+      statAvgWinLoss: string
+      statPayoff: string
+      statExpectancy: string
+      statTotalPnl: string
+      statAvgHold: string
+      statMaxDrawdown: string
+      equityAlt: string
+      equitySpark: (count: number) => string
+    }
+    market: {
+      regimeTitle: string
+      regimeEmpty: string
+      regime: string
+      vix: string
+      breadth: string
+      asOfLabel: string
+      vs50dma: (delta: string) => string
+      watchlistTitle: string
+      watchlistNote: string
+      watchlistEmptySearch: string
+      watchlistEmpty: string
+      disabledTag: string
+    }
+    history: {
+      title: string
+      filters: Record<'all' | 'approved' | 'expired' | 'placed' | 'rejected', string>
+      empty: string
+      emptySearch: string
+      rowConfidence: (pct: string) => string
+      auditTitle: (symbol: string, id: string) => string
+      auditEmpty: string
+      auditEvent: (actor: string, surface: string, version: number) => string
+      applied: string
+      notApplied: string
+    }
+    reports: {
+      empty: string
+      reportKind: (kind: string) => string
+    }
+    research: {
+      tradingDay: (date: string) => string
+      modePaper: string
+      modeLive: string
+      briefAsOf: (ts: string) => string
+      briefError: string
+      staleTitle: string
+      freshMarket: string
+      freshNews: string
+      freshPortfolio: string
+      freshMissing: string
+      freshAge: (minutes: number) => string
+      riskTitle: string
+      riskEmpty: string
+      poolExposure: string
+      moversTitle: string
+      moversTop: string
+      moversBottom: string
+      moversEmpty: string
+      vsSma20: (delta: string) => string
+      vsSma50: (delta: string) => string
+      themesTitle: string
+      themesEmpty: string
+      themeMeta: (count: number, avg: string) => string
+      themeLeaders: (symbols: string) => string
+      newsTitle: string
+      newsEmpty: string
+      sentiment: (value: string) => string
+      signalsTitle: string
+      signalsEmpty: string
+      signalConfidence: (pct: string) => string
+      candidatesTitle: string
+      candidatesEmpty: string
+      pendingRow: (side: string, qty: string, confidence: string) => string
+      openQueue: string
+      uncertaintyTitle: string
+      provenanceTitle: string
+      searchTitle: string
+      searchPlaceholder: string
+      searchRun: string
+      searchOffline: string
+      searchEmpty: (q: string) => string
+      searchScore: (score: string) => string
+      searchError: string
+    }
+  }
+
   sidebar: {
     nav: Record<string, string>
     searchAria: string

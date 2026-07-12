@@ -34,6 +34,12 @@ export function fmtQty(v: number | null | undefined): string {
   return Number.isInteger(v) ? String(v) : v.toFixed(2);
 }
 
+/** Signed percentage, e.g. "+3.2%" — used for SMA-distance readouts. */
+export function fmtSignedPct(v: number | null | undefined, digits = 1): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  return `${v > 0 ? "+" : ""}${v.toFixed(digits)}%`;
+}
+
 export function fmtTs(ts: string | null | undefined): string {
   if (!ts) return "—";
   try {
@@ -80,6 +86,38 @@ export function candidateStatusTone(status: FinanceCandidateStatus): BadgeTone {
 
 export function sideTone(side: "BUY" | "SELL"): BadgeTone {
   return side === "BUY" ? "success" : "destructive";
+}
+
+/** Badge tone for the market regime chip (risk_on / neutral / risk_off). */
+export function regimeTone(regime: string | undefined): BadgeTone {
+  switch (regime) {
+    case "risk_on":
+      return "success";
+    case "risk_off":
+      return "destructive";
+    default:
+      return "outline";
+  }
+}
+
+/** Badge tone for a signal direction (long / short / neutral). */
+export function directionTone(direction: string): BadgeTone {
+  switch (direction) {
+    case "long":
+      return "success";
+    case "short":
+      return "destructive";
+    default:
+      return "outline";
+  }
+}
+
+/** Left-border tint class for a news item by sentiment sign. */
+export function sentimentBorderClass(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v) || v === 0) {
+    return "border-border";
+  }
+  return v > 0 ? "border-success" : "border-destructive";
 }
 
 /** Actor identity attached to every human action relayed by this surface. */

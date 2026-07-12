@@ -1283,6 +1283,34 @@ export const api = {
     fetchJSON<FinanceWatchlistItem[]>("/api/finance/v1/watchlist"),
   financeLatestReports: () =>
     fetchJSON<FinanceReports>("/api/finance/v1/reports/latest"),
+  /**
+   * Daily Investment Research brief (Loop.md §7 Phase 0.5). The endpoint
+   * always answers while the service is up — a degraded brief carries
+   * freshness warnings and nulls instead of failing.
+   */
+  financeResearchBrief: () =>
+    fetchJSON<FinanceResearchBrief>("/api/finance/v1/research/brief"),
+  /**
+   * Source-linked semantic research search (Loop.md §5.10). The service
+   * fails closed with 503 when the vector index is down; that case is
+   * rethrown as {@link FinanceKnowledgeOfflineError} so the UI can render
+   * a calm "research search offline" note instead of an error state.
+   */
+  financeKnowledgeSearch: async (
+    q: string,
+    k = 5,
+  ): Promise<FinanceKnowledgeHit[]> => {
+    try {
+      return await fetchJSON<FinanceKnowledgeHit[]>(
+        `/api/finance/v1/knowledge/search${financeQuery({ q, k })}`,
+      );
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith("503:")) {
+        throw new FinanceKnowledgeOfflineError(err.message);
+      }
+      throw err;
+    }
+  },
   financeCandidates: (status?: string, mode?: FinanceMode) =>
     fetchJSON<FinanceCandidate[]>(
       `/api/finance/v1/candidates${financeQuery({ status, mode })}`,
@@ -2852,4 +2880,134 @@ export interface FinanceActionOutcome {
   message: string;
   version: number | null;
   candidate: FinanceCandidate | null;
+}
+
+// ── Research brief types (Loop.md §7 Phase 0.5; trader/swing_trader/brief.py) ─
+
+/** Per-source as-of times, ages, and stale flags (`FreshnessInfo`). */
+export interface FinanceBriefFreshness {
+  market_as_of: string | null;
+  news_as_of: string | null;
+  portfolio_as_of: string | null;
+  market_age_minutes: number | null;
+  news_age_minutes: number | null;
+  portfolio_age_minutes: number | null;
+  market_stale: boolean;
+  news_stale: boolean;
+  portfolio_stale: boolean;
+  warnings: string[];
+}
+
+/** Dated market pulse (`RegimeView`); indices values carry `last` and
+ * `sma50_dist_pct` per index symbol. */
+export interface FinanceBriefRegime {
+  risk_on_off: string;
+  vix: number | null;
+  breadth_pct_above_50dma: number;
+  indices: Record<string, Record<string, number | null>>;
+}
+
+/** Account risk pulse with actionable warnings (`RiskView`). `stats` keys:
+ * n_closed, win_rate, expectancy, max_drawdown_pct. */
+export interface FinanceBriefRisk {
+  equity: number;
+  cash: number;
+  day_pnl: number;
+  drawdown_pct: number;
+  breaker_state: string;
+  pool_exposure_pct: Record<string, number>;
+  warnings: string[];
+  stats: Record<string, number>;
+}
+
+export interface FinanceBriefMover {
+  symbol: string;
+  last: number;
+  dist_sma20_pct: number;
+  dist_sma50_pct: number | null;
+  theme: string;
+  ai_phase: string;
+  role: string;
+}
+
+export interface FinanceBriefTheme {
+  theme: string;
+  avg_dist_sma50_pct: number;
+  n_symbols: number;
+  leaders: string[];
+}
+
+export interface FinanceBriefNewsItem {
+  headline: string;
+  source: string;
+  url: string;
+  sentiment: number | null;
+  symbol: string | null;
+}
+
+export interface FinanceBriefSignal {
+  symbol: string;
+  direction: string;
+  confidence: number;
+  source_agent: string;
+  thesis: string;
+}
+
+/** Compact "actions requiring attention" row (`PendingCandidate`). */
+export interface FinanceBriefPendingCandidate {
+  symbol: string;
+  side: string;
+  qty: number;
+  confidence: number;
+  status: string;
+}
+
+export interface FinanceProvenanceLink {
+  label: string;
+  url: string;
+}
+
+/** The daily Investment Research brief (`ResearchBrief`). Always answered
+ * by the service — a degraded brief has freshness warnings + null sections. */
+export interface FinanceResearchBrief {
+  as_of: string;
+  trading_date: string;
+  mode: FinanceMode;
+  freshness: FinanceBriefFreshness;
+  regime: FinanceBriefRegime | null;
+  risk: FinanceBriefRisk | null;
+  movers: { top: FinanceBriefMover[]; bottom: FinanceBriefMover[] };
+  themes: FinanceBriefTheme[];
+  events: { earnings: unknown[]; notes: string[] };
+  news: {
+    items: FinanceBriefNewsItem[];
+    per_symbol_sentiment: Record<string, number>;
+  };
+  signals_today: FinanceBriefSignal[];
+  candidates_today: {
+    counts: Record<string, number>;
+    pending: FinanceBriefPendingCandidate[];
+  };
+  uncertainty: string[];
+  provenance: FinanceProvenanceLink[];
+}
+
+/** One hit from GET /knowledge/search (`search_knowledge`). */
+export interface FinanceKnowledgeHit {
+  document_id: string;
+  title: string;
+  snippet: string;
+  source_url: string;
+  publisher: string;
+  score: number;
+  trading_date: string;
+}
+
+/** Thrown by {@link api.financeKnowledgeSearch} when the knowledge index is
+ * down (service 503, fail-closed) — render a calm offline note. */
+export class FinanceKnowledgeOfflineError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FinanceKnowledgeOfflineError";
+  }
 }

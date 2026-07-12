@@ -323,13 +323,12 @@ export function CommandCenterView({
             {
               // The Finance portal (Loop.md §5.9) is a full view, not a
               // command-center section — this entry only makes it discoverable
-              // here and navigates away. Literal label: cc.sections is a closed
-              // i18n record owned by the command-center sections above.
+              // here and navigates away.
               active: false,
               gapBefore: true,
               icon: LayoutDashboard,
               id: 'finance',
-              label: 'Finance',
+              label: t.finance.title,
               onSelect: () => onNavigateRoute?.(FINANCE_ROUTE)
             }
           ]}

@@ -10,6 +10,7 @@ import {
   getFinanceAudit,
   getFinanceCandidates
 } from '@/hermes'
+import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 
 import { CANDIDATE_STATUS_TONE, financeKey, fmtPct, fmtPrice, fmtQty, fmtTs, statusLabel } from './lib'
@@ -21,6 +22,8 @@ const STATUS_FILTERS = ['all', 'approved', 'rejected', 'expired', 'placed'] as c
 type StatusFilter = (typeof STATUS_FILTERS)[number]
 
 export function FinanceHistoryTab({ enabled, mode, query }: { enabled: boolean; mode: FinanceMode; query: string }) {
+  const { t } = useI18n()
+  const copy = t.finance.history
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [selectedId, setSelectedId] = useState<null | string>(null)
 
@@ -45,17 +48,18 @@ export function FinanceHistoryTab({ enabled, mode, query }: { enabled: boolean; 
       <section className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <FinanceSectionLabel>
-            Candidate history{candidates.length > 0 ? ` · ${candidates.length}` : ''}
+            {copy.title}
+            {candidates.length > 0 ? ` · ${candidates.length}` : ''}
           </FinanceSectionLabel>
           <SegmentedControl
             onChange={value => setStatusFilter(value)}
-            options={STATUS_FILTERS.map(value => ({ id: value, label: statusLabel(value) }))}
+            options={STATUS_FILTERS.map(value => ({ id: value, label: copy.filters[value] }))}
             value={statusFilter}
           />
         </div>
 
         <QuerySection
-          empty={needle ? 'No candidates match the search.' : 'No candidates recorded for this mode yet.'}
+          empty={needle ? copy.emptySearch : copy.empty}
           error={candidatesQuery.isError ? candidatesQuery.error : undefined}
           isEmpty={visible.length === 0}
           loading={candidatesQuery.isPending}
@@ -87,6 +91,9 @@ function CandidateHistoryRow({
   candidate: FinanceCandidate
   onSelect: () => void
 }) {
+  const { t } = useI18n()
+  const copy = t.finance.history
+
   return (
     <button
       className={cn(
@@ -103,7 +110,7 @@ function CandidateHistoryRow({
           {' '}
           {candidate.side} {fmtQty(candidate.qty)} · {candidate.order_type}
           {candidate.limit !== null && ` @ ${fmtPrice(candidate.limit)}`} · {statusLabel(candidate.status)} ·{' '}
-          confidence {fmtPct(candidate.confidence * 100, 0)}
+          {copy.rowConfidence(fmtPct(candidate.confidence * 100, 0))}
         </span>
       </span>
       <span className="shrink-0 text-[0.62rem] tabular-nums text-muted-foreground/70">{fmtTs(candidate.ts)}</span>
@@ -113,6 +120,9 @@ function CandidateHistoryRow({
 
 // Immutable approval audit trail (Loop.md §5.6) for the selected candidate.
 function AuditTrail({ candidate, enabled }: { candidate: FinanceCandidate; enabled: boolean }) {
+  const { t } = useI18n()
+  const copy = t.finance.history
+
   const auditQuery = useQuery({
     enabled,
     queryFn: () => getFinanceAudit({ candidateId: candidate.id }),
@@ -124,11 +134,9 @@ function AuditTrail({ candidate, enabled }: { candidate: FinanceCandidate; enabl
 
   return (
     <section className="space-y-2">
-      <FinanceSectionLabel>
-        Audit trail · {candidate.symbol} ({candidate.id.slice(0, 8)}…)
-      </FinanceSectionLabel>
+      <FinanceSectionLabel>{copy.auditTitle(candidate.symbol, candidate.id.slice(0, 8))}</FinanceSectionLabel>
       <QuerySection
-        empty="No audit events for this candidate."
+        empty={copy.auditEmpty}
         error={auditQuery.isError ? auditQuery.error : undefined}
         isEmpty={events.length === 0}
         loading={auditQuery.isPending}
@@ -141,12 +149,12 @@ function AuditTrail({ candidate, enabled }: { candidate: FinanceCandidate; enabl
                 {event.action}
               </span>{' '}
               <span className="text-muted-foreground">
-                by {event.actor} via {event.surface} (v{event.version}) —{' '}
+                {copy.auditEvent(event.actor, event.surface, event.version)} —{' '}
                 {event.prev_status && event.new_status
                   ? `${statusLabel(event.prev_status)} → ${statusLabel(event.new_status)}`
                   : event.applied
-                    ? 'applied'
-                    : 'not applied'}
+                    ? copy.applied
+                    : copy.notApplied}
                 {event.detail && ` · ${event.detail}`}
               </span>
             </li>

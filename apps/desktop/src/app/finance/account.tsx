@@ -10,6 +10,7 @@ import {
   getFinanceOrders,
   getFinanceSnapshots
 } from '@/hermes'
+import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 
 import { BREAKER_TONE, financeKey, fmtMoney, fmtPct, fmtPrice, fmtQty, fmtSignedMoney, fmtTs, pnlClass } from './lib'
@@ -27,6 +28,9 @@ function accountTiles(account: FinanceAccount) {
 }
 
 export function FinanceAccountTab({ enabled, mode, query }: { enabled: boolean; mode: FinanceMode; query: string }) {
+  const { t } = useI18n()
+  const copy = t.finance.account
+
   const accountQuery = useQuery({
     enabled,
     queryFn: () => getFinanceAccount(mode),
@@ -61,9 +65,9 @@ export function FinanceAccountTab({ enabled, mode, query }: { enabled: boolean; 
   return (
     <div className="space-y-5">
       <section className="space-y-2">
-        <FinanceSectionLabel>Account</FinanceSectionLabel>
+        <FinanceSectionLabel>{copy.title}</FinanceSectionLabel>
         <QuerySection
-          empty="No account data yet — the ledger has no snapshots for this mode."
+          empty={copy.empty}
           error={accountQuery.isError ? accountQuery.error : undefined}
           isEmpty={!snap}
           loading={accountQuery.isPending}
@@ -71,18 +75,18 @@ export function FinanceAccountTab({ enabled, mode, query }: { enabled: boolean; 
           {snap && (
             <>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-                <StatTile label="Equity" value={fmtMoney(snap.equity)} />
-                <StatTile label="Cash" value={fmtMoney(snap.cash)} />
-                <StatTile label="Unrealized PnL" tone={pnlClass(snap.upnl)} value={fmtSignedMoney(snap.upnl)} />
-                <StatTile label="Day PnL" tone={pnlClass(snap.day_pnl)} value={fmtSignedMoney(snap.day_pnl)} />
+                <StatTile label={copy.equity} value={fmtMoney(snap.equity)} />
+                <StatTile label={copy.cash} value={fmtMoney(snap.cash)} />
+                <StatTile label={copy.upnl} tone={pnlClass(snap.upnl)} value={fmtSignedMoney(snap.upnl)} />
+                <StatTile label={copy.dayPnl} tone={pnlClass(snap.day_pnl)} value={fmtSignedMoney(snap.day_pnl)} />
                 <StatTile
-                  label="Drawdown"
+                  label={copy.drawdown}
                   tone={snap.drawdown_pct < 0 ? 'text-destructive' : undefined}
                   value={fmtPct(snap.drawdown_pct)}
                 />
                 <StatTile
-                  hint={account?.source === 'ledger' ? `ledger · ${fmtTs(snap.ts)}` : `live · ${fmtTs(snap.ts)}`}
-                  label="Breaker"
+                  hint={account?.source === 'ledger' ? copy.sourceLedger(fmtTs(snap.ts)) : copy.sourceLive(fmtTs(snap.ts))}
+                  label={copy.breaker}
                   tone={snap.breaker_state === 'TRIPPED' ? 'text-destructive' : undefined}
                   value={snap.breaker_state}
                 />
@@ -94,25 +98,24 @@ export function FinanceAccountTab({ enabled, mode, query }: { enabled: boolean; 
       </section>
 
       <section className="space-y-2">
-        <FinanceSectionLabel>Positions{positions.length > 0 ? ` · ${positions.length}` : ''}</FinanceSectionLabel>
+        <FinanceSectionLabel>
+          {copy.positionsTitle}
+          {positions.length > 0 ? ` · ${positions.length}` : ''}
+        </FinanceSectionLabel>
         <QuerySection
-          empty={
-            account?.source === 'ledger'
-              ? 'Positions are only visible while the trading loop is attached.'
-              : 'No open positions.'
-          }
+          empty={account?.source === 'ledger' ? copy.positionsLoopIdle : copy.positionsEmpty}
           error={undefined}
           isEmpty={visiblePositions.length === 0}
           loading={accountQuery.isPending}
         >
           <FinanceTable
             columns={[
-              { label: 'Symbol' },
-              { align: 'right', label: 'Qty' },
-              { align: 'right', label: 'Avg px' },
-              { align: 'right', label: 'Mkt px' },
-              { align: 'right', label: 'UPnL' },
-              { label: 'Pool' }
+              { label: copy.colSymbol },
+              { align: 'right', label: copy.colQty },
+              { align: 'right', label: copy.colAvgPx },
+              { align: 'right', label: copy.colMktPx },
+              { align: 'right', label: copy.colUpnl },
+              { label: copy.colPool }
             ]}
             rows={visiblePositions.map(position => ({
               cells: [
@@ -134,24 +137,27 @@ export function FinanceAccountTab({ enabled, mode, query }: { enabled: boolean; 
       </section>
 
       <section className="space-y-2">
-        <FinanceSectionLabel>Open orders{orders.length > 0 ? ` · ${orders.length}` : ''}</FinanceSectionLabel>
+        <FinanceSectionLabel>
+          {copy.ordersTitle}
+          {orders.length > 0 ? ` · ${orders.length}` : ''}
+        </FinanceSectionLabel>
         <QuerySection
-          empty="No working orders."
+          empty={copy.ordersEmpty}
           error={ordersQuery.isError ? ordersQuery.error : undefined}
           isEmpty={visibleOrders.length === 0}
           loading={ordersQuery.isPending}
         >
           <FinanceTable
             columns={[
-              { label: 'Symbol' },
-              { label: 'Side' },
-              { align: 'right', label: 'Qty' },
-              { label: 'Type' },
-              { align: 'right', label: 'Limit' },
-              { align: 'right', label: 'Stop' },
-              { label: 'TIF' },
-              { label: 'Status' },
-              { label: 'Placed' }
+              { label: copy.colSymbol },
+              { label: copy.colSide },
+              { align: 'right', label: copy.colQty },
+              { label: copy.colType },
+              { align: 'right', label: copy.colLimit },
+              { align: 'right', label: copy.colStop },
+              { label: copy.colTif },
+              { label: copy.colStatus },
+              { label: copy.colPlaced }
             ]}
             rows={visibleOrders.map(order => ({
               cells: [
@@ -181,28 +187,31 @@ export function FinanceAccountTab({ enabled, mode, query }: { enabled: boolean; 
 }
 
 function TradeStatsSection({ stats }: { stats: FinanceStats }) {
+  const { t } = useI18n()
+  const copy = t.finance.account
+
   return (
     <section className="space-y-2">
-      <FinanceSectionLabel>Trade stats (closed trades)</FinanceSectionLabel>
+      <FinanceSectionLabel>{copy.statsTitle}</FinanceSectionLabel>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-        <StatTile label="Closed / wins" value={`${stats.n_closed} / ${stats.n_wins}`} />
-        <StatTile label="Win rate" value={fmtPct(stats.win_rate * 100, 0)} />
+        <StatTile label={copy.statClosedWins} value={`${stats.n_closed} / ${stats.n_wins}`} />
+        <StatTile label={copy.statWinRate} value={fmtPct(stats.win_rate * 100, 0)} />
         <StatTile
-          label="Avg win / loss"
+          label={copy.statAvgWinLoss}
           value={`${fmtSignedMoney(stats.avg_win)} / ${fmtSignedMoney(stats.avg_loss)}`}
         />
         <StatTile
-          label="Payoff ratio"
+          label={copy.statPayoff}
           value={stats.payoff_ratio === null ? '—' : stats.payoff_ratio.toFixed(2)}
         />
-        <StatTile label="Expectancy" tone={pnlClass(stats.expectancy)} value={fmtSignedMoney(stats.expectancy)} />
-        <StatTile label="Total PnL" tone={pnlClass(stats.total_pnl)} value={fmtSignedMoney(stats.total_pnl)} />
+        <StatTile label={copy.statExpectancy} tone={pnlClass(stats.expectancy)} value={fmtSignedMoney(stats.expectancy)} />
+        <StatTile label={copy.statTotalPnl} tone={pnlClass(stats.total_pnl)} value={fmtSignedMoney(stats.total_pnl)} />
         <StatTile
-          label="Avg hold (days)"
+          label={copy.statAvgHold}
           value={stats.avg_hold_days === null ? '—' : stats.avg_hold_days.toFixed(1)}
         />
         <StatTile
-          label="Max drawdown"
+          label={copy.statMaxDrawdown}
           tone={stats.max_drawdown_pct > 0 ? 'text-destructive' : undefined}
           value={fmtPct(stats.max_drawdown_pct)}
         />
@@ -213,6 +222,9 @@ function TradeStatsSection({ stats }: { stats: FinanceStats }) {
 
 // Tiny dependency-free equity sparkline over the ledger snapshot series.
 function EquitySparkline({ snapshots }: { snapshots: FinanceSnapshot[] }) {
+  const { t } = useI18n()
+  const copy = t.finance.account
+
   if (snapshots.length < 2) {
     return null
   }
@@ -238,7 +250,7 @@ function EquitySparkline({ snapshots }: { snapshots: FinanceSnapshot[] }) {
   return (
     <div className="flex items-center gap-3 rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary) px-3 py-2">
       <svg
-        aria-label="Equity history"
+        aria-label={copy.equityAlt}
         className={cn('h-8 w-40 shrink-0', rising ? 'text-primary' : 'text-destructive')}
         preserveAspectRatio="none"
         role="img"
@@ -249,7 +261,7 @@ function EquitySparkline({ snapshots }: { snapshots: FinanceSnapshot[] }) {
       <div className="min-w-0 text-[0.65rem] leading-4 text-muted-foreground">
         <div className="flex items-center gap-1.5">
           <StatusDot tone={BREAKER_TONE[snapshots[snapshots.length - 1].breaker_state] ?? 'muted'} />
-          Equity, last {snapshots.length} snapshots
+          {copy.equitySpark(snapshots.length)}
         </div>
         <div className="tabular-nums">
           {fmtMoney(min)} – {fmtMoney(max)}

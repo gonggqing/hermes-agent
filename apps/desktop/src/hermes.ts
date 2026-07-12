@@ -1455,6 +1455,123 @@ export interface FinanceActionResult {
   candidate: FinanceCandidate | null
 }
 
+// ── Investment Research brief (Loop.md §7 Phase 0.5) ────────────────────────
+// Wire shapes mirror trader/swing_trader/brief.py (ResearchBrief and its
+// section models, serialized with model_dump(mode="json")). The endpoint
+// always answers: a degraded brief carries freshness warnings and null
+// regime/risk instead of failing.
+
+export interface FinanceFreshness {
+  market_as_of: null | string
+  news_as_of: null | string
+  portfolio_as_of: null | string
+  market_age_minutes: null | number
+  news_age_minutes: null | number
+  portfolio_age_minutes: null | number
+  market_stale: boolean
+  news_stale: boolean
+  portfolio_stale: boolean
+  warnings: string[]
+}
+
+export interface FinanceRegimeView {
+  risk_on_off: string
+  vix: null | number
+  breadth_pct_above_50dma: number
+  indices: Record<string, Record<string, null | number>>
+}
+
+export interface FinanceRiskView {
+  equity: number
+  cash: number
+  day_pnl: number
+  drawdown_pct: number
+  breaker_state: string
+  pool_exposure_pct: Record<string, number>
+  warnings: string[]
+  // {n_closed, win_rate, expectancy, max_drawdown_pct} from Ledger.stats;
+  // empty when the ledger stats accessor failed (see brief uncertainty).
+  stats: Record<string, number>
+}
+
+export interface FinanceMover {
+  symbol: string
+  last: number
+  dist_sma20_pct: number
+  dist_sma50_pct: null | number
+  theme: string
+  ai_phase: string
+  role: string
+}
+
+export interface FinanceThemeView {
+  theme: string
+  avg_dist_sma50_pct: number
+  n_symbols: number
+  leaders: string[]
+}
+
+export interface FinanceNewsDigestItem {
+  headline: string
+  source: string
+  url: string
+  sentiment: null | number
+  symbol: null | string
+}
+
+export interface FinanceSignalView {
+  symbol: string
+  direction: string
+  confidence: number
+  source_agent: string
+  thesis: string
+}
+
+// Compact pending row in the brief (NOT the full FinancePendingCandidate the
+// queue actions use — the brief is read-only by design, Loop.md §5.9).
+export interface FinanceBriefPendingCandidate {
+  symbol: string
+  side: string
+  qty: number
+  confidence: number
+  status: string
+}
+
+export interface FinanceProvenanceLink {
+  label: string
+  url: string
+}
+
+export interface FinanceResearchBrief {
+  as_of: string
+  trading_date: string
+  mode: FinanceMode
+  freshness: FinanceFreshness
+  regime: FinanceRegimeView | null
+  risk: FinanceRiskView | null
+  movers: { top: FinanceMover[]; bottom: FinanceMover[] }
+  themes: FinanceThemeView[]
+  events: { earnings: unknown[]; notes: string[] }
+  news: { items: FinanceNewsDigestItem[]; per_symbol_sentiment: Record<string, number> }
+  signals_today: FinanceSignalView[]
+  candidates_today: { counts: Record<string, number>; pending: FinanceBriefPendingCandidate[] }
+  uncertainty: string[]
+  provenance: FinanceProvenanceLink[]
+}
+
+// One hit from the source-linked research knowledge search (Loop.md §5.10:
+// results always carry provenance; the endpoint fails closed with 503 when
+// the vector index is down).
+export interface FinanceKnowledgeHit {
+  document_id: string
+  title: string
+  snippet: string
+  source_url: string
+  publisher: string
+  score: number
+  trading_date: string
+}
+
 function financeQuery(params: Record<string, boolean | number | string | undefined>): string {
   const query = new URLSearchParams()
 
@@ -1553,5 +1670,22 @@ export function postFinanceCandidateAction(id: string, payload: FinanceActionPay
     path: `/api/finance/v1/candidates/${encodeURIComponent(id)}/action`,
     method: 'POST',
     body: { surface: 'desktop', ...payload }
+  })
+}
+
+// The daily Investment Research brief (Loop.md §7 Phase 0.5). Always answers
+// while the service is up: when the loop has not published a brief yet the
+// service builds a DEGRADED one on demand (ledger-only, explicit freshness
+// warnings, null regime/risk) instead of erroring.
+export function getFinanceResearchBrief(): Promise<FinanceResearchBrief> {
+  return window.hermesDesktop.api<FinanceResearchBrief>({ path: '/api/finance/v1/research/brief' })
+}
+
+// Source-linked semantic research search. Answers 503 `{detail}` when no
+// vector index is configured or the backend is down (fail-closed, Loop.md
+// §5.10) — callers should render that as a calm "search offline" note.
+export function searchFinanceKnowledge(q: string, k = 5): Promise<FinanceKnowledgeHit[]> {
+  return window.hermesDesktop.api<FinanceKnowledgeHit[]>({
+    path: `/api/finance/v1/knowledge/search${financeQuery({ k, q })}`
   })
 }

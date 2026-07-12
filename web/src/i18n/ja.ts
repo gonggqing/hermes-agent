@@ -72,6 +72,7 @@ export const ja: Translations = {
       config: "設定",
       cron: "Cron",
       documentation: "ドキュメント",
+      finance: "ファイナンス",
       keys: "キー",
       logs: "ログ",
       models: "モデル",
