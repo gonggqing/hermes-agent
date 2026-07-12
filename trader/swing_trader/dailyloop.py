@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Callable, Optional
 
 from swing_trader.analysis import (
@@ -171,6 +172,8 @@ class DailyLoop:
         fundamentals: StaticFundamentals | None = None,
         decision_core: RuleBasedDecisionCore | None = None,
         llm_analyst=None,  # Optional[swing_trader.llm.LLMAnalyst] — analysis only (§3)
+        knowledge=None,  # Optional[FinanceKnowledge] (Phase 0.5 ingestion)
+        knowledge_index=None,  # Optional[KnowledgeIndex] — None = fail-closed
     ) -> None:
         self.feed = feed
         self.broker = broker
@@ -195,6 +198,8 @@ class DailyLoop:
         self.senti = SentimentAgent()
         self.debate = DebateAgent()
         self.llm_analyst = llm_analyst
+        self.knowledge = knowledge
+        self.knowledge_index = knowledge_index
 
         self._market = None
         self._portfolio = None
@@ -226,6 +231,8 @@ class DailyLoop:
         self._news = self.news_monitor.poll(self.symbols)
         if self.runtime is not None:
             self.runtime.market = self._market.model_dump(mode="json")
+        self._ingest_news()
+        self._publish_brief()
 
     def on_decide(self) -> None:
         if self._portfolio is None:  # monitors have not run (fresh start mid-day)
@@ -265,6 +272,7 @@ class DailyLoop:
         )
         if self.runtime is not None:
             self.runtime.confirmation = self._confirmation
+        self._publish_brief()  # refresh with today's signals/candidates
         logger.info(
             "decide complete",
             extra={"proposed": len(candidates),
@@ -446,6 +454,49 @@ class DailyLoop:
             if candles:
                 bars[symbol] = candles[-1]
         return bars
+
+    def _publish_brief(self) -> None:
+        """Build the Investment Research brief and expose it via the runtime
+        (Loop.md Phase 0.5: research first — the tab reads /research/brief)."""
+        if self.runtime is None:
+            return
+        from swing_trader.brief import build_research_brief
+
+        try:
+            brief = build_research_brief(
+                self.ledger, self.mode,
+                market=self._market, portfolio=self._portfolio,
+                news=self._news,
+                llm_enabled=self.llm_analyst is not None,
+                now=self.clock(),
+            )
+            self.runtime.latest_brief = brief.model_dump(mode="json")
+        except Exception:  # brief must never break the trading loop
+            logger.exception("research brief build failed")
+
+    def _ingest_news(self) -> None:
+        """Persist today's scored news into the knowledge store (§5.10).
+        Vector-down and any pipeline error are fail-closed: logged, never
+        allowed to break the loop; the ledger/facts are unaffected."""
+        if self.knowledge is None or self._news is None:
+            return
+        from swing_trader.knowledge_pipeline import ingest_news_snapshot
+
+        try:
+            trading_date = (
+                self.clock().astimezone(ZoneInfo("America/New_York")).date()
+            )
+            report = ingest_news_snapshot(
+                self.knowledge, self.knowledge_index, self._news, trading_date
+            )
+            logger.info(
+                "news ingested into knowledge store",
+                extra={"n_docs": report.n_docs_written,
+                       "n_dupes": report.n_duplicates,
+                       "vector_ok": report.vector_ok},
+            )
+        except Exception:
+            logger.exception("knowledge ingestion failed (fail-closed)")
 
     def _update_memory_outcomes(self) -> None:
         memory = self.decision.memory

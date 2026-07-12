@@ -112,6 +112,21 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     else:
         logger.warning("telegram not configured; portal-only confirmations")
 
+    # Knowledge store (Loop.md §5.10 / Phase 0.5): embedded Qdrant under
+    # trader/data/knowledge by default; FINANCE_QDRANT_URL switches to the
+    # hermes-finance-vector container. Vector down => (knowledge, None) and
+    # research search fails closed while facts/documents keep working.
+    from pathlib import Path as _Path
+
+    from swing_trader.knowledge_pipeline import KnowledgeConfig, build_knowledge
+
+    knowledge, knowledge_index = build_knowledge(KnowledgeConfig(
+        root_dir=_Path("data/knowledge"),
+        qdrant_url=os.environ.get("FINANCE_QDRANT_URL") or None,
+    ))
+    logger.info("knowledge store ready",
+                extra={"vector_ok": knowledge_index is not None})
+
     llm_settings = llm_settings_from_env()
     llm_analyst = LLMAnalyst(llm_settings) if llm_settings else None
     if llm_analyst:
@@ -119,10 +134,13 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     else:
         logger.info("no LLM key found; rule-based analysis only")
 
+    runtime.knowledge = knowledge
+    runtime.knowledge_index = knowledge_index
     loop = DailyLoop(
         feed, broker, ledger, mode=settings.mode,
         runtime=runtime, telegram=telegram, notify=notify,
         llm_analyst=llm_analyst,
+        knowledge=knowledge, knowledge_index=knowledge_index,
     )
     if rehydration.performed:
         loop.execution.seed_synced_fills(rehydration.fill_ids)

@@ -56,6 +56,9 @@ class FinanceRuntime:
     confirmation: Optional[ConfirmationService] = None
     market: dict = field(default_factory=dict)  # latest MarketSnapshot dump
     latest_reports: dict = field(default_factory=dict)  # kind -> text
+    latest_brief: dict = field(default_factory=dict)  # ResearchBrief dump
+    knowledge: Any = None  # FinanceKnowledge (Phase 0.5)
+    knowledge_index: Any = None  # KnowledgeIndex | None (fail-closed)
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
 
 
@@ -184,6 +187,39 @@ def create_app(runtime: FinanceRuntime):
     @app.get(f"/{API_VERSION}/reports/latest")
     def latest_reports() -> dict:
         return runtime.latest_reports
+
+    @app.get(f"/{API_VERSION}/research/brief")
+    def research_brief() -> dict:
+        """Investment Research brief (Loop.md Phase 0.5). Falls back to an
+        on-demand DEGRADED brief (ledger-only, explicit freshness warnings)
+        when the daily loop has not produced one yet."""
+        if runtime.latest_brief:
+            return runtime.latest_brief
+        from swing_trader.brief import build_research_brief
+
+        brief = build_research_brief(
+            runtime.ledger, runtime.mode, now=runtime.clock()
+        )
+        return brief.model_dump(mode="json")
+
+    @app.get(f"/{API_VERSION}/knowledge/search")
+    def knowledge_search(
+        q: str = Query(min_length=2, max_length=300),
+        k: int = Query(default=5, ge=1, le=25),
+    ) -> list[dict]:
+        """Source-linked semantic research search (Loop.md §5.10: results
+        always carry provenance; vector down => fail closed with 503)."""
+        if runtime.knowledge is None:
+            raise HTTPException(503, "knowledge store not configured")
+        from swing_trader.knowledge import KnowledgeUnavailable
+        from swing_trader.knowledge_pipeline import search_knowledge
+
+        try:
+            return search_knowledge(
+                runtime.knowledge, runtime.knowledge_index, q, k=k
+            )
+        except KnowledgeUnavailable as exc:
+            raise HTTPException(503, f"knowledge index unavailable: {exc}")
 
     @app.get(f"/{API_VERSION}/candidates")
     def candidates(

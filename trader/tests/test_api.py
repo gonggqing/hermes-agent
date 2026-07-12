@@ -102,6 +102,48 @@ class TestReads:
         client = TestClient(create_app(FinanceRuntime(ledger=ledger)))
         assert client.get("/v1/candidates/pending").json() == []
 
+    def test_research_brief_degraded_on_demand(self, env):
+        """No loop-produced brief -> a degraded ledger-only brief, never 500."""
+        _, _, _, client = env
+        body = client.get("/v1/research/brief").json()
+        assert body["mode"] == "paper"
+        assert body["freshness"]["warnings"]  # missing sources called out
+
+    def test_research_brief_prefers_loop_version(self, env):
+        _, _, runtime, client = env
+        runtime.latest_brief = {"mode": "paper", "marker": "from-loop"}
+        assert client.get("/v1/research/brief").json()["marker"] == "from-loop"
+
+    def test_knowledge_search_503_when_unconfigured(self, env):
+        _, _, _, client = env
+        assert client.get("/v1/knowledge/search", params={"q": "nvda"}).status_code == 503
+
+    def test_knowledge_search_roundtrip_embedded(self, env, tmp_path):
+        from datetime import date
+
+        from swing_trader.knowledge_pipeline import (
+            KnowledgeConfig,
+            build_knowledge,
+            ingest_news_snapshot,
+        )
+        from swing_trader.monitors import NewsSnapshot
+
+        _, _, runtime, client = env
+        knowledge, index = build_knowledge(
+            KnowledgeConfig(root_dir=tmp_path / "kb")
+        )
+        assert index is not None
+        news = NewsSnapshot(items=[{
+            "ts": IN_WINDOW.isoformat(), "symbol": "NVDA",
+            "headline": "NVDA announces quantum accelerator breakthrough",
+            "source": "sim", "url": "https://example.invalid/a", "sentiment": 0.5,
+        }])
+        ingest_news_snapshot(knowledge, index, news, date(2026, 7, 13))
+        runtime.knowledge, runtime.knowledge_index = knowledge, index
+        rows = client.get("/v1/knowledge/search",
+                          params={"q": "quantum accelerator"}).json()
+        assert rows and rows[0]["source_url"] == "https://example.invalid/a"
+
 
 class TestPendingAndActions:
     def test_pending_lists_published(self, env):
