@@ -42,6 +42,25 @@ anything advances (Loop.md §0 rule 4).
    with a protective stop; a failed exit re-places the stop.
 4. Paper/live never mix (`mode` tag everywhere). No secrets in code/logs/ledger.
 5. Tests never touch the network.
+6. Finance and every future module must use the existing Desktop/Web i18n
+   catalogs and locale conventions. Do not ship hard-coded UI text without its
+   matching translation updates.
+
+## Fork maintenance — official Hermes sync
+
+This repository is a fork of official Hermes Agent `main`. Treat upstream
+maintenance as a recurring engineering task, not a one-time migration:
+
+1. Each weekend, fetch `upstream/main` and compare it to local `main`.
+2. Create a dated integration branch; never merge upstream directly into the
+   Finance branch without review.
+3. Triage security/gateway/provider/Desktop/Web changes and their impact on
+   Finance service boundaries, i18n, and Hermes-native UI components.
+4. Resolve conflicts deliberately, run relevant Python, Desktop/Web, Docker,
+   and Finance tests, then record compared commits, adopted/skipped features,
+   conflict decisions, and migration follow-ups in the sync report.
+5. Never use `reset --hard`, force-push, or unattended auto-merge. At least
+   one reviewed sync cycle is required before Phase 1/live-IBKR work begins.
 
 ## What the human must decide at this gate
 
