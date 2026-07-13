@@ -565,13 +565,27 @@ def create_app(runtime: FinanceRuntime):
         except ValueError:
             raise HTTPException(422, f"unknown surface {raw!r}")
 
-    def _holdings_payload(h) -> dict:
+    def _symbol_names(account_id: Optional[str] = None) -> dict:
+        """symbol -> display name, derived from the event note ('name|…'), so
+        holdings show 名字 not just codes. First non-empty name wins."""
+        out: dict = {}
+        if runtime.portfolio is None:
+            return out
+        for e in runtime.portfolio.get_events(account_id):
+            if e.symbol and e.symbol not in out and e.note:
+                nm = e.note.split("|", 1)[0].strip()
+                if nm:
+                    out[e.symbol] = nm
+        return out
+
+    def _holdings_payload(h, names: Optional[dict] = None) -> dict:
+        names = names or {}
         return {
             "account_id": h.account_id,
             "as_of": h.as_of.isoformat() if h.as_of else None,
             "n_events": h.n_events,
             "holdings": [
-                {"symbol": p.symbol,
+                {"symbol": p.symbol, "display_name": names.get(p.symbol),
                  "market": p.market.value if p.market else None,
                  "currency": p.currency, "qty": p.qty,
                  "avg_cost": p.avg_cost, "cost_basis_known": p.cost_basis_known}
@@ -656,7 +670,7 @@ def create_app(runtime: FinanceRuntime):
         pf = _need_portfolio()
         if pf.get_account(account_id) is None:
             raise HTTPException(404, f"unknown account {account_id!r}")
-        return _holdings_payload(pf.holdings(account_id))
+        return _holdings_payload(pf.holdings(account_id), _symbol_names(account_id))
 
     @app.get(f"/{API_VERSION}/portfolio/accounts/{{account_id}}/events")
     def portfolio_events(account_id: str,
@@ -851,7 +865,9 @@ def create_app(runtime: FinanceRuntime):
 
     # ---- valuation (market value + P&L) ----
 
-    def _valued_payload(vp, accounts_map: Optional[dict] = None) -> dict:
+    def _valued_payload(vp, accounts_map: Optional[dict] = None,
+                        names: Optional[dict] = None) -> dict:
+        names = names or {}
         return {
             "as_of": vp.as_of.isoformat() if vp.as_of else None,
             "totals": [
@@ -862,7 +878,7 @@ def create_app(runtime: FinanceRuntime):
                 for t in vp.totals
             ],
             "holdings": [
-                {"symbol": h.symbol,
+                {"symbol": h.symbol, "display_name": names.get(h.symbol),
                  "market": h.market.value if h.market else None,
                  "currency": h.currency, "qty": h.qty, "avg_cost": h.avg_cost,
                  "cost_basis_known": h.cost_basis_known, "price": h.price,
@@ -885,7 +901,7 @@ def create_app(runtime: FinanceRuntime):
         if pf.get_account(account_id) is None:
             raise HTTPException(404, f"unknown account {account_id!r}")
         vp = value_account(pf.holdings(account_id), pf.get_marks())
-        return _valued_payload(vp)
+        return _valued_payload(vp, names=_symbol_names(account_id))
 
     @app.get(f"/{API_VERSION}/portfolio/valuation")
     def portfolio_valuation_all(include_in_risk_only: bool = Query(default=False)) -> dict:
@@ -895,7 +911,7 @@ def create_app(runtime: FinanceRuntime):
         names = {a.id: a.name for a in pf.list_accounts()}
         vp = value_aggregate(pf.aggregate(include_in_risk_only=include_in_risk_only),
                              pf.get_marks())
-        out = _valued_payload(vp, accounts_map=names)
+        out = _valued_payload(vp, accounts_map=names, names=_symbol_names())
         out["accounts"] = [{"id": a, "name": names.get(a, a)}
                            for a in {acc for h in vp.holdings for acc in h.accounts}]
         return out
