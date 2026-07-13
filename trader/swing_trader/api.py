@@ -174,6 +174,14 @@ class PortfolioImportRequest(BaseModel):
     actor: Optional[str] = Field(default=None, max_length=200)
 
 
+class PortfolioMarkRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=24)
+    price: float = Field(gt=0)
+    currency: str = Field(default="CNY", min_length=1, max_length=8)
+    source: str = Field(default="manual", pattern="^(manual|csv|live)$")
+    actor: str = Field(min_length=1, max_length=200)
+
+
 def create_app(runtime: FinanceRuntime):
     """Build the FastAPI app (fastapi imported lazily — `service` extra)."""
     from fastapi import FastAPI, Header, HTTPException, Query
@@ -830,5 +838,94 @@ def create_app(runtime: FinanceRuntime):
             "n_committed": res.n_committed, "n_duplicate": res.n_duplicate,
             "n_skipped": res.n_skipped, "event_ids": res.event_ids,
         }
+
+    # ---- valuation (market value + P&L) ----
+
+    def _valued_payload(vp, accounts_map: Optional[dict] = None) -> dict:
+        return {
+            "as_of": vp.as_of.isoformat() if vp.as_of else None,
+            "totals": [
+                {"currency": t.currency, "market_value": t.market_value,
+                 "holdings_value": t.holdings_value, "cash": t.cash, "cost": t.cost,
+                 "unrealized_pnl": t.unrealized_pnl, "pnl_pct": t.pnl_pct,
+                 "n_priced": t.n_priced, "n_unpriced": t.n_unpriced}
+                for t in vp.totals
+            ],
+            "holdings": [
+                {"symbol": h.symbol,
+                 "market": h.market.value if h.market else None,
+                 "currency": h.currency, "qty": h.qty, "avg_cost": h.avg_cost,
+                 "cost_basis_known": h.cost_basis_known, "price": h.price,
+                 "price_as_of": h.price_as_of.isoformat() if h.price_as_of else None,
+                 "price_source": h.price_source, "market_value": h.market_value,
+                 "cost": h.cost, "unrealized_pnl": h.unrealized_pnl,
+                 "pnl_pct": h.pnl_pct,
+                 "accounts": h.accounts,
+                 "account_names": [accounts_map.get(a, a) for a in h.accounts]
+                 if accounts_map else []}
+                for h in vp.holdings
+            ],
+        }
+
+    @app.get(f"/{API_VERSION}/portfolio/accounts/{{account_id}}/valuation")
+    def portfolio_valuation(account_id: str) -> dict:
+        from swing_trader.valuation import value_account
+
+        pf = _need_portfolio()
+        if pf.get_account(account_id) is None:
+            raise HTTPException(404, f"unknown account {account_id!r}")
+        vp = value_account(pf.holdings(account_id), pf.get_marks())
+        return _valued_payload(vp)
+
+    @app.get(f"/{API_VERSION}/portfolio/valuation")
+    def portfolio_valuation_all(include_in_risk_only: bool = Query(default=False)) -> dict:
+        from swing_trader.valuation import value_aggregate
+
+        pf = _need_portfolio()
+        names = {a.id: a.name for a in pf.list_accounts()}
+        vp = value_aggregate(pf.aggregate(include_in_risk_only=include_in_risk_only),
+                             pf.get_marks())
+        out = _valued_payload(vp, accounts_map=names)
+        out["accounts"] = [{"id": a, "name": names.get(a, a)}
+                           for a in {acc for h in vp.holdings for acc in h.accounts}]
+        return out
+
+    @app.post(f"/{API_VERSION}/portfolio/marks")
+    def portfolio_set_mark(
+        body: PortfolioMarkRequest,
+        x_finance_surface: Optional[str] = Header(default=None),
+    ) -> dict:
+        pf = _need_portfolio()
+        _resolve_surface(x_finance_surface, None)  # validate surface
+        m = pf.set_mark(body.symbol, body.price, currency=body.currency,
+                        source=body.source, actor=body.actor, as_of=runtime.clock())
+        return {"symbol": m.symbol, "price": m.price, "currency": m.currency,
+                "as_of": m.as_of.isoformat(), "source": m.source}
+
+    @app.post(f"/{API_VERSION}/portfolio/marks/refresh")
+    def portfolio_refresh_marks() -> dict:
+        """Refresh marks from the live feed for HELD, quotable symbols (exchange
+        tickers). 场外基金 (bare fund codes) are skipped — no live feed."""
+        pf = _need_portfolio()
+        if runtime.feed is None:
+            raise HTTPException(503, "data feed not available")
+        symbols = {e.symbol for e in pf.get_events() if e.symbol}
+        refreshed, failed, skipped = [], [], []
+        for sym in sorted(symbols):
+            base = sym.split(".")[0]
+            quotable = sym.endswith((".SS", ".SZ", ".HK")) or base.isalpha()
+            if not quotable:
+                skipped.append(sym)  # 场外基金 fund code — no live feed
+                continue
+            ccy = ("CNY" if sym.endswith((".SS", ".SZ"))
+                   else "HKD" if sym.endswith(".HK") else "USD")
+            try:
+                q = runtime.feed.get_quote(sym)
+                pf.set_mark(sym, q.last, currency=ccy, source="live",
+                            actor="system", as_of=runtime.clock())
+                refreshed.append(sym)
+            except Exception:  # noqa: BLE001 — one bad symbol must not fail the batch
+                failed.append(sym)
+        return {"refreshed": refreshed, "failed": failed, "skipped": skipped}
 
     return app

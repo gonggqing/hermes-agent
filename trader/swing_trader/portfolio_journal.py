@@ -42,12 +42,14 @@ from swing_trader.portfolio import (
 logger = get_logger(__name__)
 
 __all__ = [
+    "Mark",
     "PortfolioAccountRow",
     "PortfolioAuditEvent",
     "PortfolioAuditRow",
     "PortfolioDraftRow",
     "PortfolioEventRow",
     "PortfolioJournal",
+    "PortfolioMarkRow",
 ]
 
 
@@ -173,6 +175,31 @@ class PortfolioAuditRow(SQLModel, table=True):
     idempotency_key: str = Field(default="", index=True)
     applied: bool = True
     detail: str = ""
+
+
+class PortfolioMarkRow(SQLModel, table=True):
+    """Latest known price/NAV for a symbol — a MUTABLE, NON-authoritative
+    valuation input (Loop.md P0.9). NOT a holding fact: it never affects
+    qty/cost, only market-value/P&L display. Keyed globally by symbol."""
+
+    __tablename__ = "portfolio_marks"
+
+    symbol: str = Field(primary_key=True)
+    price: float
+    currency: str
+    as_of: str  # ISO-8601 UTC
+    source: str  # manual | csv | live
+    actor: str = ""
+
+
+@dataclass
+class Mark:
+    symbol: str
+    price: float
+    currency: str
+    as_of: datetime
+    source: str
+    actor: str = ""
 
 
 @dataclass
@@ -579,6 +606,42 @@ class PortfolioJournal:
         out = [_audit_from_row(r) for r in rows]
         out.sort(key=lambda e: e.ts)
         return out
+
+    # --------------------------------------------------------------- marks
+
+    def set_mark(
+        self, symbol: str, price: float, *, currency: str, source: str,
+        actor: str = "", as_of: Optional[datetime] = None,
+    ) -> Mark:
+        """Upsert the latest price/NAV for a symbol (valuation input only)."""
+        symbol = symbol.strip().upper()
+        stamp = as_of or datetime.now(timezone.utc)
+        with Session(self._engine) as session:
+            row = session.get(PortfolioMarkRow, symbol)
+            if row is None:
+                row = PortfolioMarkRow(symbol=symbol, price=price, currency=currency,
+                                       as_of=_to_iso(stamp), source=source, actor=actor)
+            else:
+                row.price = price
+                row.currency = currency
+                row.as_of = _to_iso(stamp)
+                row.source = source
+                row.actor = actor
+            session.add(row)
+            session.commit()
+        return Mark(symbol, price, currency, stamp, source, actor)
+
+    def get_marks(self) -> dict[str, Mark]:
+        with Session(self._engine) as session:
+            rows = session.exec(select(PortfolioMarkRow)).all()
+        return {
+            r.symbol: Mark(r.symbol, r.price, r.currency, _from_iso(r.as_of),
+                           r.source, r.actor)
+            for r in rows
+        }
+
+    def get_mark(self, symbol: str) -> Optional[Mark]:
+        return self.get_marks().get(symbol.strip().upper())
 
     # ---------------------------------------------------------- holdings
 
