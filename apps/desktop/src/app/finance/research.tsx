@@ -189,7 +189,9 @@ export function FinanceResearchView({
         </FinanceListGroup>
       </ListColumn>
 
-      <DetailColumn actionBar={bottomBar}>
+      {/* The watch desks own the full-bleed K-chart, so drop the centered
+          max-w column and let the candles fill the pane edge to edge. */}
+      <DetailColumn actionBar={bottomBar} bleed={!marketDesk}>
         {marketDesk ? (
           <div className="space-y-5">
             {isCn && <RegionNote note={copy.regionNote} />}

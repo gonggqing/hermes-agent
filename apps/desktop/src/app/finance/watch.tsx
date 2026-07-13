@@ -4,6 +4,7 @@ import type { Chart, DeepPartial, KLineData, NeighborData, Nullable, Period, Per
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { useIsDark } from '@/components/assistant-ui/embeds/use-is-dark'
+import { PageLoader } from '@/components/page-loader'
 import { StatusDot, type StatusTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -15,7 +16,6 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
-import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import {
   type FinanceAnalyze,
@@ -45,7 +45,7 @@ import {
   type WatchCurrency,
   type WatchUnitKey
 } from './lib'
-import { FinanceCard, FinancePill, FinanceSectionLabel, InlineSpinner } from './primitives'
+import { FinanceCard, FinancePill, FinanceSectionLabel } from './primitives'
 
 // Read-only cross-asset watch modules (Loop.md §3). These read three data-only
 // endpoints — quote / bars / analyze — and carry NO order or approval path.
@@ -112,24 +112,33 @@ export const WATCH_MODULE_SYMBOLS: Record<WatchModuleId, readonly WatchSymbolCon
 
 // On-chart timeframe presets. Each maps to the (timeframe, limit) passed to
 // financeBars plus the klinecharts Period (drives x-axis time granularity:
-// intraday shows HH:MM, longer views show dates). The DATE RANGE auto-adjusts
-// per preset: an intraday session, five days, ~1 year of daily candles, ~5
-// years of weekly candles, ~20 years of monthly candles. Bars are cached per
-// (symbol, timeframe) so flipping back to a previously-viewed preset is instant.
+// intraday shows HH:MM, longer views show dates). Two knobs decouple HISTORY
+// from the DEFAULT VIEW: `limit` fetches a generous window (cached per (symbol,
+// timeframe)); `defaultView` is how many of the MOST-RECENT bars the chart
+// frames on load / on a timeframe switch. The older pre-fetched bars stay in the
+// dataset, so dragging/scrolling LEFT reveals earlier sessions instantly with no
+// network round-trip (Loop.md §3 read-only). Backend /v1/bars caps limit at 500.
 type TimeframeId = 'day' | 'intraday1d' | 'intraday5d' | 'month' | 'week'
 
 interface TimeframePreset {
+  // How many of the most-recent bars to frame by default (the rest pan in).
+  defaultView: number
   limit: number
   period: Period
   timeframe: string
 }
 
 const TIMEFRAME_PRESETS: Record<TimeframeId, TimeframePreset> = {
-  intraday1d: { limit: 78, period: { span: 5, type: 'minute' }, timeframe: '5m' }, // one intraday session
-  intraday5d: { limit: 130, period: { span: 30, type: 'minute' }, timeframe: '30m' }, // ~5 days
-  day: { limit: 250, period: { span: 1, type: 'day' }, timeframe: '1d' }, // ~1 year — DEFAULT
-  week: { limit: 260, period: { span: 1, type: 'week' }, timeframe: '1wk' }, // ~5 years
-  month: { limit: 240, period: { span: 1, type: 'month' }, timeframe: '1mo' } // ~20 years
+  // 1D: ~5 trading days of 5m bars fetched; frame ~1 session, scroll left for the rest.
+  intraday1d: { defaultView: 78, limit: 390, period: { span: 5, type: 'minute' }, timeframe: '5m' },
+  // 5D: ~1 month of 30m bars fetched; frame ~5 days.
+  intraday5d: { defaultView: 66, limit: 260, period: { span: 30, type: 'minute' }, timeframe: '30m' },
+  // D: ~2 years of daily bars fetched; frame ~6 months — DEFAULT preset.
+  day: { defaultView: 126, limit: 500, period: { span: 1, type: 'day' }, timeframe: '1d' },
+  // M: ~5 years of weekly bars fetched; frame ~2 years.
+  week: { defaultView: 104, limit: 260, period: { span: 1, type: 'week' }, timeframe: '1wk' },
+  // Y: ~20 years of monthly bars fetched; frame ~10 years.
+  month: { defaultView: 120, limit: 240, period: { span: 1, type: 'month' }, timeframe: '1mo' }
 }
 
 // Rendered left-to-right order of the switcher (intraday → longer horizon).
@@ -434,7 +443,9 @@ function WatchChartPanel({
 
       <div className="h-[480px] w-full overflow-hidden rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary)">
         {barsPending ? (
-          <ChartSkeleton label={copy.chartLoading} />
+          // Same rose-curve loader the Capabilities/tools tab uses, for one
+          // consistent "loading" language across the app.
+          <PageLoader label={copy.chartLoading} />
         ) : barsFailed || bars.length === 0 ? (
           <div className="flex h-full items-center justify-center px-4 text-center text-xs text-muted-foreground">
             {derived && derivedBroken ? copy.derivedNoData : barsFailed ? copy.noData : copy.chartEmpty}
@@ -444,6 +455,7 @@ function WatchChartPanel({
             aria={copy.chartAria(label)}
             bars={bars}
             currency={currency}
+            defaultView={TIMEFRAME_PRESETS[timeframe].defaultView}
             indicators={indicators}
             key={symbol}
             period={TIMEFRAME_PRESETS[timeframe].period}
@@ -595,17 +607,6 @@ function TimeframeSwitcher({ onChange, value }: { onChange: (id: TimeframeId) =>
   )
 }
 
-// First-load placeholder. Reuses the app's shared Skeleton (animate-pulse) so
-// the initial fetch reads as a calm shimmer that matches Hermes. Cache hits skip
-// this entirely.
-function ChartSkeleton({ label }: { label: string }) {
-  return (
-    <div aria-label={label} className="grid h-full place-items-center p-4" role="status">
-      <Skeleton className="h-full w-full rounded-md" />
-    </div>
-  )
-}
-
 // klinecharts theme + formatting styles for the current light/dark mode. Canvas
 // can't read CSS vars, so we hand a coherent, theme-reactive palette to
 // setStyles: neutral grid/axes, the shared up/down candle palette, and a
@@ -657,6 +658,7 @@ function KlineChart({
   aria,
   bars,
   currency,
+  defaultView,
   indicators,
   period,
   symbol,
@@ -666,6 +668,7 @@ function KlineChart({
   aria: string
   bars: FinanceBar[]
   currency: WatchCurrency | null
+  defaultView: number
   indicators: Record<IndicatorKey, boolean>
   period: Period
   symbol: string
@@ -746,6 +749,34 @@ function KlineChart({
     }
   }, [])
 
+  // Keep the canvas glued to its container: re-fit on any container OR window
+  // resize (pane drag, window resize, sidebar toggle) so the chart always fills
+  // its area. rAF-coalesced so a burst of resize events triggers one relayout.
+  useEffect(() => {
+    const el = containerRef.current
+
+    if (!el) {
+      return
+    }
+
+    let frame = 0
+
+    const schedule = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => chartRef.current?.resize())
+    }
+
+    const observer = new ResizeObserver(schedule)
+    observer.observe(el)
+    window.addEventListener('resize', schedule)
+
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+      window.removeEventListener('resize', schedule)
+    }
+  }, [])
+
   // Symbol precision → drives the y-axis price formatting; ticker feeds the
   // default candle tooltip title.
   useEffect(() => {
@@ -769,6 +800,32 @@ function KlineChart({
     barsRef.current = klineData
     chart.setDataLoader({ getBars: ({ callback }) => callback(barsRef.current, false) })
   }, [klineData])
+
+  // Reset the frame on a TIMEFRAME switch. klinecharts keeps the user's prior
+  // bar spacing (zoom) and scroll when the data loader is swapped, so an earlier
+  // drag/stretch would carry over into the new period. Re-fit to this
+  // timeframe's default window: size each bar so ~defaultView of the most-recent
+  // bars fill the pane (klinecharts clamps bar space to [1, 50]px), then snap to
+  // the latest bar. The generous pre-fetched older bars stay in the dataset —
+  // scrolling LEFT reveals earlier sessions with no reload. Keyed on `period`
+  // (a stable per-timeframe reference), so a theme flip or an in-place bars
+  // refetch never yanks the user's pan/zoom — only a real timeframe change does.
+  useEffect(() => {
+    const chart = chartRef.current
+    const el = containerRef.current
+
+    if (!chart || !el) {
+      return
+    }
+
+    const paneWidth = chart.getSize(CANDLE_PANE_ID, 'main')?.width ?? el.clientWidth
+
+    if (paneWidth > 0 && defaultView > 0) {
+      chart.setBarSpace(Math.min(50, Math.max(1, paneWidth / defaultView)))
+    }
+
+    chart.scrollToRealTime()
+  }, [period, defaultView])
 
   // Theme + currency: re-style and re-apply the currency y-axis. Neither resets
   // the data, so the user's pan/zoom survives a theme toggle.
@@ -840,7 +897,8 @@ function AnalyzePanel({ enabled, symbol }: { enabled: boolean; symbol: string })
   })
 
   if (analyzeQuery.isPending) {
-    return <InlineSpinner label={copy.analyzing} />
+    // Same rose-curve loader as the chart + the Capabilities/tools tab.
+    return <PageLoader className="min-h-24" label={copy.analyzing} />
   }
 
   if (analyzeQuery.isError) {

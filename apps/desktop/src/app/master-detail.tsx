@@ -76,17 +76,21 @@ export function ListColumn({ children, header }: { children: ReactNode; header?:
 // `actionBar` pins a real control row (save/toggle) below the scroll instead.
 export function DetailColumn({
   actionBar,
+  bleed = false,
   children,
   footer
 }: {
   actionBar?: ReactNode
+  /** Let the content span the full pane width (no centered max-w column). Used
+   *  by the full-bleed finance K-chart so the candles fill edge to edge. */
+  bleed?: boolean
   children: ReactNode
   footer?: ReactNode
 }) {
   return (
     <main className="flex min-h-0 flex-col overflow-hidden">
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
-        <div className="mx-auto max-w-2xl space-y-5 px-5 py-4">{children}</div>
+        <div className={cn('space-y-5 px-5 py-4', bleed ? 'w-full' : 'mx-auto max-w-2xl')}>{children}</div>
       </div>
       {footer && (
         <div className="mx-auto w-full max-w-2xl shrink-0 px-5 pb-3 pt-1.5 text-right text-[0.65rem] text-muted-foreground/50">

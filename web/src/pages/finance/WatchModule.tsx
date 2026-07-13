@@ -50,15 +50,53 @@ const CANDLE_PANE_ID = "candle_pane";
  * klinecharts Period. Default = Day. Labels + hints are localized. */
 type TimeframePresetKey = "intraday" | "fiveDay" | "day" | "week" | "month";
 
+/**
+ * Per-timeframe data + view config. `limit` is a GENEROUS history fetch (the
+ * backend /v1/bars caps at 500); `defaultView` is the number of most-recent
+ * bars the chart shows by DEFAULT. The rest of the fetched history stays in the
+ * chart's dataset so panning/scrolling left reveals earlier bars instantly with
+ * no network round-trip (Loop.md §3: READ-ONLY). Switching timeframe resets the
+ * zoom/range to this default view (see `applyDefaultView`).
+ */
 const TIMEFRAME_CONFIG: Record<
   TimeframePresetKey,
-  { timeframe: string; limit: number; period: Period }
+  { timeframe: string; limit: number; defaultView: number; period: Period }
 > = {
-  intraday: { timeframe: "5m", limit: 78, period: { type: "minute", span: 5 } },
-  fiveDay: { timeframe: "30m", limit: 130, period: { type: "minute", span: 30 } },
-  day: { timeframe: "1d", limit: 250, period: { type: "day", span: 1 } }, // DEFAULT
-  week: { timeframe: "1wk", limit: 260, period: { type: "week", span: 1 } },
-  month: { timeframe: "1mo", limit: 240, period: { type: "month", span: 1 } },
+  // fetch ~5 days of 5m bars, default-view ~1 day (~78 bars).
+  intraday: {
+    timeframe: "5m",
+    limit: 390,
+    defaultView: 78,
+    period: { type: "minute", span: 5 },
+  },
+  // fetch ~1 month of 30m bars, default-view ~5 days (~66 bars).
+  fiveDay: {
+    timeframe: "30m",
+    limit: 260,
+    defaultView: 66,
+    period: { type: "minute", span: 30 },
+  },
+  // fetch ~2 years of daily bars, default-view ~6 months (~126 bars). DEFAULT.
+  day: {
+    timeframe: "1d",
+    limit: 500,
+    defaultView: 126,
+    period: { type: "day", span: 1 },
+  },
+  // fetch ~5 years of weekly bars, default-view ~2 years (~104 bars).
+  week: {
+    timeframe: "1wk",
+    limit: 260,
+    defaultView: 104,
+    period: { type: "week", span: 1 },
+  },
+  // fetch ~20 years of monthly bars, default-view ~10 years (~120 bars).
+  month: {
+    timeframe: "1mo",
+    limit: 240,
+    defaultView: 120,
+    period: { type: "month", span: 1 },
+  },
 };
 
 const TIMEFRAME_ORDER: TimeframePresetKey[] = [
@@ -536,7 +574,7 @@ function KLineChart({
   );
   const intraday = isIntradayPreset(preset);
   const klineData = useMemo(() => toKLineData(bars), [bars]);
-  const { period } = TIMEFRAME_CONFIG[preset];
+  const { period, defaultView } = TIMEFRAME_CONFIG[preset];
 
   // Init once. Styles are applied synchronously here (mount vars are already
   // in place) to avoid a flash of klinecharts' defaults, then re-applied by the
@@ -570,8 +608,17 @@ function KLineChart({
   }, [ready, themeName, ft, display, intraday]);
 
   // Feed data: set the symbol (precision), the period, then a data loader that
-  // serves the current window. Runs on every symbol/preset/bars change so
-  // async-derived bars (AU9999) load once the FX quote settles.
+  // serves the ENTIRE pre-fetched history at once (no lazy paging). Runs on
+  // every symbol/preset/bars change so async-derived bars (AU9999) load once
+  // the FX quote settles.
+  //
+  // After the data lands we RESET the zoom/range to this timeframe's default
+  // view: bar spacing is sized so ~defaultView of the most-recent bars fill the
+  // width, then we scroll to the latest bar. This discards any prior
+  // drag/stretch when the timeframe changes (Loop.md §3 UX). The earlier bars
+  // stay in the dataset, so scrolling/panning left reveals previous sessions
+  // instantly without a network round-trip. Deferred to rAF so klinecharts has
+  // applied the fresh init data + laid out the container first.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !ready) return;
@@ -587,7 +634,35 @@ function KLineChart({
         callback(type === "init" ? klineData : [], false);
       },
     });
-  }, [ready, entry.symbol, period, klineData]);
+    const raf = requestAnimationFrame(() => {
+      if (chartRef.current !== chart) return;
+      const width = containerRef.current?.clientWidth ?? 0;
+      if (width > 0 && defaultView > 0 && klineData.length > 0) {
+        // Bar spacing so ~defaultView bars fill the visible width, clamped to
+        // klinecharts' sane px range. Reset every reload → no carried-over zoom.
+        chart.setBarSpace(Math.min(50, Math.max(2, width / defaultView)));
+      }
+      chart.scrollToRealTime(0);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [ready, entry.symbol, period, defaultView, klineData]);
+
+  // Keep the chart filling its container: resize with the pane (ResizeObserver)
+  // and on window resize so it always re-fits when the layout changes.
+  useEffect(() => {
+    const chart = chartRef.current;
+    const el = containerRef.current;
+    if (!chart || !ready || !el) return;
+    const onResize = () => chartRef.current?.resize();
+    const ro =
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(onResize) : null;
+    ro?.observe(el);
+    window.addEventListener("resize", onResize);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", onResize);
+    };
+  }, [ready]);
 
   // Reconcile indicators: add/remove built-ins as the active set changes.
   useEffect(() => {
