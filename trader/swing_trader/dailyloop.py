@@ -264,6 +264,7 @@ class DailyLoop:
         self.news_monitor = NewsMonitor(feed)
         self.account_monitor = AccountRiskMonitor(broker, self.risk_params)
         self.tech = TechnicalAgent()
+        self.fundamentals_provider = fundamentals
         self.fund = FundamentalAgent(fundamentals or StaticFundamentals({}))
         self.senti = SentimentAgent()
         self.debate = DebateAgent()
@@ -305,6 +306,7 @@ class DailyLoop:
             self.runtime.market = self._market.model_dump(mode="json")
         self._ingest_news()
         self._compute_earnings()
+        self._ingest_research()
         self._publish_brief()
 
     def on_decide(self) -> None:
@@ -581,6 +583,42 @@ class DailyLoop:
         except Exception:  # earnings must never break the loop
             logger.exception("earnings calendar refresh failed")
             self._earnings = []
+
+    def _ingest_research(self) -> None:
+        """Archive per-symbol fundamentals + earnings docs into the knowledge
+        store so RAG has citable substance beyond news (Loop.md §5.10, Phase
+        0.75). Fail-closed: dedupe means unchanged docs are not re-indexed."""
+        if self.knowledge is None:
+            return
+        from swing_trader.research_ingest import (
+            build_earnings_doc,
+            build_fundamentals_doc,
+            ingest_research_documents,
+        )
+
+        try:
+            trading_date = self.clock().astimezone(ZoneInfo("America/New_York")).date()
+            docs = []
+            if self.fundamentals_provider is not None:
+                for symbol in self.symbols:
+                    try:
+                        metrics = self.fundamentals_provider.get_metrics(symbol)
+                    except Exception:  # one bad symbol never blocks the rest
+                        metrics = None
+                    if metrics:
+                        doc = build_fundamentals_doc(symbol, metrics, trading_date,
+                                                     self.clock())
+                        if doc is not None:
+                            docs.append(doc)
+            for e in self._earnings:
+                docs.append(build_earnings_doc(e.symbol, e.date, e.days_until,
+                                               trading_date, self.clock()))
+            if docs:
+                ingest_research_documents(
+                    self.knowledge, self.knowledge_index, docs, trading_date
+                )
+        except Exception:
+            logger.exception("research ingestion failed (fail-closed)")
 
     def _ingest_news(self) -> None:
         """Persist today's scored news into the knowledge store (§5.10).
