@@ -243,6 +243,7 @@ class DailyLoop:
         llm_analyst=None,  # Optional[swing_trader.llm.LLMAnalyst] — analysis only (§3)
         knowledge=None,  # Optional[FinanceKnowledge] (Phase 0.5 ingestion)
         knowledge_index=None,  # Optional[KnowledgeIndex] — None = fail-closed
+        earnings_provider=None,  # Optional[EarningsProvider] (Phase 0.75)
     ) -> None:
         self.feed = feed
         self.broker = broker
@@ -269,8 +270,10 @@ class DailyLoop:
         self.llm_analyst = llm_analyst
         self.knowledge = knowledge
         self.knowledge_index = knowledge_index
+        self.earnings_provider = earnings_provider
 
         self._market = None
+        self._earnings: list = []
         self._portfolio = None
         self._news = None
         self._risk_approved: list[CandidateOrder] = []
@@ -301,6 +304,7 @@ class DailyLoop:
         if self.runtime is not None:
             self.runtime.market = self._market.model_dump(mode="json")
         self._ingest_news()
+        self._compute_earnings()
         self._publish_brief()
 
     def on_decide(self) -> None:
@@ -546,10 +550,28 @@ class DailyLoop:
                 news=self._news,
                 llm_enabled=self.llm_analyst is not None,
                 now=self.clock(),
+                earnings=(self._earnings
+                          if self.earnings_provider is not None else None),
             )
             self.runtime.latest_brief = brief.model_dump(mode="json")
         except Exception:  # brief must never break the trading loop
             logger.exception("research brief build failed")
+
+    def _compute_earnings(self) -> None:
+        """Refresh the upcoming-earnings list for the watchlist (fail-closed).
+        Cached in the provider, so repeated calls in a day are cheap."""
+        if self.earnings_provider is None:
+            return
+        from swing_trader.earnings import upcoming_earnings
+
+        try:
+            self._earnings = upcoming_earnings(
+                self.earnings_provider, self.symbols,
+                now=self.clock(), within_days=14,
+            )
+        except Exception:  # earnings must never break the loop
+            logger.exception("earnings calendar refresh failed")
+            self._earnings = []
 
     def _ingest_news(self) -> None:
         """Persist today's scored news into the knowledge store (§5.10).

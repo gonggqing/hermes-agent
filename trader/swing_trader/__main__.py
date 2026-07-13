@@ -77,9 +77,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     feed = YFinanceFeed()
     # Real fundamentals (Loop.md Phase 0.75 thrust A): yfinance-backed, cached,
     # fail-None. Feeds the scheduled FundamentalAgent AND on-demand /v1/analyze.
+    from swing_trader.earnings import YFinanceEarnings
     from swing_trader.fundamentals import YFinanceFundamentals
 
     fundamentals = YFinanceFundamentals()
+    earnings_provider = YFinanceEarnings()  # earnings calendar (Phase 0.75)
     runtime = FinanceRuntime(ledger=ledger, broker=broker, mode=settings.mode)
     # On-demand market analysis for the conversational agent (thrust B):
     runtime.feed = feed
@@ -190,6 +192,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         feed, broker, ledger, mode=settings.mode,
         runtime=runtime, telegram=telegram, notify=notify,
         fundamentals=fundamentals,  # real fundamentals for the scheduled loop
+        earnings_provider=earnings_provider,  # earnings calendar (Phase 0.75)
         llm_analyst=llm_analyst,
         knowledge=knowledge, knowledge_index=knowledge_index,
     )

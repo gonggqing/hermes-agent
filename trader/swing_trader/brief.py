@@ -642,6 +642,7 @@ def build_research_brief(
     trading_tz: Optional[ZoneInfo] = None,
     include_account: bool = True,
     extra_uncertainty: Optional[list[str]] = None,
+    earnings: Optional[list] = None,
 ) -> ResearchBrief:
     """Build the daily Investment Research brief (Loop.md §7 Phase 0.5).
 
@@ -706,7 +707,28 @@ def build_research_brief(
         )
     candidates_view = _candidates_today(candidates, trading_date, tz)
 
-    events = EventsView(earnings=[], notes=[EARNINGS_NOT_WIRED_NOTE])
+    if earnings is not None:
+        earnings_rows = [
+            e.model_dump(mode="json") if hasattr(e, "model_dump") else dict(e)
+            for e in earnings
+        ]
+        notes: list[str] = []
+        if not earnings_rows:
+            notes.append(
+                "no upcoming earnings for the watchlist in the lookahead window"
+            )
+        events = EventsView(earnings=earnings_rows, notes=notes)
+        imminent = [e for e in earnings_rows if e.get("imminent")]
+        if imminent:
+            names = ", ".join(
+                f"{e.get('symbol')} ({e.get('days_until')}d)" for e in imminent
+            )
+            unknowns.append(
+                f"earnings imminent: {names} — avoid opening fresh positions "
+                "into the print"
+            )
+    else:
+        events = EventsView(earnings=[], notes=[EARNINGS_NOT_WIRED_NOTE])
 
     # ---------------------------------------------- auto-collected unknowns
     missing_atr = sorted(
@@ -723,7 +745,8 @@ def build_research_brief(
             "no fundamental signals today — the fundamentals provider may be "
             "empty (Phase 0 default)"
         )
-    unknowns.append(EARNINGS_NOT_WIRED_NOTE)
+    if earnings is None:
+        unknowns.append(EARNINGS_NOT_WIRED_NOTE)
     if llm_enabled:
         unknowns.append(
             "LLM analyst is enabled — its output is analysis-only, "
