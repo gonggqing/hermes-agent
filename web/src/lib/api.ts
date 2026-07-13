@@ -1415,6 +1415,47 @@ export const api = {
     };
   },
 
+  // ── Session catch-up (manual monitor→decide→push + finalize) ─────────
+  // Human-only actions (a human web/desktop surface + a human actor; the
+  // service 403s a system surface or an LLM/system actor, and 503s when the
+  // trading loop is not attached). Both reuse ``financePortfolioWrite`` so a
+  // domain 403/503 comes back as a structured outcome (never throws) that the
+  // queue view renders as a clear notice; network/proxy failures still reject.
+  /**
+   * Manually run the full monitor→decide→push session NOW — a human catch-up
+   * for a missed scheduled session (e.g. the 11:30 ET run). Risk-approved
+   * candidates are pushed into a fresh approval window (``cutoff_et``); this
+   * does NOT place orders — the human then approves/rejects each candidate in
+   * the queue as usual. ``windowMinutes`` (5..240, default 60 on the service)
+   * sizes the new window.
+   */
+  financeSessionRun: ({
+    actor,
+    windowMinutes,
+  }: {
+    actor: string;
+    windowMinutes?: number;
+  }) =>
+    financePortfolioWrite<FinanceSessionRunResult>(
+      "/api/finance/v1/session/run",
+      {
+        actor,
+        ...(windowMinutes !== undefined
+          ? { window_minutes: windowMinutes }
+          : {}),
+      },
+    ),
+  /**
+   * Place the human-APPROVED candidates from the current window and expire the
+   * rest. Same human-surface/human-actor (403) and loop-attached (503) guards
+   * as {@link api.financeSessionRun}.
+   */
+  financeSessionFinalize: ({ actor }: { actor: string }) =>
+    financePortfolioWrite<FinanceSessionFinalizeResult>(
+      "/api/finance/v1/session/finalize",
+      { actor },
+    ),
+
   // ── Portfolio (Phase 0.9): real multi-account holdings ──────────────
   // Separate from the paper-trading account above. READ + DRAFT only: the
   // only writes are creating a draft and the human confirm/edit/reject
@@ -3145,6 +3186,39 @@ export interface FinanceActionOutcome {
   message: string;
   version: number | null;
   candidate: FinanceCandidate | null;
+}
+
+/**
+ * Result of {@link api.financeSessionRun}: a manual monitor→decide→push run
+ * that opens a fresh approval window. ``pushed`` risk-approved candidates now
+ * await confirmation until ``cutoff_et`` (ET, ``"HH:MM"``); ``entries_halted``
+ * means the dead-man's switch blocked NEW entries (stale data / drift) — exits
+ * still flow. This does NOT place orders.
+ */
+export interface FinanceSessionRunResult {
+  ran_at: string;
+  risk_approved: number;
+  pushed: number;
+  cutoff_et: string;
+  entries_halted: boolean;
+  health_level: string | null;
+  actor: string;
+  surface: string;
+}
+
+/**
+ * Result of {@link api.financeSessionFinalize}: places the human-APPROVED
+ * candidates (``orders_added`` newly placed, ``orders_now_active`` total) and
+ * expires the rest (``expired``).
+ */
+export interface FinanceSessionFinalizeResult {
+  ran_at: string;
+  approved: number;
+  expired: number;
+  orders_now_active: number;
+  orders_added: number;
+  actor: string;
+  surface: string;
 }
 
 // ── Research brief types (Loop.md §7 Phase 0.5; trader/swing_trader/brief.py) ─

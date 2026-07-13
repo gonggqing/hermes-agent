@@ -1747,6 +1747,65 @@ export function postFinanceCandidateAction(id: string, payload: FinanceActionPay
   })
 }
 
+// ── Manual session catch-up (Loop.md §5.6) ──────────────────────────────────
+// Human controls to run/finalize a MISSED daily session (e.g. the 11:30 ET
+// window nobody caught). Both are HUMAN-ONLY: the service answers 403 for a
+// system surface or an LLM/system actor, and 503 when the trading loop is not
+// attached. As with postFinanceCandidateAction, the IPC bridge drops the
+// X-Finance-Surface header, so the surface rides in the request body (the
+// service treats body.surface as the fallback).
+
+export interface FinanceSessionRunResult {
+  ran_at: string
+  risk_approved: number
+  pushed: number
+  // Approval-window cutoff as "HH:MM" Eastern.
+  cutoff_et: string
+  // True when the dead-man's switch blocked NEW entries (stale data / drift);
+  // exits still flow.
+  entries_halted: boolean
+  health_level: null | string
+  actor: string
+  surface: string
+}
+
+export interface FinanceSessionFinalizeResult {
+  ran_at: string
+  approved: number
+  expired: number
+  orders_now_active: number
+  orders_added: number
+  actor: string
+  surface: string
+}
+
+// "Run session now": run the full monitor→decide→push pipeline NOW and push
+// risk-approved candidates into a fresh approval window (cutoff_et). Does NOT
+// place orders — the human still approves/rejects each candidate in the queue.
+export function postFinanceSessionRun(payload: {
+  actor: string
+  windowMinutes?: number
+}): Promise<FinanceSessionRunResult> {
+  return window.hermesDesktop.api<FinanceSessionRunResult>({
+    path: '/api/finance/v1/session/run',
+    method: 'POST',
+    body: {
+      surface: 'desktop',
+      actor: payload.actor,
+      ...(payload.windowMinutes !== undefined ? { window_minutes: payload.windowMinutes } : {})
+    }
+  })
+}
+
+// "Finalize": place the human-APPROVED candidates and expire the rest.
+export function postFinanceSessionFinalize(payload: { actor: string }): Promise<FinanceSessionFinalizeResult> {
+  return window.hermesDesktop.api<FinanceSessionFinalizeResult>({
+    path: '/api/finance/v1/session/finalize',
+    method: 'POST',
+    body: { surface: 'desktop', actor: payload.actor }
+  })
+}
+
 // One extra market beyond the default US brief: the China/HK MORNING research
 // brief (?market=cn). Same ResearchBrief shape, but research-only — risk is
 // null and candidates_today.pending is empty (that session never proposes

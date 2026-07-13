@@ -36,7 +36,7 @@ import { Stats } from "@nous-research/ui/ui/components/stats";
 import { Toast } from "@nous-research/ui/ui/components/toast";
 import { useToast } from "@nous-research/ui/hooks/use-toast";
 import { useI18n } from "@/i18n";
-import { ApprovalQueue } from "@/pages/finance/ApprovalQueue";
+import { ApprovalQueue, SessionControls } from "@/pages/finance/ApprovalQueue";
 import { HistorySection } from "@/pages/finance/HistorySection";
 import { PortfolioManager } from "@/pages/finance/PortfolioManager";
 import { ResearchBrief } from "@/pages/finance/ResearchBrief";
@@ -719,21 +719,26 @@ function QueueView({
 
   return (
     <MasterDetail sidebar={sidebar}>
-      {selected !== null ? (
-        <ApprovalQueue
-          pending={[selected]}
-          onActed={onActed}
-          showToast={showToast}
-        />
-      ) : (
-        <Card>
-          <CardContent className="py-8">
-            <p className="font-mondwest normal-case text-sm text-muted-foreground">
-              {pending.length === 0 ? emptyNote : ft.layout.queueSelectHint}
-            </p>
-          </CardContent>
-        </Card>
-      )}
+      <div className="flex flex-col gap-4">
+        {/* Manual catch-up for a missed session — run monitor→decide→push now,
+            then finalize the human-approved candidates (Loop.md §5.6). */}
+        <SessionControls onRan={onActed} showToast={showToast} />
+        {selected !== null ? (
+          <ApprovalQueue
+            pending={[selected]}
+            onActed={onActed}
+            showToast={showToast}
+          />
+        ) : (
+          <Card>
+            <CardContent className="py-8">
+              <p className="font-mondwest normal-case text-sm text-muted-foreground">
+                {pending.length === 0 ? emptyNote : ft.layout.queueSelectHint}
+              </p>
+            </CardContent>
+          </Card>
+        )}
+      </div>
     </MasterDetail>
   );
 }

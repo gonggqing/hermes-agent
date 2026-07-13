@@ -1755,7 +1755,27 @@ export const zh: Translations = {
       positiveNumber: label => `${label}必须为正数。`,
       atLeastOneEdit: '请至少填写一个要修改的值。',
       saving: '保存中…',
-      saveApprove: '保存并批准'
+      saveApprove: '保存并批准',
+      sessionTitle: '手动补跑 Session',
+      sessionHint:
+        '错过了 11:30（美东）的 Session？立即补跑，将风控通过的候选单推入新的审批窗口，然后在下方批准。补跑不会下单。',
+      sessionRun: '手动补跑交易 Session',
+      sessionRunning: '运行中…',
+      sessionFinalize: '结算并下单',
+      sessionRunDone: 'Session 已完成',
+      sessionRunFailed: 'Session 补跑失败',
+      sessionPushedSummary: (pushed, riskApproved, cutoff) =>
+        `已推送 ${pushed}/${riskApproved} 个风控通过候选单 · 审批截止 ${cutoff}（美东）`,
+      sessionEntriesHalted: "新开仓已暂停 — dead-man's switch（数据陈旧/漂移）。平仓单仍正常执行。",
+      sessionFinalizeConfirmTitle: '结算并下单？',
+      sessionFinalizeConfirmBody: '这将为你已批准的每个候选单实际下单，并使其余候选单过期。此操作不可撤销。',
+      sessionFinalizeConfirm: '确认下单',
+      sessionFinalizeDone: '已下单',
+      sessionFinalizeFailed: 'Session 结算失败',
+      sessionFinalizeSummary: (ordersAdded, approved, expired) =>
+        `已下单 ${ordersAdded} 笔 · ${approved} 个已批准 · ${expired} 个已过期`,
+      sessionNotHuman: 'Session 操作仅限人工使用 — 服务已拒绝该操作者或来源。',
+      sessionLoopDetached: '交易循环未连接 — 请启动 swing-trader 循环后重试。'
     },
     account: {
       title: '账户',

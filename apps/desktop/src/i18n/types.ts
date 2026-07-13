@@ -1313,6 +1313,23 @@ export interface Translations {
       atLeastOneEdit: string
       saving: string
       saveApprove: string
+      sessionTitle: string
+      sessionHint: string
+      sessionRun: string
+      sessionRunning: string
+      sessionFinalize: string
+      sessionRunDone: string
+      sessionRunFailed: string
+      sessionPushedSummary: (pushed: number, riskApproved: number, cutoff: string) => string
+      sessionEntriesHalted: string
+      sessionFinalizeConfirmTitle: string
+      sessionFinalizeConfirmBody: string
+      sessionFinalizeConfirm: string
+      sessionFinalizeDone: string
+      sessionFinalizeFailed: string
+      sessionFinalizeSummary: (ordersAdded: number, approved: number, expired: number) => string
+      sessionNotHuman: string
+      sessionLoopDetached: string
     }
     account: {
       title: string

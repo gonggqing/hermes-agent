@@ -739,6 +739,26 @@ export const zh: Translations = {
         unexpected: "{symbol}：{message}",
         unexpectedFallback: "意外响应（HTTP {status}）",
       },
+      session: {
+        title: "手动补跑交易 Session",
+        hint: "针对错过的 Session 的人工补跑 —— 立即执行 监控 → 决策 → 推送，并开启新的审批窗口。此操作不会下单；请先在下方批准候选订单，再结算。",
+        run: "手动补跑 Session",
+        running: "正在补跑 Session…",
+        finalize: "结算并下单",
+        finalizeConfirm: "确认 —— 为已批准候选下单",
+        finalizing: "正在下单…",
+        cancel: "取消",
+        runResult:
+          "已推送 {pushed} 个候选订单 · {approved} 个风控通过 · 审批截止 {cutoff}（美东）",
+        entriesHalted:
+          "新开仓已暂停 —— dead-man's switch（数据过期 / 漂移）。平仓仍照常执行。",
+        healthLevel: "健康等级：{level}",
+        finalizeResult:
+          "已下单 {added} 笔 · {approved} 个已批准 · {expired} 个已过期",
+        errNotHuman: "Session 操作仅限人工 —— 该来源或操作者被拒绝（403）。",
+        errLoopDetached: "交易循环未连接 —— 请先启动每日循环后重试（503）。",
+        errFailed: "Session 请求失败（{error}）",
+      },
     },
     history: {
       title: "候选订单历史",

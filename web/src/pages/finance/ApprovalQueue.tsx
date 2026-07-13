@@ -1,11 +1,22 @@
 import { useRef, useState } from "react";
-import { Check, ListChecks, Pencil, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  CheckCheck,
+  ListChecks,
+  Pencil,
+  Play,
+  X,
+  Zap,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import type {
   FinanceActionOutcome,
   FinanceCandidate,
   FinanceCandidateEdits,
   FinancePendingCandidate,
+  FinanceSessionFinalizeResult,
+  FinanceSessionRunResult,
 } from "@/lib/api";
 import { Badge } from "@nous-research/ui/ui/components/badge";
 import { Button } from "@nous-research/ui/ui/components/button";
@@ -227,6 +238,194 @@ function CandidateCard({
             </span>
           )}
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Manual session catch-up (a human recovery for a missed scheduled session,
+ * e.g. the 11:30 ET run). "Run session now" runs the full monitor→decide→push
+ * pipeline NOW and pushes risk-approved candidates into a fresh approval
+ * window (it does NOT place orders) — the human then approves/rejects each in
+ * the queue below. "Finalize" places the human-APPROVED candidates and expires
+ * the rest; it is guarded by a second-click confirm because it places orders.
+ *
+ * Both are HUMAN-only (a human web surface + a human actor). The service 403s a
+ * system surface / LLM actor and 503s when the trading loop is not attached;
+ * the API returns those as structured outcomes so they render as clear notices
+ * rather than crashing.
+ */
+export function SessionControls({
+  onRan,
+  showToast,
+}: {
+  onRan: () => void;
+  showToast: (message: string, type: "error" | "success") => void;
+}) {
+  const ft = useFinanceT();
+  const s = ft.queue.session;
+  const [running, setRunning] = useState(false);
+  const [finalizing, setFinalizing] = useState(false);
+  const [confirmFinalize, setConfirmFinalize] = useState(false);
+  const [runResult, setRunResult] = useState<FinanceSessionRunResult | null>(
+    null,
+  );
+  const [finalizeResult, setFinalizeResult] =
+    useState<FinanceSessionFinalizeResult | null>(null);
+
+  // Map a structured (never-throws) 403/503 outcome to a localized message.
+  const outcomeError = (status: number, error: string): string => {
+    if (status === 403) return s.errNotHuman;
+    if (status === 503) return s.errLoopDetached;
+    return s.errFailed.replace("{error}", error || String(status));
+  };
+
+  const runSession = async () => {
+    setRunning(true);
+    try {
+      const res = await api.financeSessionRun({ actor: FINANCE_ACTOR });
+      if (res.ok && res.data !== null) {
+        const r = res.data;
+        setRunResult(r);
+        showToast(
+          s.runResult
+            .replace("{pushed}", String(r.pushed))
+            .replace("{approved}", String(r.risk_approved))
+            .replace("{cutoff}", r.cutoff_et),
+          "success",
+        );
+        // Pushed candidates now await confirmation — refetch the queue.
+        onRan();
+      } else {
+        showToast(outcomeError(res.status, res.error), "error");
+      }
+    } catch (err) {
+      showToast(s.errFailed.replace("{error}", String(err)), "error");
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const finalizeSession = async () => {
+    setFinalizing(true);
+    setConfirmFinalize(false);
+    try {
+      const res = await api.financeSessionFinalize({ actor: FINANCE_ACTOR });
+      if (res.ok && res.data !== null) {
+        const r = res.data;
+        setFinalizeResult(r);
+        showToast(
+          s.finalizeResult
+            .replace("{added}", String(r.orders_added))
+            .replace("{approved}", String(r.approved))
+            .replace("{expired}", String(r.expired)),
+          "success",
+        );
+        onRan();
+      } else {
+        showToast(outcomeError(res.status, res.error), "error");
+      }
+    } catch (err) {
+      showToast(s.errFailed.replace("{error}", String(err)), "error");
+    } finally {
+      setFinalizing(false);
+    }
+  };
+
+  const busy = running || finalizing;
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Zap className="h-5 w-5 text-muted-foreground" />
+          <CardTitle className="text-base">{s.title}</CardTitle>
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <p className="font-mondwest normal-case text-sm text-muted-foreground">
+          {s.hint}
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            disabled={busy}
+            onClick={() => void runSession()}
+            prefix={running ? <Spinner /> : <Play />}
+          >
+            {running ? s.running : s.run}
+          </Button>
+          {confirmFinalize ? (
+            <>
+              <Button
+                type="button"
+                size="sm"
+                destructive
+                disabled={busy}
+                onClick={() => void finalizeSession()}
+                prefix={finalizing ? <Spinner /> : <CheckCheck />}
+              >
+                {finalizing ? s.finalizing : s.finalizeConfirm}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                ghost
+                disabled={busy}
+                onClick={() => setConfirmFinalize(false)}
+                prefix={<X />}
+              >
+                {s.cancel}
+              </Button>
+            </>
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              outlined
+              disabled={busy}
+              onClick={() => setConfirmFinalize(true)}
+              prefix={<CheckCheck />}
+            >
+              {s.finalize}
+            </Button>
+          )}
+        </div>
+
+        {runResult !== null && (
+          <div className="flex flex-col gap-2">
+            <p className="font-mondwest normal-case text-sm text-foreground">
+              {s.runResult
+                .replace("{pushed}", String(runResult.pushed))
+                .replace("{approved}", String(runResult.risk_approved))
+                .replace("{cutoff}", runResult.cutoff_et)}
+            </p>
+            {runResult.health_level !== null && (
+              <p className="font-mondwest normal-case text-xs text-text-tertiary">
+                {s.healthLevel.replace("{level}", runResult.health_level)}
+              </p>
+            )}
+            {runResult.entries_halted && (
+              <div className="flex items-center gap-2 border border-warning/50 bg-warning/10 px-3 py-2 text-warning">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                <span className="font-mondwest normal-case text-xs">
+                  {s.entriesHalted}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {finalizeResult !== null && (
+          <p className="font-mondwest normal-case text-sm text-foreground">
+            {s.finalizeResult
+              .replace("{added}", String(finalizeResult.orders_added))
+              .replace("{approved}", String(finalizeResult.approved))
+              .replace("{expired}", String(finalizeResult.expired))}
+          </p>
+        )}
       </CardContent>
     </Card>
   );

@@ -1581,7 +1581,29 @@ export const en: Translations = {
       positiveNumber: label => `${label} must be a positive number.`,
       atLeastOneEdit: 'Enter at least one value to edit.',
       saving: 'Saving…',
-      saveApprove: 'Save & approve'
+      saveApprove: 'Save & approve',
+      sessionTitle: 'Manual session catch-up',
+      sessionHint:
+        'Missed the 11:30 ET session? Run it now to push risk-approved candidates into a fresh approval window, then approve them below. Running does not place orders.',
+      sessionRun: 'Run session now',
+      sessionRunning: 'Running…',
+      sessionFinalize: 'Finalize & place approved',
+      sessionRunDone: 'Session complete',
+      sessionRunFailed: 'Failed to run session',
+      sessionPushedSummary: (pushed, riskApproved, cutoff) =>
+        `Pushed ${pushed} of ${riskApproved} risk-approved candidate(s) · approval cutoff ${cutoff} ET`,
+      sessionEntriesHalted:
+        "New entries halted — dead-man's switch (stale data / drift). Exits still flow.",
+      sessionFinalizeConfirmTitle: 'Finalize & place approved orders?',
+      sessionFinalizeConfirmBody:
+        'This places live orders for every candidate you already approved and expires the rest. It cannot be undone.',
+      sessionFinalizeConfirm: 'Place orders',
+      sessionFinalizeDone: 'Orders placed',
+      sessionFinalizeFailed: 'Failed to finalize session',
+      sessionFinalizeSummary: (ordersAdded, approved, expired) =>
+        `Placed ${ordersAdded} order(s) · ${approved} approved · ${expired} expired`,
+      sessionNotHuman: 'Session controls are for human use only — the service rejected this actor or surface.',
+      sessionLoopDetached: 'The trading loop is not attached — start the swing-trader loop and try again.'
     },
     account: {
       title: 'Account',

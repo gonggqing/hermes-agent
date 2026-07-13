@@ -166,6 +166,25 @@ export interface FinanceTranslations {
       unexpected: string; // "{symbol}: {message}"
       unexpectedFallback: string; // "unexpected response (HTTP {status})"
     };
+    // Manual session catch-up controls (run monitor→decide→push now, then
+    // finalize/place the human-approved candidates). Human-only actions.
+    session: {
+      title: string;
+      hint: string;
+      run: string;
+      running: string;
+      finalize: string;
+      finalizeConfirm: string; // second-click confirm (places orders)
+      finalizing: string;
+      cancel: string;
+      runResult: string; // "Pushed {pushed} candidate(s) · {approved} risk-approved · approval cutoff {cutoff} ET"
+      entriesHalted: string; // dead-man's switch banner
+      healthLevel: string; // "Health level: {level}"
+      finalizeResult: string; // "Placed {added} order(s) · {approved} approved · {expired} expired"
+      errNotHuman: string; // 403 — not a human surface/actor
+      errLoopDetached: string; // 503 — trading loop not attached
+      errFailed: string; // "Session request failed ({error})"
+    };
   };
   history: {
     title: string;

@@ -150,6 +150,28 @@ export const financeEn: FinanceTranslations = {
       unexpected: "{symbol}: {message}",
       unexpectedFallback: "unexpected response (HTTP {status})",
     },
+    session: {
+      title: "Manual session catch-up",
+      hint: "Human catch-up for a missed session — runs monitor → decide → push now and opens a fresh approval window. This does not place orders; approve candidates below, then finalize.",
+      run: "Run session now",
+      running: "Running session…",
+      finalize: "Finalize & place approved",
+      finalizeConfirm: "Confirm — place approved orders",
+      finalizing: "Placing orders…",
+      cancel: "Cancel",
+      runResult:
+        "Pushed {pushed} candidate(s) · {approved} risk-approved · approval cutoff {cutoff} ET",
+      entriesHalted:
+        "New entries halted — dead-man's switch (stale data / drift). Exits still flow.",
+      healthLevel: "Health level: {level}",
+      finalizeResult:
+        "Placed {added} order(s) · {approved} approved · {expired} expired",
+      errNotHuman:
+        "Session actions are human-only — this surface or actor was refused (403).",
+      errLoopDetached:
+        "Trading loop is not attached — start the daily loop, then retry (503).",
+      errFailed: "Session request failed ({error})",
+    },
   },
   history: {
     title: "Candidate history",

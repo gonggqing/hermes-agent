@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import {
   Dialog,
   DialogContent,
@@ -19,8 +20,11 @@ import {
   type FinanceCandidate,
   type FinanceCandidateEdits,
   type FinancePendingCandidate,
+  type FinanceSessionRunResult,
   getFinancePendingCandidates,
-  postFinanceCandidateAction
+  postFinanceCandidateAction,
+  postFinanceSessionFinalize,
+  postFinanceSessionRun
 } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { notify, notifyError } from '@/store/notifications'
@@ -43,7 +47,7 @@ import {
   parseFinanceError,
   settleIdempotencyKey
 } from './lib'
-import { FinanceCard, FinancePill, QuerySection } from './primitives'
+import { FinanceCard, FinancePill, FinanceSectionLabel, QuerySection } from './primitives'
 
 // Candidates land at 11:30 ET and expire at 12:30 ET (Loop.md §4) with no push
 // signal to this surface, so poll while the tab is mounted.
@@ -162,6 +166,7 @@ export function FinanceQueueView({ bottomBar, enabled }: { bottomBar: React.Reac
         </ListColumn>
 
         <DetailColumn actionBar={bottomBar}>
+          <SessionControls enabled={enabled} />
           {selected ? (
             <PendingCandidateCard
               busy={actionMutation.isPending}
@@ -191,6 +196,125 @@ export function FinanceQueueView({ bottomBar, enabled }: { bottomBar: React.Reac
         submitting={actionMutation.isPending}
       />
     </>
+  )
+}
+
+// Map the two guarded failure modes (Loop.md §5.6) to a localized line: 403 =
+// not a human actor/surface, 503 = the trading loop is not attached. Anything
+// else falls back to the parsed server message.
+function localizeSessionError(error: unknown, notHuman: string, loopDetached: string): string {
+  const parsed = parseFinanceError(error)
+
+  if (parsed.status === 403) {
+    return notHuman
+  }
+
+  if (parsed.status === 503) {
+    return loopDetached
+  }
+
+  return parsed.message
+}
+
+// Human catch-up for a MISSED daily session (Loop.md §5.6). "Run session now"
+// runs the full monitor→decide→push pipeline and pushes risk-approved
+// candidates into a fresh approval window (it does NOT place orders — the
+// candidates then appear in the queue for approval). "Finalize" places the
+// human-approved candidates and expires the rest, so it is confirm-gated. Both
+// are HUMAN actions (FINANCE_ACTOR / desktop surface): the service 403s a
+// system surface or LLM actor and 503s when the loop is not attached.
+function SessionControls({ enabled }: { enabled: boolean }) {
+  const { t } = useI18n()
+  const copy = t.finance.queue
+  const queryClient = useQueryClient()
+  const [confirmFinalize, setConfirmFinalize] = useState(false)
+  const [runResult, setRunResult] = useState<FinanceSessionRunResult | null>(null)
+
+  const runMutation = useMutation({
+    mutationFn: () => postFinanceSessionRun({ actor: FINANCE_ACTOR }),
+    onError: error => {
+      notifyError(
+        new Error(localizeSessionError(error, copy.sessionNotHuman, copy.sessionLoopDetached)),
+        copy.sessionRunFailed
+      )
+    },
+    onSuccess: result => {
+      setRunResult(result)
+      // The freshly-pushed candidates are now server-authoritative — refetch the
+      // queue so they appear for approval.
+      void queryClient.invalidateQueries({ queryKey: FINANCE_KEY })
+      notify({
+        kind: result.entries_halted ? 'warning' : 'success',
+        message: copy.sessionPushedSummary(result.pushed, result.risk_approved, result.cutoff_et),
+        title: copy.sessionRunDone
+      })
+    }
+  })
+
+  const finalizeMutation = useMutation({
+    mutationFn: () => postFinanceSessionFinalize({ actor: FINANCE_ACTOR }),
+    onSuccess: result => {
+      void queryClient.invalidateQueries({ queryKey: FINANCE_KEY })
+      notify({
+        kind: 'success',
+        message: copy.sessionFinalizeSummary(result.orders_added, result.approved, result.expired),
+        title: copy.sessionFinalizeDone
+      })
+    }
+  })
+
+  return (
+    <FinanceCard className="space-y-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0 space-y-0.5">
+          <FinanceSectionLabel>{copy.sessionTitle}</FinanceSectionLabel>
+          <p className="text-[0.62rem] leading-4 text-muted-foreground/80">{copy.sessionHint}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button
+            disabled={!enabled || runMutation.isPending}
+            onClick={() => runMutation.mutate()}
+            size="xs"
+          >
+            {runMutation.isPending ? copy.sessionRunning : copy.sessionRun}
+          </Button>
+          <Button
+            disabled={!enabled || finalizeMutation.isPending}
+            onClick={() => setConfirmFinalize(true)}
+            size="xs"
+            variant="outline"
+          >
+            {copy.sessionFinalize}
+          </Button>
+        </div>
+      </div>
+
+      {runResult ? (
+        <div className="text-[0.62rem] tabular-nums text-(--ui-text-secondary)">
+          {copy.sessionPushedSummary(runResult.pushed, runResult.risk_approved, runResult.cutoff_et)}
+        </div>
+      ) : null}
+
+      {runResult?.entries_halted ? <ErrorBanner>{copy.sessionEntriesHalted}</ErrorBanner> : null}
+
+      <ConfirmDialog
+        confirmLabel={copy.sessionFinalizeConfirm}
+        description={copy.sessionFinalizeConfirmBody}
+        destructive
+        onClose={() => setConfirmFinalize(false)}
+        onConfirm={async () => {
+          try {
+            await finalizeMutation.mutateAsync()
+          } catch (error) {
+            // Surface the guarded failure inline in the dialog (localized), not
+            // the raw "<status>: <body>" string.
+            throw new Error(localizeSessionError(error, copy.sessionNotHuman, copy.sessionLoopDetached))
+          }
+        }}
+        open={confirmFinalize}
+        title={copy.sessionFinalizeConfirmTitle}
+      />
+    </FinanceCard>
   )
 }
 
