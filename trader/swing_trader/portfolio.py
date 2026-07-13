@@ -34,8 +34,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 __all__ = [
     "AccountHoldings",
     "AccountType",
+    "AggregateHolding",
+    "AggregatePortfolio",
     "CashBalance",
     "DraftStatus",
+    "aggregate_holdings",
     "EventSource",
     "EventType",
     "Holding",
@@ -362,6 +365,82 @@ class AccountHoldings:
     cash: list[CashBalance] = field(default_factory=list)
     as_of: Optional[datetime] = None  # latest applied event's occurred_at
     n_events: int = 0
+
+
+@dataclass
+class AggregateHolding:
+    symbol: str
+    market: Optional[MarketScope]
+    currency: str
+    qty: float
+    avg_cost: Optional[float]  # None if ANY contributing account's cost unknown
+    cost_basis_known: bool
+    accounts: list[str] = field(default_factory=list)  # source account ids
+
+
+@dataclass
+class AggregatePortfolio:
+    """Combined, source-tagged view across accounts (Loop.md P0.9 risk/research
+    projection). Sums DISTINCT accounts — reconciliation, not aggregation, is
+    what prevents a manual+broker double-count of the SAME account."""
+
+    holdings: list[AggregateHolding] = field(default_factory=list)
+    cash: list[CashBalance] = field(default_factory=list)
+    accounts: list[str] = field(default_factory=list)
+    as_of: Optional[datetime] = None
+
+
+def aggregate_holdings(
+    items: list[tuple["PortfolioAccount", AccountHoldings]],
+) -> AggregatePortfolio:
+    """Combine per-account holdings into one source-tagged portfolio. A symbol
+    held in several accounts sums; cost basis stays known only if EVERY
+    contributing account's cost is known (else None — never guessed)."""
+    by_sym: dict[str, dict] = {}
+    cash: dict[str, list] = {}
+    account_ids: list[str] = []
+    as_of: Optional[datetime] = None
+
+    for account, h in items:
+        account_ids.append(account.id)
+        if h.as_of is not None and (as_of is None or h.as_of > as_of):
+            as_of = h.as_of
+        for pos in h.holdings:
+            agg = by_sym.setdefault(pos.symbol, {
+                "market": pos.market, "currency": pos.currency,
+                "qty": 0.0, "cost": 0.0, "known": True, "accounts": [],
+            })
+            agg["qty"] += pos.qty
+            if pos.cost_basis_known and pos.avg_cost is not None:
+                agg["cost"] += pos.avg_cost * pos.qty
+            else:
+                agg["known"] = False
+            agg["accounts"].append(account.id)
+            if agg["market"] is None:
+                agg["market"] = pos.market
+        for cb in h.cash:
+            cur = cash.setdefault(cb.currency, [0.0, True])
+            if cb.known and cb.amount is not None:
+                cur[0] += cb.amount
+            else:
+                cur[1] = False
+
+    holdings = []
+    for sym, a in sorted(by_sym.items()):
+        if abs(a["qty"]) <= _QTY_TOL:
+            continue
+        known = a["known"] and a["qty"] > _QTY_TOL
+        holdings.append(AggregateHolding(
+            symbol=sym, market=a["market"], currency=a["currency"], qty=a["qty"],
+            avg_cost=(a["cost"] / a["qty"]) if known else None,
+            cost_basis_known=known, accounts=a["accounts"]))
+    cash_balances = [
+        CashBalance(currency=c, amount=(amt if known else None), known=known)
+        for c, (amt, known) in sorted(cash.items())
+        if not known or abs(amt) > _QTY_TOL
+    ]
+    return AggregatePortfolio(holdings=holdings, cash=cash_balances,
+                              accounts=account_ids, as_of=as_of)
 
 
 @dataclass

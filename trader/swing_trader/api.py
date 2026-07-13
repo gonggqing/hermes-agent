@@ -168,6 +168,11 @@ class PortfolioDraftAction(BaseModel):
     surface: Optional[str] = None
 
 
+class PortfolioImportRequest(BaseModel):
+    csv: str = Field(min_length=1, max_length=2_000_000)
+    actor: Optional[str] = Field(default=None, max_length=200)
+
+
 def create_app(runtime: FinanceRuntime):
     """Build the FastAPI app (fastapi imported lazily — `service` extra)."""
     from fastapi import FastAPI, Header, HTTPException, Query
@@ -719,5 +724,92 @@ def create_app(runtime: FinanceRuntime):
             "event": result.event.model_dump(mode="json") if result.event else None,
         }
         return JSONResponse(payload, status_code=_DRAFT_HTTP[result.code])
+
+    @app.get(f"/{API_VERSION}/portfolio/aggregate")
+    def portfolio_aggregate(include_in_risk_only: bool = Query(default=False)) -> dict:
+        pf = _need_portfolio()
+        agg = pf.aggregate(include_in_risk_only=include_in_risk_only)
+        return {
+            "accounts": agg.accounts,
+            "as_of": agg.as_of.isoformat() if agg.as_of else None,
+            "holdings": [
+                {"symbol": h.symbol,
+                 "market": h.market.value if h.market else None,
+                 "currency": h.currency, "qty": h.qty, "avg_cost": h.avg_cost,
+                 "cost_basis_known": h.cost_basis_known, "accounts": h.accounts}
+                for h in agg.holdings
+            ],
+            "cash": [
+                {"currency": c.currency, "amount": c.amount, "known": c.known}
+                for c in agg.cash
+            ],
+        }
+
+    @app.get(f"/{API_VERSION}/portfolio/accounts/{{account_id}}/reconcile")
+    def portfolio_reconcile(account_id: str) -> dict:
+        from swing_trader.portfolio_reconcile import reconcile_portfolio_account
+
+        pf = _need_portfolio()
+        account = pf.get_account(account_id)
+        if account is None:
+            raise HTTPException(404, f"unknown account {account_id!r}")
+        # Phase 0.9: no IBKR snapshot per portfolio account yet → the account's
+        # own record is authoritative (manual/imported); wired once IBKR lands.
+        res = reconcile_portfolio_account(account, pf.holdings(account_id),
+                                          broker_positions=None, now=runtime.clock())
+        return {
+            "account_id": res.account_id, "ok": res.ok, "authority": res.authority,
+            "summary": res.summary(), "note": res.note,
+            "as_of": res.as_of.isoformat() if res.as_of else None,
+            "drifts": [
+                {"symbol": d.symbol, "portfolio_qty": d.portfolio_qty,
+                 "broker_qty": d.broker_qty}
+                for d in res.drifts
+            ],
+        }
+
+    @app.post(f"/{API_VERSION}/portfolio/accounts/{{account_id}}/import/preview")
+    def portfolio_import_preview(account_id: str, body: PortfolioImportRequest) -> dict:
+        from swing_trader.portfolio_csv import parse_csv
+
+        pf = _need_portfolio()
+        if pf.get_account(account_id) is None:
+            raise HTTPException(404, f"unknown account {account_id!r}")
+        pv = parse_csv(body.csv, account_id, pf)
+        return {
+            "header_error": pv.header_error,
+            "n_valid": pv.n_valid, "n_invalid": pv.n_invalid,
+            "n_duplicate": pv.n_duplicate, "committable": pv.committable,
+            "rows": [
+                {"line": r.line, "duplicate": r.duplicate, "errors": r.errors,
+                 "ok": r.ok,
+                 "event_type": r.fields.get("event_type").value if r.fields.get("event_type") else None,
+                 "symbol": r.fields.get("symbol"),
+                 "qty": r.fields.get("qty"), "price": r.fields.get("price"),
+                 "amount": r.fields.get("amount")}
+                for r in pv.rows
+            ],
+        }
+
+    @app.post(f"/{API_VERSION}/portfolio/accounts/{{account_id}}/import/commit")
+    def portfolio_import_commit(
+        account_id: str, body: PortfolioImportRequest,
+        x_finance_surface: Optional[str] = Header(default=None),
+    ) -> dict:
+        from swing_trader.portfolio_csv import commit_csv
+
+        _need_portfolio()
+        surface = _resolve_surface(x_finance_surface, None)
+        if not body.actor:
+            raise HTTPException(422, "actor is required to commit an import")
+        try:
+            res = commit_csv(runtime.portfolio, account_id, body.csv,
+                             actor=body.actor, surface=surface)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        return {
+            "n_committed": res.n_committed, "n_duplicate": res.n_duplicate,
+            "n_skipped": res.n_skipped, "event_ids": res.event_ids,
+        }
 
     return app

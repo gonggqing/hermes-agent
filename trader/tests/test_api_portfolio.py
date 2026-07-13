@@ -143,9 +143,52 @@ class TestDraftsAndHoldings:
         assert any("completed trade" in x for x in body["ambiguities"])
 
 
+class TestAggregateReconcileImport:
+    def _seed(self, client, qty=10):
+        a = _make_account(client)
+        d = _draft_buy(client, a["id"], qty=qty)
+        client.post(f"/v1/portfolio/drafts/{d['id']}/action",
+                    json=dict(action="confirm", actor="gongqing", idempotency_key="s"),
+                    headers={"X-Finance-Surface": "web"})
+        return a
+
+    def test_aggregate(self, client):
+        self._seed(client)
+        agg = client.get("/v1/portfolio/aggregate").json()
+        assert agg["holdings"][0]["symbol"] == "NVDA" and agg["holdings"][0]["qty"] == 10.0
+
+    def test_reconcile_manual_authoritative(self, client):
+        a = self._seed(client)
+        r = client.get(f"/v1/portfolio/accounts/{a['id']}/reconcile").json()
+        assert r["ok"] is True and r["authority"] == "manual"
+
+    def test_import_preview_then_commit(self, client):
+        a = _make_account(client)
+        csv = ("date,event_type,symbol,market,currency,qty,price\n"
+               "2026-07-01,buy,NVDA,US,USD,10,100\n"
+               "2026-07-02,buy,AMD,US,USD,5,50\n")
+        pv = client.post(f"/v1/portfolio/accounts/{a['id']}/import/preview",
+                         json={"csv": csv}).json()
+        assert pv["n_valid"] == 2 and pv["committable"] is True
+        c = client.post(f"/v1/portfolio/accounts/{a['id']}/import/commit",
+                        json={"csv": csv, "actor": "gongqing"},
+                        headers={"X-Finance-Surface": "web"}).json()
+        assert c["n_committed"] == 2
+        syms = {h["symbol"] for h in
+                client.get(f"/v1/portfolio/accounts/{a['id']}/holdings").json()["holdings"]}
+        assert syms == {"NVDA", "AMD"}
+
+    def test_import_commit_requires_actor(self, client):
+        a = _make_account(client)
+        r = client.post(f"/v1/portfolio/accounts/{a['id']}/import/commit",
+                        json={"csv": "date,event_type\n2026-07-01,fee\n"})
+        assert r.status_code == 422
+
+
 class TestUnavailable:
     def test_503_without_portfolio(self, tmp_path):
         client = TestClient(create_app(FinanceRuntime(ledger=Ledger(
             url=f"sqlite:///{tmp_path/'x.db'}"))))
         assert client.get("/v1/portfolio/accounts").status_code == 503
         assert client.get("/v1/portfolio/drafts").status_code == 503
+        assert client.get("/v1/portfolio/aggregate").status_code == 503

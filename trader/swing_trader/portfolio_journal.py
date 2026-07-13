@@ -35,6 +35,7 @@ from swing_trader.portfolio import (
     PortfolioDraft,
     PortfolioEvent,
     ProviderKind,
+    aggregate_holdings,
     derive_holdings,
 )
 
@@ -581,3 +582,11 @@ class PortfolioJournal:
     def holdings(self, account_id: str) -> AccountHoldings:
         """Derive current holdings + cash for one account from its events."""
         return derive_holdings(account_id, self.get_events(account_id))
+
+    def aggregate(self, *, include_in_risk_only: bool = False):
+        """Combined, source-tagged holdings across accounts (Loop.md P0.9)."""
+        accounts = self.list_accounts()
+        if include_in_risk_only:
+            accounts = [a for a in accounts if a.include_in_risk]
+        items = [(a, self.holdings(a.id)) for a in accounts]
+        return aggregate_holdings(items)
