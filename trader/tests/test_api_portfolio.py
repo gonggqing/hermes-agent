@@ -129,6 +129,30 @@ class TestDraftsAndHoldings:
                         json=dict(action="confirm", actor="g", idempotency_key="k"))
         assert r.status_code == 404
 
+    def test_correct_draft_undoes_event(self, client):
+        a = _make_account(client)
+        d = _draft_buy(client, a["id"], qty=10)
+        conf = client.post(f"/v1/portfolio/drafts/{d['id']}/action",
+                           json=dict(action="confirm", actor="gongqing", idempotency_key="s"),
+                           headers={"X-Finance-Surface": "web"}).json()
+        eid = conf["event"]["id"]
+        # draft the undo (append-only "delete")
+        corr = client.post(f"/v1/portfolio/accounts/{a['id']}/correct-draft",
+                           params={"event_id": eid}).json()
+        assert corr["event_type"] == "correction" and corr["reverses_event_id"] == eid
+        client.post(f"/v1/portfolio/drafts/{corr['id']}/action",
+                    json=dict(action="confirm", actor="gongqing", idempotency_key="undo"),
+                    headers={"X-Finance-Surface": "web"})
+        h = client.get(f"/v1/portfolio/accounts/{a['id']}/holdings").json()
+        assert h["holdings"] == []  # undone; history preserved (2 events)
+        assert len(client.get(f"/v1/portfolio/accounts/{a['id']}/events").json()) == 2
+
+    def test_correct_unknown_event_404(self, client):
+        a = _make_account(client)
+        r = client.post(f"/v1/portfolio/accounts/{a['id']}/correct-draft",
+                        params={"event_id": "ghost"})
+        assert r.status_code == 404
+
     def test_close_draft_derives_qty(self, client):
         a = _make_account(client)
         d = _draft_buy(client, a["id"], qty=10)

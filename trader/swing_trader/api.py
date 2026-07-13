@@ -152,6 +152,7 @@ class PortfolioDraftCreate(BaseModel):
     occurred_at: Optional[datetime] = None
     source: str = "manual"
     external_id: Optional[str] = None
+    reverses_event_id: Optional[str] = None
     note: str = ""
     original_text: str = ""
     ambiguities: Optional[list[str]] = None
@@ -677,8 +678,9 @@ def create_app(runtime: FinanceRuntime):
                 symbol=body.symbol, market=body.market, currency=body.currency,
                 qty=body.qty, price=body.price, commission=body.commission,
                 amount=body.amount, occurred_at=body.occurred_at, source=body.source,
-                external_id=body.external_id, note=body.note,
-                original_text=body.original_text, ambiguities=body.ambiguities,
+                external_id=body.external_id, reverses_event_id=body.reverses_event_id,
+                note=body.note, original_text=body.original_text,
+                ambiguities=body.ambiguities,
                 created_by=body.created_by, created_surface=surface)
         except Exception as exc:  # noqa: BLE001 — surface bad draft input as 422
             raise HTTPException(422, f"invalid draft: {str(exc)[:200]}")
@@ -695,6 +697,23 @@ def create_app(runtime: FinanceRuntime):
             raise HTTPException(404, f"unknown account {account_id!r}")
         draft = svc.propose_close(account_id=account_id, symbol=symbol,
                                   created_surface=surface)
+        return JSONResponse(draft.model_dump(mode="json"), status_code=201)
+
+    @app.post(f"/{API_VERSION}/portfolio/accounts/{{account_id}}/correct-draft")
+    def portfolio_correct_draft(
+        account_id: str, event_id: str = Query(min_length=1),
+        x_finance_surface: Optional[str] = Header(default=None),
+    ):
+        """Draft the UNDO of a prior event (append-only 'delete' via a
+        compensating CORRECTION). Still requires human confirmation."""
+        svc = _need_drafts()
+        surface = _resolve_surface(x_finance_surface, None, default="system")
+        if _need_portfolio().get_account(account_id) is None:
+            raise HTTPException(404, f"unknown account {account_id!r}")
+        draft = svc.propose_correction(account_id=account_id, event_id=event_id,
+                                       created_surface=surface)
+        if draft is None:
+            raise HTTPException(404, f"unknown event {event_id!r} in this account")
         return JSONResponse(draft.model_dump(mode="json"), status_code=201)
 
     @app.post(f"/{API_VERSION}/portfolio/drafts/{{draft_id}}/action")

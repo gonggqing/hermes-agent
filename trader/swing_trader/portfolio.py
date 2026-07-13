@@ -273,6 +273,7 @@ class PortfolioDraft(BaseModel):
     settlement_date: Optional[date] = None
     source: EventSource = EventSource.MANUAL
     external_id: Optional[str] = None
+    reverses_event_id: Optional[str] = None  # set for a CORRECTION (undo) draft
     note: str = ""
     # -- draft workflow bookkeeping --
     status: DraftStatus = DraftStatus.DRAFT
@@ -332,6 +333,8 @@ def draft_missing_fields(draft: PortfolioDraft) -> list[str]:
             missing.append("quantity")
         if not draft.symbol and draft.amount is None:
             missing.append("quantity or amount")
+    if et is EventType.CORRECTION and not draft.reverses_event_id:
+        missing.append("reversed event")
     return missing
 
 

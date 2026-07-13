@@ -255,6 +255,36 @@ class TestProposeClose:
         assert d.qty is None
 
 
+class TestCorrection:
+    def test_correct_draft_undoes_event_on_confirm(self, setup):
+        """Append-only 'delete': a confirmed CORRECTION nullifies a prior buy."""
+        journal, account, svc, _, _ = setup
+        d0 = _complete_buy(svc, account.id, qty=10)
+        r0 = svc.confirm_draft(d0.id, actor="gongqing", surface="web", idempotency_key="s")
+        assert journal.holdings(account.id).holdings[0].qty == 10.0
+        # propose + confirm the correction (the "delete")
+        corr = svc.propose_correction(account_id=account.id, event_id=r0.event.id)
+        assert corr.event_type is EventType.CORRECTION
+        assert corr.reverses_event_id == r0.event.id
+        assert corr.needs_clarification is False
+        rc = svc.confirm_draft(corr.id, actor="gongqing", surface="web",
+                               idempotency_key="undo")
+        assert rc.ok
+        assert journal.holdings(account.id).holdings == []  # position undone
+        # history is preserved (both events remain, append-only)
+        assert len(journal.get_events(account.id)) == 2
+
+    def test_correct_unknown_event_returns_none(self, setup):
+        _, account, svc, _, _ = setup
+        assert svc.propose_correction(account_id=account.id, event_id="ghost") is None
+
+    def test_correction_draft_without_target_is_incomplete(self, setup):
+        journal, account, svc, _, _ = setup
+        d = svc.create_draft(account_id=account.id, event_type=EventType.CORRECTION,
+                             currency="USD", occurred_at=NOW, created_surface="web")
+        assert "reversed event" in d.missing
+
+
 # ------------------------------------------------------------------- expiry
 
 

@@ -140,6 +140,7 @@ class PortfolioDraftRow(SQLModel, table=True):
     settlement_date: Optional[str] = None
     source: str
     external_id: Optional[str] = None
+    reverses_event_id: Optional[str] = None
     note: str = ""
     status: str = Field(index=True)
     version: int = 1
@@ -288,6 +289,7 @@ def _draft_to_row(d: PortfolioDraft) -> PortfolioDraftRow:
         settlement_date=_to_date(d.settlement_date),
         source=d.source.value,
         external_id=d.external_id,
+        reverses_event_id=d.reverses_event_id,
         note=d.note,
         status=d.status.value,
         version=d.version,
@@ -319,6 +321,7 @@ def _draft_from_row(r: PortfolioDraftRow) -> PortfolioDraft:
         settlement_date=_from_date(r.settlement_date),
         source=EventSource(r.source),
         external_id=r.external_id,
+        reverses_event_id=r.reverses_event_id,
         note=r.note,
         status=DraftStatus(r.status),
         version=r.version,

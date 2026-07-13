@@ -97,6 +97,7 @@ class PortfolioDraftService:
         occurred_at: Optional[datetime] = None,
         source: EventSource | str = EventSource.MANUAL,
         external_id: Optional[str] = None,
+        reverses_event_id: Optional[str] = None,
         note: str = "",
         original_text: str = "",
         ambiguities: Optional[list[str]] = None,
@@ -119,6 +120,7 @@ class PortfolioDraftService:
             occurred_at=occurred_at,
             source=EventSource(source),
             external_id=external_id,
+            reverses_event_id=reverses_event_id,
             note=note,
             original_text=original_text,
             ambiguities=list(ambiguities or []),
@@ -167,6 +169,30 @@ class PortfolioDraftService:
             market=market, currency=currency, qty=qty,
             occurred_at=occurred_at or self._clock(),
             original_text=original_text, ambiguities=ambiguities,
+            created_by=created_by, created_surface=created_surface,
+        )
+
+    def propose_correction(
+        self,
+        *,
+        account_id: str,
+        event_id: str,
+        original_text: str = "",
+        created_by: str = "hermes",
+        created_surface: str = "system",
+    ) -> Optional[PortfolioDraft]:
+        """Draft the UNDO of a prior event (append-only "delete", Loop.md P0.9
+        boundary #2). Copies the reversed event's symbol/market/currency and a
+        CORRECTION that nullifies it on confirm. Returns None if the event is
+        unknown or not in this account. Still requires human confirmation."""
+        target = self._journal.get_event(event_id)
+        if target is None or target.account_id != account_id:
+            return None
+        return self.create_draft(
+            account_id=account_id, event_type=EventType.CORRECTION,
+            symbol=target.symbol, market=target.market, currency=target.currency,
+            reverses_event_id=event_id, occurred_at=self._clock(),
+            note=f"reverses event {event_id}", original_text=original_text,
             created_by=created_by, created_surface=created_surface,
         )
 
@@ -289,6 +315,7 @@ class PortfolioDraftService:
             settlement_date=draft.settlement_date,
             source=draft.source,
             external_id=draft.external_id,
+            reverses_event_id=draft.reverses_event_id,
             idempotency_key=idempotency_key,
             actor=actor,
             surface=surface,
