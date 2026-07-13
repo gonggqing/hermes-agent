@@ -113,6 +113,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         StaticInstrumentProvider(),
         PortfolioInstrumentProvider(runtime.portfolio),
     ]))
+    # 场外基金 NAV (Loop.md P0.9 #41): real net-asset-value for open-end funds so
+    # they can be valued (market value + P&L) instead of showing 未知.
+    from swing_trader.fund_nav import CachedNavProvider, EastmoneyFundNav
+
+    runtime.nav_provider = CachedNavProvider(EastmoneyFundNav())
 
     telegram = None
     notify = None

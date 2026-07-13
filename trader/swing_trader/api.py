@@ -83,6 +83,7 @@ class FinanceRuntime:
     # Phase 0.9 (missed-session catch-up): manual trading-session trigger.
     run_session: Any = None  # Callable[[], dict] — loop.run_session_now
     finalize_session: Any = None  # Callable[[], dict] — loop.finalize_session_now
+    nav_provider: Any = None  # swing_trader.fund_nav.NavProvider — 场外基金 NAV
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
 
 
@@ -923,18 +924,30 @@ def create_app(runtime: FinanceRuntime):
         for sym in sorted(symbols):
             base = sym.split(".")[0]
             quotable = sym.endswith((".SS", ".SZ", ".HK")) or base.isalpha()
-            if not quotable:
-                skipped.append(sym)  # 场外基金 fund code — no live feed
+            if quotable:
+                ccy = ("CNY" if sym.endswith((".SS", ".SZ"))
+                       else "HKD" if sym.endswith(".HK") else "USD")
+                try:
+                    q = runtime.feed.get_quote(sym)
+                    pf.set_mark(sym, q.last, currency=ccy, source="live",
+                                actor="system", as_of=runtime.clock())
+                    refreshed.append(sym)
+                except Exception:  # noqa: BLE001 — one bad symbol must not fail the batch
+                    failed.append(sym)
                 continue
-            ccy = ("CNY" if sym.endswith((".SS", ".SZ"))
-                   else "HKD" if sym.endswith(".HK") else "USD")
-            try:
-                q = runtime.feed.get_quote(sym)
-                pf.set_mark(sym, q.last, currency=ccy, source="live",
-                            actor="system", as_of=runtime.clock())
+            # 场外基金 (bare fund code): use the NAV provider when configured.
+            nav = None
+            if runtime.nav_provider is not None:
+                try:
+                    nav = runtime.nav_provider.get_nav(sym)
+                except Exception:  # noqa: BLE001
+                    nav = None
+            if nav is not None:
+                pf.set_mark(sym, nav.price, currency="CNY", source="live",
+                            actor="system", as_of=nav.as_of)
                 refreshed.append(sym)
-            except Exception:  # noqa: BLE001 — one bad symbol must not fail the batch
-                failed.append(sym)
+            else:
+                skipped.append(sym)  # no NAV source / lookup failed
         return {"refreshed": refreshed, "failed": failed, "skipped": skipped}
 
     # ---- manual trading-session trigger (missed-session catch-up, P0.9) ----
