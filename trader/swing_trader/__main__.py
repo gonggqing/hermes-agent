@@ -92,9 +92,6 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     runtime.fundamentals = fundamentals
     # Phase 0.9 (portfolio): instrument type-ahead behind a cached, offline
     # provider (a live adapter can slot behind the same port later).
-    from swing_trader.instruments import CachedInstrumentSearch, StaticInstrumentProvider
-
-    runtime.instrument_search = CachedInstrumentSearch(StaticInstrumentProvider())
     # Append-only Portfolio Journal + human-confirmation draft service, sharing
     # the ledger's DB file but none of its tables (Loop.md P0.9 boundary #1).
     from swing_trader.portfolio_draft import PortfolioDraftService
@@ -102,6 +99,20 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
     runtime.portfolio = PortfolioJournal(url=db_url)
     runtime.portfolio_drafts = PortfolioDraftService(runtime.portfolio, clock=runtime.clock)
+    # Instrument type-ahead: the curated static catalog for discovery PLUS the
+    # user's actually-held instruments (searchable by code or note keyword, so a
+    # held Chinese fund/ETF is always findable — Loop.md P0.9).
+    from swing_trader.instruments import (
+        CachedInstrumentSearch,
+        CompositeInstrumentProvider,
+        PortfolioInstrumentProvider,
+        StaticInstrumentProvider,
+    )
+
+    runtime.instrument_search = CachedInstrumentSearch(CompositeInstrumentProvider([
+        StaticInstrumentProvider(),
+        PortfolioInstrumentProvider(runtime.portfolio),
+    ]))
 
     telegram = None
     notify = None

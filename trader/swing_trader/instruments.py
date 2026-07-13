@@ -33,9 +33,11 @@ logger = get_logger(__name__)
 
 __all__ = [
     "CachedInstrumentSearch",
+    "CompositeInstrumentProvider",
     "InstrumentMatch",
     "InstrumentSearchProvider",
     "InstrumentSearchResult",
+    "PortfolioInstrumentProvider",
     "StaticInstrumentProvider",
     "normalize_symbol",
 ]
@@ -222,6 +224,98 @@ class StaticInstrumentProvider:
 
 
 # ------------------------------------------------------------------ cache
+
+
+def _exchange_for(symbol: str) -> str:
+    s = symbol.upper()
+    if s.endswith(".SS"):
+        return "SSE"
+    if s.endswith(".SZ"):
+        return "SZSE"
+    if s.endswith(".HK"):
+        return "SEHK"
+    return "OTC"  # 场外基金 / off-exchange fund, or unknown
+
+
+class PortfolioInstrumentProvider:
+    """Make every instrument the user ALREADY HOLDS searchable (Loop.md P0.9).
+
+    Reads the DISTINCT instruments out of the Portfolio Journal's events so a
+    held symbol is always findable — by its code OR by any keyword in its note
+    (name / theme / 中文名) — even when it isn't in the static catalog (e.g.
+    Chinese 场外基金 / A-share ETFs). No network; reflects the live journal.
+    """
+
+    def __init__(self, journal) -> None:
+        self._journal = journal
+
+    @staticmethod
+    def _display_name(note: str, symbol: str) -> str:
+        # the import stores "name|tier·theme·..."; take the name before the "|"
+        head = (note or "").split("|", 1)[0].strip()
+        return head or symbol
+
+    @staticmethod
+    def _sec_type(symbol: str) -> SecurityType:
+        # user's on-exchange holdings are ETFs; bare fund codes are funds
+        return (SecurityType.ETF if symbol.upper().endswith((".SS", ".SZ", ".HK"))
+                else SecurityType.FUND)
+
+    def search(
+        self, query: str, *, market: Optional[MarketScope] = None, limit: int = 10
+    ) -> list[InstrumentMatch]:
+        q = query.strip()
+        if not q or self._journal is None:
+            return []
+        qu, ql = q.upper(), q.lower()
+        matches: dict[str, InstrumentMatch] = {}
+        try:
+            events = self._journal.get_events()  # all accounts
+        except Exception as exc:  # noqa: BLE001 — search must never crash
+            logger.warning("portfolio instrument search failed",
+                           extra={"error": str(exc)[:160]})
+            return []
+        for e in events:
+            sym = e.symbol
+            if not sym or sym in matches:
+                continue
+            if market is not None and e.market is not None and e.market is not market:
+                continue
+            code = sym.split(".")[0].upper()
+            hay = f"{sym} {e.note or ''}".lower()
+            if sym.upper().startswith(qu) or code.startswith(qu) or ql in hay:
+                matches[sym] = InstrumentMatch(
+                    canonical_symbol=sym,
+                    display_name=self._display_name(e.note, sym),
+                    market=e.market or MarketScope.CN,
+                    exchange=_exchange_for(sym),
+                    currency=e.currency,
+                    security_type=self._sec_type(sym),
+                )
+        return list(matches.values())[: max(1, limit)]
+
+
+class CompositeInstrumentProvider:
+    """Query several providers in order, dedup by canonical symbol (Loop.md
+    P0.9). Static catalog first (curated names), then the user's held
+    instruments — so both discovery and 'find what I own' work."""
+
+    def __init__(self, providers: list) -> None:
+        self._providers = list(providers)
+
+    def search(
+        self, query: str, *, market: Optional[MarketScope] = None, limit: int = 10
+    ) -> list[InstrumentMatch]:
+        out: list[InstrumentMatch] = []
+        seen: set[str] = set()
+        for p in self._providers:
+            for m in p.search(query, market=market, limit=limit):
+                if m.canonical_symbol not in seen:
+                    seen.add(m.canonical_symbol)
+                    out.append(m)
+                    if len(out) >= limit:
+                        return out
+        return out
 
 
 class CachedInstrumentSearch:

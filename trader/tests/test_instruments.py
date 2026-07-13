@@ -14,12 +14,15 @@ import pytest
 
 from swing_trader.instruments import (
     CachedInstrumentSearch,
+    CompositeInstrumentProvider,
     InstrumentMatch,
     InstrumentSearchProvider,
+    PortfolioInstrumentProvider,
     StaticInstrumentProvider,
     normalize_symbol,
 )
-from swing_trader.portfolio import MarketScope, SecurityType
+from swing_trader.portfolio import EventSource, EventType, MarketScope, PortfolioEvent, SecurityType
+from swing_trader.portfolio_journal import PortfolioJournal
 
 
 # ---------------------------------------------------------- normalization
@@ -151,6 +154,91 @@ def _match():
     return InstrumentMatch(canonical_symbol="NVDA", display_name="NVIDIA Corp",
                            market=MarketScope.US, exchange="NASDAQ",
                            currency="USD", security_type=SecurityType.STOCK)
+
+
+class TestPortfolioProvider:
+    """Held instruments become searchable by code OR note keyword (P0.9)."""
+
+    @pytest.fixture()
+    def journal(self, tmp_path):
+        j = PortfolioJournal(url=f"sqlite:///{tmp_path/'p.db'}")
+        acct = j.create_account(name="平安证券", market_scope="CN", base_currency="CNY")
+        def ev(sym, market, note):
+            j.append_event(PortfolioEvent(
+                account_id=acct.id, event_type=EventType.OPENING_BALANCE, symbol=sym,
+                market=market, currency="CNY", qty=100, price=1.0,
+                occurred_at=datetime(2026, 7, 13, tzinfo=timezone.utc),
+                source=EventSource.CSV, idempotency_key=sym, actor="g", surface="web",
+                note=note))
+        ev("510300.SS", MarketScope.CN, "华泰柏瑞沪深300ETF|核心层·沪深300")
+        ev("588200.SS", MarketScope.CN, "科创芯片ETF嘉实|成长层·芯片/半导体")
+        ev("017436", MarketScope.US, "华宝纳斯达克精选(QDII)A|成长层·美股科技(纳指主动)")
+        return j
+
+    def test_find_by_bare_code(self, journal):
+        p = PortfolioInstrumentProvider(journal)
+        assert p.search("588200")[0].canonical_symbol == "588200.SS"
+
+    def test_find_held_fund_by_raw_code(self, journal):
+        p = PortfolioInstrumentProvider(journal)
+        assert p.search("017436")[0].canonical_symbol == "017436"
+
+    def test_find_by_note_keyword(self, journal):
+        p = PortfolioInstrumentProvider(journal)
+        syms = [m.canonical_symbol for m in p.search("纳斯达克")]
+        assert "017436" in syms
+
+    def test_find_by_chinese_theme(self, journal):
+        p = PortfolioInstrumentProvider(journal)
+        syms = [m.canonical_symbol for m in p.search("芯片")]
+        assert "588200.SS" in syms
+
+    def test_display_name_and_type(self, journal):
+        p = PortfolioInstrumentProvider(journal)
+        m = p.search("588200")[0]
+        assert m.display_name == "科创芯片ETF嘉实"
+        assert m.security_type is SecurityType.ETF and m.exchange == "SSE"
+        fund = p.search("017436")[0]
+        assert fund.security_type is SecurityType.FUND and fund.exchange == "OTC"
+
+    def test_market_filter(self, journal):
+        p = PortfolioInstrumentProvider(journal)
+        us = p.search("0", market=MarketScope.US)
+        assert all(m.market is MarketScope.US for m in us)
+
+    def test_empty_journal(self, tmp_path):
+        j = PortfolioJournal(url=f"sqlite:///{tmp_path/'e.db'}")
+        assert PortfolioInstrumentProvider(j).search("nvda") == []
+
+
+class TestComposite:
+    def test_static_then_portfolio_deduped(self, tmp_path):
+        j = PortfolioJournal(url=f"sqlite:///{tmp_path/'c.db'}")
+        acct = j.create_account(name="A", market_scope="CN", base_currency="CNY")
+        j.append_event(PortfolioEvent(
+            account_id=acct.id, event_type=EventType.OPENING_BALANCE, symbol="588200.SS",
+            market=MarketScope.CN, currency="CNY", qty=100, price=3.0,
+            occurred_at=datetime(2026, 7, 13, tzinfo=timezone.utc), source=EventSource.CSV,
+            idempotency_key="k", actor="g", surface="web", note="科创芯片ETF嘉实|芯片"))
+        comp = CompositeInstrumentProvider([StaticInstrumentProvider(),
+                                            PortfolioInstrumentProvider(j)])
+        # static-only symbol still found
+        assert "NVDA" in [m.canonical_symbol for m in comp.search("NVDA")]
+        # held-only symbol now found (was missing before)
+        assert "588200.SS" in [m.canonical_symbol for m in comp.search("588200")]
+
+    def test_no_duplicate_symbols(self, tmp_path):
+        j = PortfolioJournal(url=f"sqlite:///{tmp_path/'d.db'}")
+        acct = j.create_account(name="A", market_scope="US", base_currency="USD")
+        j.append_event(PortfolioEvent(  # a symbol also in the static catalog
+            account_id=acct.id, event_type=EventType.OPENING_BALANCE, symbol="NVDA",
+            market=MarketScope.US, currency="USD", qty=1, price=1.0,
+            occurred_at=datetime(2026, 7, 13, tzinfo=timezone.utc), source=EventSource.MANUAL,
+            idempotency_key="k", actor="g", surface="web", note="NVIDIA"))
+        comp = CompositeInstrumentProvider([StaticInstrumentProvider(),
+                                            PortfolioInstrumentProvider(j)])
+        syms = [m.canonical_symbol for m in comp.search("NVDA")]
+        assert syms.count("NVDA") == 1
 
 
 class TestCache:
