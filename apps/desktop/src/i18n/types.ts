@@ -1472,13 +1472,24 @@ export interface Translations {
       chartAria: (symbol: string) => string
       chartEmpty: string
       chartLoading: string
-      // Compact segmented timeframe switcher on each chart.
+      // Compact segmented timeframe switcher (bottom-right of the chart).
       timeframeAria: string
       timeframes: Record<'day' | 'intraday1d' | 'intraday5d' | 'month' | 'week', string>
+      // TOP-LEFT symbol dropdown.
+      symbolSelectAria: string
+      // "Indicators" menu — each row toggles a klinecharts built-in analysis tool
+      // and carries a short, educational one-line description so the user learns
+      // to read the chart. Overlays ride the price pane; the rest open a sub-pane.
+      indicatorsButton: string
+      indicatorsOverlayGroup: string
+      indicatorsSubchartGroup: string
+      indicatorLabels: Record<'BOLL' | 'EMA' | 'KDJ' | 'MA' | 'MACD' | 'RSI' | 'VOL', string>
+      indicatorDescriptions: Record<'BOLL' | 'EMA' | 'KDJ' | 'MA' | 'MACD' | 'RSI' | 'VOL', string>
       // MA20 / MA30 overlay legend labels (均线).
       ma20: string
       ma30: string
-      // TradingView-style crosshair tooltip: short OHLCV labels.
+      // klinecharts crosshair tooltip: short OHLCV labels.
+      hoverTime: string
       hoverOpen: string
       hoverHigh: string
       hoverLow: string

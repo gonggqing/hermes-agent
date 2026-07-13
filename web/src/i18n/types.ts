@@ -318,9 +318,41 @@ export interface FinanceTranslations {
       label: string; // aria-label for the switcher group
       intraday: string; // "1D" — one intraday session
       fiveDay: string; // "5D"
-      day: string; // "Day" (default)
-      week: string; // "Week"
-      month: string; // "Month"
+      day: string; // "D" (default)
+      week: string; // "M" — ~5y of weekly candles
+      month: string; // "Y" — ~20y of monthly candles
+    };
+    // Educational title/tooltip per timeframe: resolution + span shown.
+    timeframeHint: {
+      intraday: string;
+      fiveDay: string;
+      day: string;
+      week: string;
+      month: string;
+    };
+    // K-line chart controls (symbol dropdown + indicators menu).
+    selectSymbol: string; // aria-label for the symbol dropdown
+    priceScale: string; // caption for the price axis unit chip
+    // Indicators toggle menu — each carries a short educational description.
+    indicators: {
+      title: string; // "Indicators" (button + panel title)
+      hint: string; // one-line panel intro
+      overlay: string; // tag: drawn on the price (main) pane
+      pane: string; // tag: drawn in its own sub-pane
+      ma: string; // "MA"
+      maDesc: string;
+      ema: string; // "EMA"
+      emaDesc: string;
+      boll: string; // "BOLL"
+      bollDesc: string;
+      vol: string; // "VOL"
+      volDesc: string;
+      macd: string; // "MACD"
+      macdDesc: string;
+      rsi: string; // "RSI"
+      rsiDesc: string;
+      kdj: string; // "KDJ"
+      kdjDesc: string;
     };
     // Moving-average overlay legend (均线).
     ma20: string; // "MA20"

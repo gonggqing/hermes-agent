@@ -76,8 +76,31 @@ export const ja = defineLocale({
         week: '週足',
         month: '月足'
       },
+      symbolSelectAria: '銘柄を選択',
+      indicatorsButton: '指標',
+      indicatorsOverlayGroup: '価格に重ねる',
+      indicatorsSubchartGroup: 'サブチャート',
+      indicatorLabels: {
+        MA: '移動平均',
+        EMA: 'EMA',
+        BOLL: 'ボリンジャー',
+        VOL: '出来高',
+        MACD: 'MACD',
+        RSI: 'RSI',
+        KDJ: 'KDJ'
+      },
+      indicatorDescriptions: {
+        MA: '移動平均：価格をならしてトレンドを示す。線より上なら上昇トレンド。',
+        EMA: '移動平均に似ているが直近の価格を重視するため反応が速い。',
+        BOLL: 'ボリンジャーバンド：移動平均 ± 2σ。上限に近いと割高、下限に近いと割安。',
+        VOL: '出来高：どれだけ取引されたか。大きな値動きは高出来高ほど信頼できる。',
+        MACD: 'トレンドと勢い。MACD がシグナル線を上抜けると強気。',
+        RSI: '勢いを0〜100で示す。70超で買われすぎ、30未満で売られすぎ。',
+        KDJ: 'ストキャスティクス系の勢い。K が D を上抜けると上昇転換の兆し。'
+      },
       ma20: 'MA20',
       ma30: 'MA30',
+      hoverTime: '時刻',
       hoverOpen: '始',
       hoverHigh: '高',
       hoverLow: '安',

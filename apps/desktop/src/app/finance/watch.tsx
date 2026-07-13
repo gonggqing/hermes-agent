@@ -1,9 +1,22 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { type CSSProperties, type MouseEvent as ReactMouseEvent, useMemo, useRef, useState } from 'react'
+import { dispose, init } from 'klinecharts'
+import type { Chart, DeepPartial, KLineData, NeighborData, Nullable, Period, PeriodType, Styles, TooltipLegend } from 'klinecharts'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { useIsDark } from '@/components/assistant-ui/embeds/use-is-dark'
 import { StatusDot, type StatusTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { SegmentedControl, type SegmentedControlOption } from '@/components/ui/segmented-control'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import {
   type FinanceAnalyze,
   financeAnalyze,
@@ -16,8 +29,8 @@ import {
 } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { ExternalLink } from '@/lib/external-link'
-import { BarChart3, Info } from '@/lib/icons'
-import { fmtDate } from '@/lib/time'
+import { Info, SlidersHorizontal } from '@/lib/icons'
+import { fmtDate, fmtDateTime } from '@/lib/time'
 import { cn } from '@/lib/utils'
 
 import {
@@ -38,6 +51,13 @@ import { FinanceCard, FinancePill, FinanceSectionLabel, InlineSpinner } from './
 // endpoints — quote / bars / analyze — and carry NO order or approval path.
 // Some tickers (GC=F, ^TNX, 518880.SS) return 404 from yfinance intermittently,
 // so every per-symbol query fails softly to an inline "no data" note.
+//
+// The chart is a professional, TradingView-style K-line rendered by klinecharts:
+// ONE large chart per page with a symbol dropdown (top-left), an indicators menu
+// (each tool carries a short educational description), and a timeframe switcher
+// (bottom-right). klinecharts owns the candles, axes, crosshair, tooltip, pan
+// and zoom — we only feed it OHLCV bars + theme colors and toggle its built-in
+// indicators.
 
 export const WATCH_MODULE_IDS = ['gold', 'oil', 'rates', 'crypto'] as const
 
@@ -91,37 +111,79 @@ export const WATCH_MODULE_SYMBOLS: Record<WatchModuleId, readonly WatchSymbolCon
 }
 
 // On-chart timeframe presets. Each maps to the (timeframe, limit) passed to
-// financeBars; the backend supports these intervals. Bars are cached per
-// (symbol, timeframe) so flipping back to a previously-viewed preset is
-// instant — no full-screen reload.
+// financeBars plus the klinecharts Period (drives x-axis time granularity:
+// intraday shows HH:MM, longer views show dates). The DATE RANGE auto-adjusts
+// per preset: an intraday session, five days, ~1 year of daily candles, ~5
+// years of weekly candles, ~20 years of monthly candles. Bars are cached per
+// (symbol, timeframe) so flipping back to a previously-viewed preset is instant.
 type TimeframeId = 'day' | 'intraday1d' | 'intraday5d' | 'month' | 'week'
 
-const TIMEFRAME_PRESETS: Record<TimeframeId, { limit: number; timeframe: string }> = {
-  intraday1d: { limit: 78, timeframe: '5m' }, // one intraday session
-  intraday5d: { limit: 70, timeframe: '30m' },
-  day: { limit: 120, timeframe: '1d' }, // DEFAULT
-  week: { limit: 104, timeframe: '1wk' },
-  month: { limit: 60, timeframe: '1mo' }
+interface TimeframePreset {
+  limit: number
+  period: Period
+  timeframe: string
 }
 
-// Rendered left-to-right order of the segmented switcher (intraday → longer).
+const TIMEFRAME_PRESETS: Record<TimeframeId, TimeframePreset> = {
+  intraday1d: { limit: 78, period: { span: 5, type: 'minute' }, timeframe: '5m' }, // one intraday session
+  intraday5d: { limit: 130, period: { span: 30, type: 'minute' }, timeframe: '30m' }, // ~5 days
+  day: { limit: 250, period: { span: 1, type: 'day' }, timeframe: '1d' }, // ~1 year — DEFAULT
+  week: { limit: 260, period: { span: 1, type: 'week' }, timeframe: '1wk' }, // ~5 years
+  month: { limit: 240, period: { span: 1, type: 'month' }, timeframe: '1mo' } // ~20 years
+}
+
+// Rendered left-to-right order of the switcher (intraday → longer horizon).
 const TIMEFRAME_ORDER: TimeframeId[] = ['intraday1d', 'intraday5d', 'day', 'week', 'month']
 
 const DEFAULT_TIMEFRAME: TimeframeId = 'day'
+
+// Longer intraday periods want date+time in the tooltip; daily and up want just
+// the date.
+const INTRADAY_PERIODS: PeriodType[] = ['second', 'minute', 'hour']
 
 // Long stale/gc windows keep each (symbol, timeframe) chart cached so navigating
 // away and back — or re-selecting a preset — renders instantly from cache.
 const BARS_STALE_MS = 60_000
 const BARS_GC_MS = 30 * 60_000
-// The quote header (Last/Bid/Ask/Volume) is fetched once and kept warm. The old
-// ~4s live-price poll (and the LIVE last-candle it grew) has been removed — the
-// chart is now cached candlesticks + MA20/30 + the timeframe switch + hover.
 const QUOTE_STALE_MS = 60_000
 
-// MA20 / MA30 overlay accents — vivid mid-tones that read over the green/red
-// candles in both light and dark themes.
-const MA20_COLOR = '#f59e0b'
-const MA30_COLOR = '#3b82f6'
+// Prices read cleanly at two decimals across every watch instrument (gold, oil,
+// BTC, ETFs, yields); volume is whole-number.
+const PRICE_PRECISION = 2
+const VOLUME_PRECISION = 0
+
+// klinecharts' constant id for the main candle pane — overlay indicators (MA /
+// EMA / BOLL) and the currency y-axis override target it directly.
+const CANDLE_PANE_ID = 'candle_pane'
+
+// TradingView-style up/down palette — reads over both light and dark themes and
+// keeps the MA/close-value coloring consistent with the candles.
+const UP_COLOR = '#26a69a'
+const DOWN_COLOR = '#ef5350'
+
+// The MA overlay defaults to MA20 + MA30 curves (klinecharts computes them as
+// proper moving-average lines).
+const MA_CALC_PARAMS = [20, 30]
+
+// Every toggleable indicator. Overlays ride the candle pane; the rest open their
+// own sub-pane. VOL + MA start ON.
+type IndicatorKey = 'BOLL' | 'EMA' | 'KDJ' | 'MA' | 'MACD' | 'RSI' | 'VOL'
+
+const OVERLAY_INDICATORS: IndicatorKey[] = ['MA', 'EMA', 'BOLL']
+const SUBCHART_INDICATORS: IndicatorKey[] = ['VOL', 'MACD', 'RSI', 'KDJ']
+const ALL_INDICATORS: IndicatorKey[] = [...OVERLAY_INDICATORS, ...SUBCHART_INDICATORS]
+
+const DEFAULT_INDICATORS: Record<IndicatorKey, boolean> = {
+  MA: true,
+  EMA: false,
+  BOLL: false,
+  VOL: true,
+  MACD: false,
+  RSI: false,
+  KDJ: false
+}
+
+const isOverlayIndicator = (key: IndicatorKey): boolean => OVERLAY_INDICATORS.includes(key)
 
 // Stable empty reference so a symbol with no bars yet doesn't churn renders.
 const NO_BARS: FinanceBar[] = []
@@ -137,6 +199,7 @@ export function WatchModulePanel({ enabled, module }: { enabled: boolean; module
   // changes); default to the first symbol so the single Analyze always targets
   // something concrete.
   const activeSymbol = symbols.some(config => config.symbol === selected) ? selected : symbols[0].symbol
+  const activeConfig = symbols.find(config => config.symbol === activeSymbol) ?? symbols[0]
 
   return (
     <div className="space-y-5">
@@ -166,17 +229,7 @@ export function WatchModulePanel({ enabled, module }: { enabled: boolean; module
         </FinanceCard>
       )}
 
-      <div className="space-y-4">
-        {symbols.map(config => (
-          <WatchSymbolCard
-            active={config.symbol === activeSymbol}
-            config={config}
-            enabled={enabled}
-            key={config.symbol}
-            onSelect={() => setSelected(config.symbol)}
-          />
-        ))}
-      </div>
+      <WatchChartPanel config={activeConfig} enabled={enabled} onSelect={setSelected} symbols={symbols} />
 
       <p className="text-[0.62rem] leading-4 text-muted-foreground/70">{copy.delayNote}</p>
     </div>
@@ -197,43 +250,24 @@ function ReadOnlyNote({ text }: { text: string }) {
   )
 }
 
-function WatchSymbolCard({
-  active,
-  config,
-  enabled,
-  onSelect
-}: {
-  active: boolean
-  config: WatchSymbolConfig
-  enabled: boolean
-  onSelect: () => void
-}) {
-  const { t } = useI18n()
-  const copy = t.finance.watch
-  const [timeframe, setTimeframe] = useState<TimeframeId>(DEFAULT_TIMEFRAME)
+// Fetches (and, for derived symbols, rescales) the quote + candles for one
+// watch symbol at a timeframe. Extracted so the single big chart shares the same
+// soft-failing data path the per-card charts used to have.
+function useWatchSymbolData(config: WatchSymbolConfig, timeframe: TimeframeId, enabled: boolean) {
   const preset = TIMEFRAME_PRESETS[timeframe]
-
-  const { currency, derived, symbol, unit } = config
-  const unitWord = unit ? copy.units[unit] : null
+  const { derived, symbol } = config
   // A derived symbol (AU9999) has no Yahoo endpoint of its own — its price +
-  // candles are fetched from the BASE future and rescaled by the FX quote. A
-  // bare symbol fetches itself. Fetching the base under its own cache key means
-  // the derived card and the base's own card share one request.
+  // candles are fetched from the BASE future and rescaled by the FX quote.
   const dataSymbol = derived ? derived.base : symbol
 
   const quoteQuery = useQuery({
     enabled,
     queryFn: () => financeQuote(dataSymbol),
     queryKey: financeKey('watch', 'quote', dataSymbol),
-    // 404 from yfinance is an expected per-symbol state, not worth retrying.
     retry: false,
     staleTime: QUOTE_STALE_MS
   })
 
-  // Bars are keyed by symbol + timeframe and cached long (stale/gc), so a
-  // revisit — or flipping back to a previously-viewed preset — renders instantly
-  // from cache. keepPreviousData holds the current candles while a new preset
-  // loads, so switching timeframe never flashes a full-screen skeleton.
   const barsQuery = useQuery({
     enabled,
     gcTime: BARS_GC_MS,
@@ -257,9 +291,7 @@ function WatchSymbolCard({
   const baseBars = barsQuery.data?.bars ?? NO_BARS
   // ¥/gram factor = CNY-per-USD ÷ grams-per-ounce, applied to the USD/oz base.
   const fxLast = fxQuery.data?.last ?? null
-
-  const factor =
-    derived && fxLast !== null && Number.isFinite(fxLast) ? fxLast / derived.gramsPerOunce : null
+  const factor = derived && fxLast !== null && Number.isFinite(fxLast) ? fxLast / derived.gramsPerOunce : null
 
   // Synthetic quote: rescale the base last to ¥/gram. A derived value has no
   // real bid/ask/volume, so those are dropped (the header just shows Last).
@@ -295,8 +327,6 @@ function WatchSymbolCard({
     }))
   }, [derived, baseBars, factor])
 
-  const label = copy.labels[symbol] ?? symbol
-
   // A derived symbol is broken when EITHER input quote errors or yields no
   // usable value — surfaced as a distinct no-data note (never a crash).
   const derivedBroken =
@@ -306,48 +336,70 @@ function WatchSymbolCard({
       (fxQuery.isSuccess && (fxLast === null || !Number.isFinite(fxLast))) ||
       (quoteQuery.isSuccess && (baseQuote?.last === null || baseQuote?.last === undefined)))
 
-  const quotePending = quoteQuery.isPending || (Boolean(derived) && fxQuery.isPending)
-  const barsPending = barsQuery.isPending || (Boolean(derived) && fxQuery.isPending)
-  const quoteFailed = derived ? derivedBroken : quoteQuery.isError
-  const barsFailed = derived ? barsQuery.isError || derivedBroken : barsQuery.isError
+  return {
+    bars,
+    barsFailed: derived ? barsQuery.isError || derivedBroken : barsQuery.isError,
+    barsPending: barsQuery.isPending || (Boolean(derived) && fxQuery.isPending),
+    derivedBroken,
+    quote,
+    quoteFailed: derived ? derivedBroken : quoteQuery.isError,
+    quotePending: quoteQuery.isPending || (Boolean(derived) && fxQuery.isPending)
+  }
+}
+
+// The single big-chart page: a symbol dropdown + last price header, an
+// indicators menu, the large klinecharts K-line, and the bottom-right timeframe
+// switcher. All chart-level UI state (timeframe, active indicators) lives here
+// so it survives symbol switches.
+function WatchChartPanel({
+  config,
+  enabled,
+  onSelect,
+  symbols
+}: {
+  config: WatchSymbolConfig
+  enabled: boolean
+  onSelect: (symbol: string) => void
+  symbols: readonly WatchSymbolConfig[]
+}) {
+  const { t } = useI18n()
+  const copy = t.finance.watch
+  const [timeframe, setTimeframe] = useState<TimeframeId>(DEFAULT_TIMEFRAME)
+  const [indicators, setIndicators] = useState<Record<IndicatorKey, boolean>>(DEFAULT_INDICATORS)
+
+  const { currency, derived, symbol, unit } = config
+  const unitWord = unit ? copy.units[unit] : null
+  const label = copy.labels[symbol] ?? symbol
+
+  const { bars, barsFailed, barsPending, derivedBroken, quote, quoteFailed, quotePending } = useWatchSymbolData(
+    config,
+    timeframe,
+    enabled
+  )
+
+  const toggleIndicator = (key: IndicatorKey) =>
+    setIndicators(current => ({ ...current, [key]: !current[key] }))
 
   return (
-    <div
-      aria-pressed={active}
-      className={cn(
-        'w-full space-y-3 rounded-lg border bg-(--ui-bg-quinary) p-3 text-left transition-colors',
-        active
-          ? 'border-primary/40 ring-1 ring-inset ring-primary/25'
-          : 'cursor-pointer border-(--ui-stroke-tertiary) hover:border-(--ui-stroke-secondary)'
-      )}
-      onClick={onSelect}
-      onKeyDown={event => {
-        // Only select on keys aimed at the card itself — not at the nested
-        // timeframe buttons, whose Enter/Space belong to them.
-        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
-          event.preventDefault()
-          onSelect()
-        }
-      }}
-      role="button"
-      tabIndex={0}
-    >
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <div className="flex min-w-0 items-baseline gap-2">
-          <span className="text-sm font-semibold tracking-tight text-foreground">{symbol}</span>
-          <span className="truncate text-[0.68rem] text-muted-foreground">{label}</span>
-        </div>
-        <div className="flex items-baseline gap-2 tabular-nums">
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+        <SymbolDropdown labels={copy.labels} onSelect={onSelect} symbols={symbols} value={symbol} />
+        <div className="text-right">
           {quotePending ? (
-            <span className="text-xs text-muted-foreground">—</span>
+            <span className="text-sm text-muted-foreground">—</span>
           ) : quoteFailed ? (
-            <span className="text-[0.65rem] text-muted-foreground">{derived ? copy.derivedNoData : copy.quoteError}</span>
+            <span className="text-[0.7rem] text-muted-foreground">{derived ? copy.derivedNoData : copy.quoteError}</span>
           ) : (
             <>
-              <span className="text-[0.6rem] font-medium text-(--ui-text-tertiary)">{copy.last}</span>
-              <span className="text-sm font-semibold text-foreground transition-colors duration-300">
-                {fmtWatchPrice(quote?.last, currency, unit, unitWord)}
-              </span>
+              <div className="flex items-baseline justify-end gap-1.5">
+                <span className="text-[0.6rem] font-medium text-(--ui-text-tertiary)">{copy.last}</span>
+                <span className="text-base font-semibold tabular-nums text-foreground">
+                  {fmtWatchPrice(quote?.last, currency, unit, unitWord)}
+                </span>
+              </div>
+              {quote?.as_of && (
+                <div className="text-[0.6rem] text-muted-foreground/70">{copy.quoteAsOf(fmtTs(quote.as_of))}</div>
+              )}
             </>
           )}
         </div>
@@ -356,7 +408,7 @@ function WatchSymbolCard({
       {/* Provenance for the DERIVED symbol (AU9999 = intl gold × USD/CNY). */}
       {derived && <p className="text-[0.6rem] leading-4 text-muted-foreground/70">{copy.derivedNote}</p>}
 
-      {!quoteFailed && quote && (
+      {!quoteFailed && quote && (quote.bid !== null || quote.ask !== null || quote.volume !== null) && (
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-[0.65rem] tabular-nums text-muted-foreground">
           {quote.bid !== null && (
             <span>
@@ -373,347 +425,403 @@ function WatchSymbolCard({
               {copy.volume} <span className="text-foreground">{fmtQty(quote.volume)}</span>
             </span>
           )}
-          {quote.as_of && <span className="text-muted-foreground/70">{copy.quoteAsOf(fmtTs(quote.as_of))}</span>}
         </div>
       )}
 
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 text-[0.6rem] font-medium text-(--ui-text-tertiary)">
-            <BarChart3 className="size-3" />
-            {copy.chartTitle}
-          </div>
-          <TimeframeSwitcher onChange={setTimeframe} value={timeframe} />
-        </div>
+      <div className="flex items-center justify-between gap-2">
+        <IndicatorsMenu indicators={indicators} onToggle={toggleIndicator} />
+      </div>
+
+      <div className="h-[480px] w-full overflow-hidden rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary)">
         {barsPending ? (
           <ChartSkeleton label={copy.chartLoading} />
         ) : barsFailed || bars.length === 0 ? (
-          <div className="py-1 text-[0.65rem] text-muted-foreground">
+          <div className="flex h-full items-center justify-center px-4 text-center text-xs text-muted-foreground">
             {derived && derivedBroken ? copy.derivedNoData : barsFailed ? copy.noData : copy.chartEmpty}
           </div>
         ) : (
-          <CandlestickChart
-            aria={copy.chartAria(symbol)}
+          <KlineChart
+            aria={copy.chartAria(label)}
             bars={bars}
             currency={currency}
+            indicators={indicators}
+            key={symbol}
+            period={TIMEFRAME_PRESETS[timeframe].period}
+            symbol={symbol}
             unit={unit}
             unitWord={unitWord}
           />
         )}
       </div>
+
+      {/* BOTTOM-RIGHT timeframe switcher; each preset auto-adjusts the range. */}
+      <div className="flex justify-end">
+        <TimeframeSwitcher onChange={setTimeframe} value={timeframe} />
+      </div>
     </div>
   )
 }
 
-// Compact segmented timeframe presets over the chart. Selecting a preset swaps
-// the (timeframe, limit) fed to financeBars and re-renders; bars are cached per
-// (symbol, timeframe) so re-selecting a previously-viewed preset is instant.
-function TimeframeSwitcher({ onChange, value }: { onChange: (id: TimeframeId) => void; value: TimeframeId }) {
+// TOP-LEFT symbol picker. Each option shows the display label + its ticker so
+// the target reads clearly (e.g. "COMEX Gold · GC=F").
+function SymbolDropdown({
+  labels,
+  onSelect,
+  symbols,
+  value
+}: {
+  labels: Record<string, string>
+  onSelect: (symbol: string) => void
+  symbols: readonly WatchSymbolConfig[]
+  value: string
+}) {
   const { t } = useI18n()
   const copy = t.finance.watch
 
   return (
-    <div
-      aria-label={copy.timeframeAria}
-      className="inline-flex items-center gap-0.5 rounded-md bg-(--ui-bg-tertiary) p-0.5"
-      role="group"
-    >
-      {TIMEFRAME_ORDER.map(id => {
-        const selected = id === value
+    <Select onValueChange={onSelect} value={value}>
+      <SelectTrigger aria-label={copy.symbolSelectAria} className="min-w-52 max-w-full">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {symbols.map(config => (
+          <SelectItem key={config.symbol} value={config.symbol}>
+            <span className="flex items-baseline gap-2">
+              <span className="font-medium text-foreground">{labels[config.symbol] ?? config.symbol}</span>
+              <span className="text-[0.7rem] text-muted-foreground">{config.symbol}</span>
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
 
-        return (
-          <button
-            aria-pressed={selected}
-            className={cn(
-              'rounded px-1.5 py-0.5 text-[0.6rem] font-medium tabular-nums transition-colors',
-              selected
-                ? 'bg-(--ui-bg-elevated) text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            )}
-            key={id}
-            // Isolate the preset click from the card's onSelect so switching a
-            // chart's timeframe never re-selects the whole symbol row.
-            onClick={event => {
-              event.stopPropagation()
-              onChange(id)
-            }}
-            type="button"
-          >
-            {copy.timeframes[id]}
-          </button>
-        )
-      })}
+// The "Indicators" control: a popover whose rows each toggle a built-in
+// klinecharts indicator and carry a short, localized, educational description
+// (this is how the user learns to read the chart). Overlays sit on the price
+// pane; the rest open their own sub-pane.
+function IndicatorsMenu({
+  indicators,
+  onToggle
+}: {
+  indicators: Record<IndicatorKey, boolean>
+  onToggle: (key: IndicatorKey) => void
+}) {
+  const { t } = useI18n()
+  const copy = t.finance.watch
+  const activeCount = ALL_INDICATORS.filter(key => indicators[key]).length
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button size="sm" variant="outline">
+          <SlidersHorizontal className="size-3.5" />
+          {copy.indicatorsButton}
+          <span className="tabular-nums text-muted-foreground">{activeCount}</span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-80">
+        <div className="space-y-2">
+          <IndicatorGroup
+            group={copy.indicatorsOverlayGroup}
+            indicators={indicators}
+            keys={OVERLAY_INDICATORS}
+            onToggle={onToggle}
+          />
+          <IndicatorGroup
+            group={copy.indicatorsSubchartGroup}
+            indicators={indicators}
+            keys={SUBCHART_INDICATORS}
+            onToggle={onToggle}
+          />
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function IndicatorGroup({
+  group,
+  indicators,
+  keys,
+  onToggle
+}: {
+  group: string
+  indicators: Record<IndicatorKey, boolean>
+  keys: IndicatorKey[]
+  onToggle: (key: IndicatorKey) => void
+}) {
+  const { t } = useI18n()
+  const copy = t.finance.watch
+
+  return (
+    <div className="space-y-1">
+      <FinanceSectionLabel className="px-1">{group}</FinanceSectionLabel>
+      {keys.map(key => (
+        <label
+          className="flex cursor-pointer items-start justify-between gap-3 rounded-md px-1 py-1.5 hover:bg-(--ui-bg-tertiary)"
+          key={key}
+        >
+          <span className="min-w-0 space-y-0.5">
+            <span className="block text-xs font-semibold tracking-tight text-foreground">
+              {copy.indicatorLabels[key]}
+            </span>
+            <span className="block text-[0.68rem] leading-4 text-muted-foreground">{copy.indicatorDescriptions[key]}</span>
+          </span>
+          <Switch checked={indicators[key]} className="mt-0.5 shrink-0" onCheckedChange={() => onToggle(key)} />
+        </label>
+      ))}
     </div>
   )
 }
 
-// First-load placeholder for the chart. Reuses the app's shared Skeleton
-// (animate-pulse) so the initial fetch reads as a calm shimmer that matches
-// Hermes — never a spinner-then-flash. Cache hits skip this entirely.
+// Compact segmented timeframe presets under the chart (bottom-right). Selecting
+// a preset swaps the (timeframe, limit, period) and re-renders; bars are cached
+// per (symbol, timeframe) so re-selecting a previously-viewed preset is instant.
+function TimeframeSwitcher({ onChange, value }: { onChange: (id: TimeframeId) => void; value: TimeframeId }) {
+  const { t } = useI18n()
+  const copy = t.finance.watch
+
+  const options: SegmentedControlOption<TimeframeId>[] = TIMEFRAME_ORDER.map(id => ({
+    id,
+    label: copy.timeframes[id]
+  }))
+
+  return (
+    <div aria-label={copy.timeframeAria} role="group">
+      <SegmentedControl onChange={onChange} options={options} value={value} />
+    </div>
+  )
+}
+
+// First-load placeholder. Reuses the app's shared Skeleton (animate-pulse) so
+// the initial fetch reads as a calm shimmer that matches Hermes. Cache hits skip
+// this entirely.
 function ChartSkeleton({ label }: { label: string }) {
   return (
-    <div aria-label={label} className="py-0.5" role="status">
-      <Skeleton className="h-24 w-full rounded-md" />
+    <div aria-label={label} className="grid h-full place-items-center p-4" role="status">
+      <Skeleton className="h-full w-full rounded-md" />
     </div>
   )
 }
 
-// One hovered session, in container-local pixels, captured on mouse-move so the
-// crosshair + tooltip can be laid out over the (aspect-distorted) SVG.
-interface ChartHover {
-  height: number
-  index: number
-  width: number
-  x: number
-  y: number
-}
+// klinecharts theme + formatting styles for the current light/dark mode. Canvas
+// can't read CSS vars, so we hand a coherent, theme-reactive palette to
+// setStyles: neutral grid/axes, the shared up/down candle palette, and a
+// currency-aware, localized OHLCV tooltip legend.
+function buildChartStyles(
+  isDark: boolean,
+  legend: (data: NeighborData<Nullable<KLineData>>) => TooltipLegend[]
+): DeepPartial<Styles> {
+  const gridColor = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'
+  const axisColor = isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.14)'
+  const textColor = isDark ? 'rgba(228,228,231,0.6)' : 'rgba(39,39,42,0.6)'
+  const tooltipColor = isDark ? 'rgba(228,228,231,0.92)' : 'rgba(24,24,27,0.9)'
+  const crossColor = isDark ? 'rgba(228,228,231,0.5)' : 'rgba(39,39,42,0.5)'
+  const crossFill = isDark ? '#3f3f46' : '#52525b'
 
-// Simple moving average of the last `period` closes at each bar; null until
-// enough bars exist, so the overlay line only starts once its window fills.
-function simpleMovingAverage(bars: FinanceBar[], period: number): (null | number)[] {
-  const out: (null | number)[] = new Array(bars.length).fill(null)
-  let sum = 0
+  const crosshairText = { backgroundColor: crossFill, borderColor: crossFill, color: '#ffffff' }
 
-  for (let index = 0; index < bars.length; index++) {
-    sum += bars[index].close
-
-    if (index >= period) {
-      sum -= bars[index - period].close
-    }
-
-    if (index >= period - 1) {
-      out[index] = sum / period
-    }
+  return {
+    candle: {
+      bar: {
+        downBorderColor: DOWN_COLOR,
+        downColor: DOWN_COLOR,
+        downWickColor: DOWN_COLOR,
+        upBorderColor: UP_COLOR,
+        upColor: UP_COLOR,
+        upWickColor: UP_COLOR
+      },
+      priceMark: { last: { text: { color: '#ffffff' } } },
+      tooltip: {
+        legend: { color: tooltipColor, template: legend },
+        title: { color: textColor }
+      }
+    },
+    crosshair: {
+      horizontal: { line: { color: crossColor }, text: crosshairText },
+      vertical: { line: { color: crossColor }, text: crosshairText }
+    },
+    grid: { horizontal: { color: gridColor }, vertical: { color: gridColor } },
+    indicator: { tooltip: { legend: { color: tooltipColor }, title: { color: tooltipColor } } },
+    xAxis: { axisLine: { color: axisColor }, tickLine: { color: axisColor }, tickText: { color: textColor } },
+    yAxis: { axisLine: { color: axisColor }, tickLine: { color: axisColor }, tickText: { color: textColor } }
   }
-
-  return out
 }
 
-// Dependency-free candlestick chart over OHLCV bars for the selected timeframe.
-// Vertical scale is price (shared min-low / max-high); horizontal is evenly
-// spaced sessions. Up candles use the primary tone, down candles the
-// destructive tone. MA20 / MA30 overlays (均线) — computed from the fetched
-// closes, no extra fetch — ride the SAME coordinate space in two distinct,
-// theme-safe colors, with a small legend. A TradingView-style crosshair + OHLC
-// tooltip tracks the cursor (values straight from the already-fetched bars).
-function CandlestickChart({
+// The large, professional K-line chart. klinecharts owns candles, axes,
+// crosshair, tooltip, pan and zoom; we feed it OHLCV bars, react to the app
+// theme, apply the currency price axis, and toggle its built-in indicators.
+function KlineChart({
   aria,
   bars,
   currency,
+  indicators,
+  period,
+  symbol,
   unit,
   unitWord
 }: {
   aria: string
   bars: FinanceBar[]
   currency: WatchCurrency | null
+  indicators: Record<IndicatorKey, boolean>
+  period: Period
+  symbol: string
   unit: WatchUnitKey | null
   unitWord: null | string
 }) {
   const { t } = useI18n()
   const copy = t.finance.watch
+  const isDark = useIsDark()
   const containerRef = useRef<HTMLDivElement>(null)
-  const [hover, setHover] = useState<ChartHover | null>(null)
+  const chartRef = useRef<Chart | null>(null)
+  const barsRef = useRef<KLineData[]>([])
+  const createdRef = useRef<Partial<Record<IndicatorKey, boolean>>>({})
 
-  const width = 100
-  const height = 40
-  const lows = bars.map(bar => bar.low)
-  const highs = bars.map(bar => bar.high)
-  const min = Math.min(...lows)
-  const max = Math.max(...highs)
-  const span = max - min || 1
-  const slot = width / bars.length
-  const bodyWidth = Math.max(slot * 0.6, 0.4)
-  const y = (value: number) => height - ((value - min) / span) * height
-  const cx = (index: number) => index * slot + slot / 2
+  const klineData = useMemo<KLineData[]>(
+    () =>
+      bars.map(bar => ({
+        close: bar.close,
+        high: bar.high,
+        low: bar.low,
+        open: bar.open,
+        timestamp: new Date(bar.ts).getTime(),
+        volume: bar.volume
+      })),
+    [bars]
+  )
 
-  // MA polylines in the same coordinate space as the candles. Each MA close is
-  // between its bar's low and high, so every point stays on the shared scale.
-  const maPolyline = (period: number) =>
-    simpleMovingAverage(bars, period)
-      .map((value, index) => (value === null ? null : `${cx(index)},${y(value)}`))
-      .filter((point): point is string => point !== null)
-      .join(' ')
+  const showTime = INTRADAY_PERIODS.includes(period.type)
 
-  const ma20Points = maPolyline(20)
-  const ma30Points = maPolyline(30)
+  // Currency/unit-aware, localized OHLCV tooltip legend (klinecharts renders the
+  // rows; we control the labels + formatting). Rebuilt when the formatting
+  // inputs change so setStyles hands the chart a fresh closure.
+  const legendTemplate = useMemo(
+    () =>
+      (data: NeighborData<Nullable<KLineData>>): TooltipLegend[] => {
+        const bar = data.current
 
-  const handleMove = (event: ReactMouseEvent<HTMLDivElement>) => {
+        if (!bar) {
+          return []
+        }
+
+        const date = new Date(bar.timestamp)
+        const timeText = showTime ? fmtDateTime.format(date) : fmtDate.format(date)
+        const up = bar.close >= bar.open
+
+        return [
+          { title: copy.hoverTime, value: timeText },
+          { title: copy.hoverOpen, value: fmtWatchValue(bar.open, currency, unit, unitWord) },
+          { title: copy.hoverHigh, value: fmtWatchValue(bar.high, currency, unit, unitWord) },
+          { title: copy.hoverLow, value: fmtWatchValue(bar.low, currency, unit, unitWord) },
+          {
+            title: copy.hoverClose,
+            value: { color: up ? UP_COLOR : DOWN_COLOR, text: fmtWatchValue(bar.close, currency, unit, unitWord) }
+          },
+          { title: copy.hoverVolume, value: fmtQty(bar.volume ?? 0) }
+        ]
+      },
+    [copy, currency, unit, unitWord, showTime]
+  )
+
+  // Init once; dispose on unmount (no leak). A symbol change remounts this
+  // component (keyed by symbol upstream), so the instance is always fresh.
+  useEffect(() => {
     const el = containerRef.current
 
     if (!el) {
       return
     }
 
-    const rect = el.getBoundingClientRect()
-    const localX = event.clientX - rect.left
-    const index = Math.min(bars.length - 1, Math.max(0, Math.floor((localX / rect.width) * bars.length)))
+    const chart = init(el)
+    chartRef.current = chart
 
-    setHover({ height: rect.height, index, width: rect.width, x: localX, y: event.clientY - rect.top })
-  }
+    return () => {
+      if (chartRef.current) {
+        dispose(el)
+        chartRef.current = null
+      }
+    }
+  }, [])
 
-  const hoveredBar = hover ? bars[hover.index] : null
-  // Snap the vertical guide to the hovered session's center (fraction of width).
-  const crosshairLeft = hover ? ((hover.index + 0.5) / bars.length) * 100 : 0
+  // Symbol precision → drives the y-axis price formatting; ticker feeds the
+  // default candle tooltip title.
+  useEffect(() => {
+    chartRef.current?.setSymbol({ pricePrecision: PRICE_PRECISION, ticker: symbol, volumePrecision: VOLUME_PRECISION })
+  }, [symbol])
 
-  return (
-    <div
-      className="relative select-none"
-      onMouseLeave={() => setHover(null)}
-      onMouseMove={handleMove}
-      ref={containerRef}
-    >
-      <svg
-        aria-label={aria}
-        className="h-24 w-full"
-        preserveAspectRatio="none"
-        role="img"
-        viewBox={`0 0 ${width} ${height}`}
-      >
-        {bars.map((bar, index) => {
-          const barCx = cx(index)
-          const up = bar.close >= bar.open
-          const bodyTop = y(Math.max(bar.open, bar.close))
-          const bodyBottom = y(Math.min(bar.open, bar.close))
+  // Timeframe → drives x-axis time granularity (HH:MM vs dates).
+  useEffect(() => {
+    chartRef.current?.setPeriod(period)
+  }, [period])
 
-          return (
-            <g className={up ? 'text-primary' : 'text-destructive'} key={`${bar.ts}-${index}`}>
-              <line
-                stroke="currentColor"
-                strokeWidth="0.6"
-                vectorEffect="non-scaling-stroke"
-                x1={barCx}
-                x2={barCx}
-                y1={y(bar.high)}
-                y2={y(bar.low)}
-              />
-              <rect
-                fill="currentColor"
-                height={Math.max(bodyBottom - bodyTop, 0.4)}
-                width={bodyWidth}
-                x={barCx - bodyWidth / 2}
-                y={bodyTop}
-              />
-            </g>
-          )
-        })}
+  // Feed the bars. A fresh data loader forces klinecharts to reload from the ref
+  // (more=false disables its scroll-to-load-more, since we hold the full range).
+  useEffect(() => {
+    const chart = chartRef.current
 
-        {/* MA overlays drawn ON TOP of the candles so they read clearly. */}
-        {ma20Points && (
-          <polyline
-            fill="none"
-            points={ma20Points}
-            stroke={MA20_COLOR}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth="1.1"
-            vectorEffect="non-scaling-stroke"
-          />
-        )}
-        {ma30Points && (
-          <polyline
-            fill="none"
-            points={ma30Points}
-            stroke={MA30_COLOR}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth="1.1"
-            vectorEffect="non-scaling-stroke"
-          />
-        )}
-      </svg>
+    if (!chart) {
+      return
+    }
 
-      <div className="pointer-events-none absolute left-1 top-0.5 flex items-center gap-2 text-[0.5rem] font-semibold leading-none tabular-nums">
-        <MaLegendItem color={MA20_COLOR} label={copy.ma20} />
-        <MaLegendItem color={MA30_COLOR} label={copy.ma30} />
-      </div>
+    barsRef.current = klineData
+    chart.setDataLoader({ getBars: ({ callback }) => callback(barsRef.current, false) })
+  }, [klineData])
 
-      {hover && hoveredBar && (
-        <>
-          <div
-            className="pointer-events-none absolute inset-y-0 w-px bg-foreground/25"
-            style={{ left: `${crosshairLeft}%` }}
-          />
-          <div className="pointer-events-none absolute inset-x-0 h-px bg-foreground/25" style={{ top: hover.y }} />
-          <ChartTooltip bar={hoveredBar} currency={currency} hover={hover} unit={unit} unitWord={unitWord} />
-        </>
-      )}
-    </div>
-  )
-}
+  // Theme + currency: re-style and re-apply the currency y-axis. Neither resets
+  // the data, so the user's pan/zoom survives a theme toggle.
+  useEffect(() => {
+    const chart = chartRef.current
 
-// One MA legend entry: a short colored rule + its label, painted in the line's
-// own color so the pairing reads at a glance over the candles.
-function MaLegendItem({ color, label }: { color: string; label: string }) {
-  return (
-    <span className="inline-flex items-center gap-1" style={{ color }}>
-      <span className="inline-block h-0.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
-      {label}
-    </span>
-  )
-}
+    if (!chart) {
+      return
+    }
 
-// Compact OHLCV readout for the hovered candle. Follows the cursor and flips to
-// whichever quadrant keeps it inside the chart. Readable in light + dark via
-// the elevated popover surface; disappears with the crosshair on mouse-leave.
-function ChartTooltip({
-  bar,
-  currency,
-  hover,
-  unit,
-  unitWord
-}: {
-  bar: FinanceBar
-  currency: WatchCurrency | null
-  hover: ChartHover
-  unit: WatchUnitKey | null
-  unitWord: null | string
-}) {
-  const { t } = useI18n()
-  const copy = t.finance.watch
-  const up = bar.close >= bar.open
-  const parsed = new Date(bar.ts)
-  const dateLabel = Number.isNaN(parsed.valueOf()) ? bar.ts : fmtDate.format(parsed)
-  const flipX = hover.x > hover.width / 2
-  const flipY = hover.y > hover.height / 2
+    chart.setStyles(buildChartStyles(isDark, legendTemplate))
+    chart.overrideYAxis({
+      createTicks: ({ defaultTicks }) =>
+        defaultTicks.map(tick => ({
+          ...tick,
+          text: unit === 'pct' ? `${tick.text}%` : currency ? `${currency}${tick.text}` : tick.text
+        })),
+      paneId: CANDLE_PANE_ID
+    })
+  }, [isDark, legendTemplate, currency, unit])
 
-  const style: CSSProperties = {
-    ...(flipX ? { right: hover.width - hover.x + 12 } : { left: hover.x + 12 }),
-    ...(flipY ? { bottom: hover.height - hover.y + 12 } : { top: hover.y + 12 })
-  }
+  // Toggle built-in indicators — create/remove only the ones that changed.
+  useEffect(() => {
+    const chart = chartRef.current
 
-  return (
-    <div
-      className="pointer-events-none absolute z-10 min-w-max rounded-md border border-(--ui-stroke-secondary) bg-(--ui-bg-elevated) px-2 py-1.5 text-[0.6rem] leading-4 shadow-md"
-      style={style}
-    >
-      <div className="mb-1 font-medium text-foreground">{dateLabel}</div>
-      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 tabular-nums">
-        <TooltipCell label={copy.hoverOpen} value={fmtWatchValue(bar.open, currency, unit, unitWord)} />
-        <TooltipCell label={copy.hoverHigh} value={fmtWatchValue(bar.high, currency, unit, unitWord)} />
-        <TooltipCell label={copy.hoverLow} value={fmtWatchValue(bar.low, currency, unit, unitWord)} />
-        <TooltipCell
-          label={copy.hoverClose}
-          tone={up ? 'text-primary' : 'text-destructive'}
-          value={fmtWatchValue(bar.close, currency, unit, unitWord)}
-        />
-      </div>
-      {bar.volume > 0 && (
-        <div className="mt-1 flex justify-between gap-3 tabular-nums text-muted-foreground">
-          <span>{copy.hoverVolume}</span>
-          <span className="text-foreground">{fmtQty(bar.volume)}</span>
-        </div>
-      )}
-    </div>
-  )
-}
+    if (!chart) {
+      return
+    }
 
-function TooltipCell({ label, tone, value }: { label: string; tone?: string; value: string }) {
-  return (
-    <span className="flex justify-between gap-2">
-      <span className="text-muted-foreground">{label}</span>
-      <span className={cn('font-medium text-foreground', tone)}>{value}</span>
-    </span>
-  )
+    for (const key of ALL_INDICATORS) {
+      const want = indicators[key]
+      const have = Boolean(createdRef.current[key])
+
+      if (want && !have) {
+        const overlay = isOverlayIndicator(key)
+
+        if (key === 'MA') {
+          chart.createIndicator({ calcParams: MA_CALC_PARAMS, name: key, paneId: CANDLE_PANE_ID }, true)
+        } else if (overlay) {
+          chart.createIndicator({ name: key, paneId: CANDLE_PANE_ID }, true)
+        } else {
+          chart.createIndicator({ name: key })
+        }
+
+        createdRef.current[key] = true
+      } else if (!want && have) {
+        chart.removeIndicator(isOverlayIndicator(key) ? { name: key, paneId: CANDLE_PANE_ID } : { name: key })
+        createdRef.current[key] = false
+      }
+    }
+  }, [indicators])
+
+  return <div aria-label={aria} className="h-full w-full" ref={containerRef} role="img" />
 }
 
 const directionTone = (direction: string): StatusTone =>

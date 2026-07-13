@@ -1940,14 +1940,37 @@ export const zh: Translations = {
       chartLoading: '加载图表…',
       timeframeAria: '图表周期',
       timeframes: {
-        intraday1d: '1日',
+        intraday1d: '分时',
         intraday5d: '5日',
-        day: '日线',
-        week: '周线',
-        month: '月线'
+        day: '日K',
+        week: '周K',
+        month: '月K'
+      },
+      symbolSelectAria: '选择标的',
+      indicatorsButton: '指标',
+      indicatorsOverlayGroup: '主图叠加',
+      indicatorsSubchartGroup: '副图',
+      indicatorLabels: {
+        MA: '均线',
+        EMA: 'EMA',
+        BOLL: '布林带',
+        VOL: '成交量',
+        MACD: 'MACD',
+        RSI: 'RSI',
+        KDJ: 'KDJ'
+      },
+      indicatorDescriptions: {
+        MA: '均线：平滑价格以显示趋势；价格在均线上方多为上升趋势。',
+        EMA: '与均线类似，但更看重近期价格，因此反应更快。',
+        BOLL: '布林带：均线 ± 2 倍标准差；靠近上轨说明偏高，靠近下轨说明偏低。',
+        VOL: '成交量：成交多少；高量配合大涨大跌更可信。',
+        MACD: '趋势加动能；MACD 上穿信号线为看多信号。',
+        RSI: '动能 0–100；高于 70 超买，低于 30 超卖。',
+        KDJ: '随机动能；K 线上穿 D 线可能预示转涨。'
       },
       ma20: 'MA20',
       ma30: 'MA30',
+      hoverTime: '时间',
       hoverOpen: '开',
       hoverHigh: '高',
       hoverLow: '低',

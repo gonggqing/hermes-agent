@@ -1,17 +1,23 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-} from "react";
-import { BarChart3, Eye } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { BarChart3, Check, ChevronDown, Eye, SlidersHorizontal } from "lucide-react";
+import { init, dispose } from "klinecharts";
+import type {
+  Chart,
+  CandleTooltipLegendsCustomCallback,
+  DeepPartial,
+  IndicatorCreate,
+  KLineData,
+  Period,
+  Styles,
+  TooltipLegend,
+} from "klinecharts";
 import { api } from "@/lib/api";
 import type { FinanceAnalyze, FinanceBar, FinanceQuote } from "@/lib/api";
 import { Badge } from "@nous-research/ui/ui/components/badge";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { Card, CardContent } from "@nous-research/ui/ui/components/card";
 import { cn } from "@/lib/utils";
+import { useTheme } from "@/themes";
 import type { FinanceTranslations } from "@/i18n/types";
 import { useFinanceT } from "./i18n";
 import {
@@ -27,33 +33,32 @@ import {
   type WatchSymbol,
 } from "./constants";
 
-// ── Per-(symbol,timeframe) bars cache + timeframe presets ─────────────
+// ── ONE large klinecharts K-line per page (TradingView-style) ─────────
 //
-// A module-level cache keyed by symbol+timeframe+limit. It persists across desk
-// switches AND timeframe flips (the components unmount, the Map does not), so
-// navigating away and back — or flipping back to a previously-viewed preset —
-// renders the K-line instantly with NO refetch/loading flash. There is NO
-// live-price poll: the chart is cached candlesticks + MA overlays + the
-// timeframe switch + the hover crosshair/tooltip (Loop.md §3: READ-ONLY).
+// The library owns the candles, axes, crosshair, tooltip, pan and zoom — we
+// no longer hand-roll SVG candles. This surface stays READ-ONLY (Loop.md §3):
+// cached OHLCV bars + built-in indicators + a hover crosshair/legend. There is
+// NO live price poll. A module-level bars/quote cache persists across symbol
+// and timeframe switches so re-visiting a preset renders instantly.
 
-/** MA overlay colors — distinct from the red/green candles, and (with a
- * background-colored casing behind each line) legible in light + dark. */
-const MA20_COLOR = "#f59e0b"; // amber
-const MA30_COLOR = "#a855f7"; // violet
+/** klinecharts' default main (candle) pane id — overlays target this pane. */
+const CANDLE_PANE_ID = "candle_pane";
 
-/** Compact chart timeframe presets. Each maps to a (timeframe, limit) passed
- * to the financeBars client. Default = Day. Labels are localized. */
+// ── Per-(symbol,timeframe) bars cache + timeframe presets ─────────────
+
+/** Chart timeframe presets. Each maps to a (financeBars timeframe, limit) AND a
+ * klinecharts Period. Default = Day. Labels + hints are localized. */
 type TimeframePresetKey = "intraday" | "fiveDay" | "day" | "week" | "month";
 
 const TIMEFRAME_CONFIG: Record<
   TimeframePresetKey,
-  { timeframe: string; limit: number }
+  { timeframe: string; limit: number; period: Period }
 > = {
-  intraday: { timeframe: "5m", limit: 78 }, // one intraday session
-  fiveDay: { timeframe: "30m", limit: 70 },
-  day: { timeframe: "1d", limit: 120 }, // DEFAULT
-  week: { timeframe: "1wk", limit: 104 },
-  month: { timeframe: "1mo", limit: 60 },
+  intraday: { timeframe: "5m", limit: 78, period: { type: "minute", span: 5 } },
+  fiveDay: { timeframe: "30m", limit: 130, period: { type: "minute", span: 30 } },
+  day: { timeframe: "1d", limit: 250, period: { type: "day", span: 1 } }, // DEFAULT
+  week: { timeframe: "1wk", limit: 260, period: { type: "week", span: 1 } },
+  month: { timeframe: "1mo", limit: 240, period: { type: "month", span: 1 } },
 };
 
 const TIMEFRAME_ORDER: TimeframePresetKey[] = [
@@ -66,23 +71,23 @@ const TIMEFRAME_ORDER: TimeframePresetKey[] = [
 
 const DEFAULT_PRESET: TimeframePresetKey = "day";
 
-/** Localized segment label for a timeframe preset. */
+/** Intraday presets get HH:MM in the crosshair tooltip; the rest get a date. */
+function isIntradayPreset(key: TimeframePresetKey): boolean {
+  return key === "intraday" || key === "fiveDay";
+}
+
 function timeframeLabel(
   key: TimeframePresetKey,
   ft: FinanceTranslations,
 ): string {
-  switch (key) {
-    case "intraday":
-      return ft.watch.timeframe.intraday;
-    case "fiveDay":
-      return ft.watch.timeframe.fiveDay;
-    case "day":
-      return ft.watch.timeframe.day;
-    case "week":
-      return ft.watch.timeframe.week;
-    case "month":
-      return ft.watch.timeframe.month;
-  }
+  return ft.watch.timeframe[key];
+}
+
+function timeframeHint(
+  key: TimeframePresetKey,
+  ft: FinanceTranslations,
+): string {
+  return ft.watch.timeframeHint[key];
 }
 
 interface BarsCacheEntry {
@@ -96,24 +101,7 @@ function barsKey(symbol: string, timeframe: string, limit: number): string {
   return `${symbol}|${timeframe}|${limit}`;
 }
 
-/**
- * Simple moving average of the last `period` closes at each bar. Returns one
- * value per bar; `null` for the leading bars where fewer than `period` closes
- * exist (the overlay line starts once enough bars are available). Computed in
- * the frontend from the already-fetched bars — no extra fetch.
- */
-function sma(bars: FinanceBar[], period: number): (number | null)[] {
-  const out: (number | null)[] = new Array(bars.length).fill(null);
-  let sum = 0;
-  for (let i = 0; i < bars.length; i++) {
-    sum += bars[i].close;
-    if (i >= period) sum -= bars[i - period].close;
-    if (i >= period - 1) out[i] = sum / period;
-  }
-  return out;
-}
-
-// ── Per-symbol data hook (cache-first, per-timeframe bars) ────────────
+// ── Per-symbol data hooks (cache-first, per-timeframe bars) ────────────
 
 type SymbolStatus = "loading" | "error" | "ready";
 
@@ -142,8 +130,6 @@ function useSymbolQuote(symbol: string | null): {
   const [done, setDone] = useState<boolean>(
     () => symbol === null || quoteCache.has(symbol),
   );
-  // Re-sync synchronously if the symbol identity changes (e.g. a derived
-  // entry's FX slot toggling in/out) — React's "adjust state on prop change".
   const [renderedSymbol, setRenderedSymbol] = useState(symbol);
   if (renderedSymbol !== symbol) {
     setRenderedSymbol(symbol);
@@ -231,17 +217,12 @@ function useSymbolBars(
  * AND every base bar's O/H/L/C by `factor = fxLast / gramsPerOunce` — the
  * candle SHAPE is the base series, just rescaled to ¥/gram. A missing base or
  * FX quote degrades to "error" (a graceful no-data note) — it never crashes.
- * All three symbols share the same module caches, so GC=F/CNY=X are fetched
- * once even though the Gold module shows both GC=F and AU9999.
  */
 function useWatchSymbol(
   entry: WatchSymbol,
   preset: TimeframePresetKey,
 ): WatchSymbolData {
   const derived = entry.derived ?? null;
-  // Hooks must run unconditionally: the "primary" series is the base symbol
-  // for a derived entry, otherwise the entry's own symbol. The FX slot is
-  // null (a no-op) for non-derived entries.
   const primarySymbol = derived ? derived.base : entry.symbol;
   const { quote: primaryQuote, done: quoteDone } = useSymbolQuote(primarySymbol);
   const { bars: primaryBars, done: barsDone } = useSymbolBars(
@@ -258,7 +239,6 @@ function useWatchSymbol(
   }>(() => {
     if (!derived) return { quote: primaryQuote, bars: primaryBars };
     const fxLast = fxQuote?.last ?? null;
-    // Cannot derive without the FX rate — degrade to no-data (never crash).
     if (fxLast === null) return { quote: null, bars: [] };
     const factor = fxLast / derived.gramsPerOunce;
     const scale = (v: number | null): number | null =>
@@ -283,7 +263,6 @@ function useWatchSymbol(
     return { quote: dq, bars: db };
   }, [derived, primaryQuote, primaryBars, fxQuote, entry.symbol]);
 
-  // A derived entry only settles once its FX quote has settled too.
   const settledQuote = derived ? quoteDone && fxDone : quoteDone;
   const settledBars = derived ? barsDone && fxDone : barsDone;
   const status: SymbolStatus =
@@ -296,302 +275,646 @@ function useWatchSymbol(
   return { status, quote, bars, barsDone: settledBars };
 }
 
-// ── Inline SVG candlestick chart with TradingView-style crosshair ─────
+// ── Indicators (klinecharts built-ins) with educational descriptions ──
 
-interface HoverState {
-  index: number;
-  xPct: number; // hovered bar-center, 0..1 of the chart width
-  xPx: number;
-  yPx: number;
-  width: number;
-  height: number;
+type IndicatorKey = "MA" | "EMA" | "BOLL" | "VOL" | "MACD" | "RSI" | "KDJ";
+
+interface IndicatorDef {
+  key: IndicatorKey;
+  /** Overlay (drawn on the candle pane) vs. its own sub-pane below. */
+  overlay: boolean;
+  /** Calculation periods; omitted → klinecharts default. */
+  calcParams?: number[];
+  name: (ft: FinanceTranslations) => string;
+  desc: (ft: FinanceTranslations) => string;
 }
 
-/** Crosshair tooltip: date + O/H/L/C (+ volume). Follows the cursor and flips
- * side near the right edge; readable in light and dark. */
-function CrosshairTooltip({
-  bar,
-  hover,
-  ft,
-  formatValue,
-}: {
-  bar: FinanceBar;
-  hover: HoverState;
-  ft: FinanceTranslations;
-  /** Compact per-symbol price formatter (currency, no unit suffix). */
-  formatValue: (v: number) => string;
-}) {
-  const onRight = hover.xPx < hover.width / 2;
-  const style: CSSProperties = {
-    top: Math.max(0, Math.min(hover.yPx + 8, hover.height - 4)),
-    ...(onRight
-      ? { left: hover.xPx + 12 }
-      : { right: hover.width - hover.xPx + 12 }),
+const INDICATORS: IndicatorDef[] = [
+  {
+    key: "MA",
+    overlay: true,
+    calcParams: [20, 30, 60],
+    name: (ft) => ft.watch.indicators.ma,
+    desc: (ft) => ft.watch.indicators.maDesc,
+  },
+  {
+    key: "EMA",
+    overlay: true,
+    calcParams: [12, 26],
+    name: (ft) => ft.watch.indicators.ema,
+    desc: (ft) => ft.watch.indicators.emaDesc,
+  },
+  {
+    key: "BOLL",
+    overlay: true,
+    name: (ft) => ft.watch.indicators.boll,
+    desc: (ft) => ft.watch.indicators.bollDesc,
+  },
+  {
+    key: "VOL",
+    overlay: false,
+    name: (ft) => ft.watch.indicators.vol,
+    desc: (ft) => ft.watch.indicators.volDesc,
+  },
+  {
+    key: "MACD",
+    overlay: false,
+    name: (ft) => ft.watch.indicators.macd,
+    desc: (ft) => ft.watch.indicators.macdDesc,
+  },
+  {
+    key: "RSI",
+    overlay: false,
+    name: (ft) => ft.watch.indicators.rsi,
+    desc: (ft) => ft.watch.indicators.rsiDesc,
+  },
+  {
+    key: "KDJ",
+    overlay: false,
+    name: (ft) => ft.watch.indicators.kdj,
+    desc: (ft) => ft.watch.indicators.kdjDesc,
+  },
+];
+
+/** DEFAULT ON: moving averages (overlay) + volume (sub-pane). */
+const DEFAULT_INDICATORS: IndicatorKey[] = ["MA", "VOL"];
+
+// ── Theme → klinecharts styles (reacts to the app's light/dark theme) ──
+
+interface ChartTheme {
+  up: string;
+  down: string;
+  text: string;
+  grid: string;
+  axisLine: string;
+  axisText: string;
+  cross: string;
+  crossBg: string;
+  crossText: string;
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  let h = m[1];
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const n = parseInt(h, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+/** Resolve chart colors from the app's CSS custom properties so the K-line
+ * matches whichever Hermes theme (light or dark) is active. */
+function readChartTheme(): ChartTheme {
+  const cs = getComputedStyle(document.documentElement);
+  const readVar = (name: string, fallback: string) =>
+    cs.getPropertyValue(name).trim() || fallback;
+  const bgHex = readVar("--background-base", "#0b0f14");
+  const textHex = readVar("--midground-base", "#e8e8e8");
+  const up = readVar("--color-success", "#22c55e");
+  const down = readVar("--color-destructive", "#ef4444");
+  const rgb = hexToRgb(textHex) ?? { r: 232, g: 232, b: 232 };
+  const rgba = (a: number) => `rgba(${rgb.r},${rgb.g},${rgb.b},${a})`;
+  return {
+    up,
+    down,
+    text: textHex,
+    grid: rgba(0.08),
+    axisLine: rgba(0.18),
+    axisText: rgba(0.62),
+    cross: rgba(0.5),
+    // High-contrast crosshair label: solid foreground bg + background-colored text.
+    crossBg: textHex,
+    crossText: bgHex,
   };
-  const up = bar.close >= bar.open;
-  const row = (label: string, value: string, valueClass?: string) => (
-    <>
-      <span className="text-text-tertiary">{label}</span>
-      <span className={cn("text-right text-foreground", valueClass)}>
-        {value}
-      </span>
-    </>
+}
+
+/** Format a bar timestamp for the crosshair legend (intraday adds HH:MM). */
+function fmtBarTime(ts: number, intraday: boolean): string {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString(
+    undefined,
+    intraday
+      ? { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }
+      : { year: "numeric", month: "short", day: "numeric" },
   );
+}
+
+/** Build the full klinecharts style patch: candle/axis/grid/crosshair colors +
+ * a custom tooltip legend that formats OHLC(V) with the symbol's currency. */
+function buildChartStyles(
+  ft: FinanceTranslations,
+  display: WatchPriceDisplay,
+  intraday: boolean,
+): DeepPartial<Styles> {
+  const t = readChartTheme();
+  const fmt = (v: number | null | undefined) =>
+    fmtWatchPrice(v, display, ft, { withUnit: false });
+
+  const legend: CandleTooltipLegendsCustomCallback = (data, styles) => {
+    const k = data.current;
+    if (k === null || k === undefined) return [];
+    const up = (k.close ?? 0) >= (k.open ?? 0);
+    const closeColor = up ? styles.bar.upColor : styles.bar.downColor;
+    const rows: TooltipLegend[] = [
+      { title: ft.watch.date, value: fmtBarTime(k.timestamp, intraday) },
+      { title: ft.watch.open, value: fmt(k.open) },
+      { title: ft.watch.high, value: fmt(k.high) },
+      { title: ft.watch.low, value: fmt(k.low) },
+      { title: ft.watch.close, value: { text: fmt(k.close), color: closeColor } },
+    ];
+    if (typeof k.volume === "number" && k.volume > 0) {
+      rows.push({ title: ft.watch.volume, value: k.volume.toLocaleString() });
+    }
+    return rows;
+  };
+
+  return {
+    grid: {
+      horizontal: { color: t.grid },
+      vertical: { color: t.grid },
+    },
+    candle: {
+      bar: {
+        upColor: t.up,
+        downColor: t.down,
+        noChangeColor: t.axisText,
+        upBorderColor: t.up,
+        downBorderColor: t.down,
+        noChangeBorderColor: t.axisText,
+        upWickColor: t.up,
+        downWickColor: t.down,
+        noChangeWickColor: t.axisText,
+      },
+      priceMark: {
+        high: { color: t.axisText },
+        low: { color: t.axisText },
+        last: {
+          upColor: t.up,
+          downColor: t.down,
+          text: { color: "#ffffff" },
+        },
+      },
+      tooltip: {
+        title: { show: false },
+        legend: { color: t.text, template: legend },
+      },
+    },
+    indicator: {
+      tooltip: {
+        title: { color: t.axisText },
+        legend: { color: t.axisText },
+      },
+    },
+    xAxis: {
+      axisLine: { color: t.axisLine },
+      tickLine: { color: t.axisLine },
+      tickText: { color: t.axisText },
+    },
+    yAxis: {
+      axisLine: { color: t.axisLine },
+      tickLine: { color: t.axisLine },
+      tickText: { color: t.axisText },
+    },
+    crosshair: {
+      horizontal: {
+        line: { color: t.cross },
+        text: { backgroundColor: t.crossBg, borderColor: t.crossBg, color: t.crossText },
+      },
+      vertical: {
+        line: { color: t.cross },
+        text: { backgroundColor: t.crossBg, borderColor: t.crossBg, color: t.crossText },
+      },
+    },
+    separator: { color: t.axisLine },
+  };
+}
+
+/** Map fetched OHLCV bars to klinecharts KLineData (ms timestamp), dropping
+ * any bar with an unparseable date. */
+function toKLineData(bars: FinanceBar[]): KLineData[] {
+  const out: KLineData[] = [];
+  for (const b of bars) {
+    const ts = new Date(b.ts).getTime();
+    if (Number.isNaN(ts)) continue;
+    out.push({
+      timestamp: ts,
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+      volume: b.volume,
+    });
+  }
+  return out;
+}
+
+// ── The big K-line chart (klinecharts instance owner) ─────────────────
+
+function KLineChart({
+  entry,
+  preset,
+  active,
+  ft,
+}: {
+  entry: WatchSymbol;
+  preset: TimeframePresetKey;
+  active: Set<IndicatorKey>;
+  ft: FinanceTranslations;
+}) {
+  const { themeName } = useTheme();
+  const { status, bars } = useWatchSymbol(entry, preset);
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<Chart | null>(null);
+  const appliedRef = useRef<Set<IndicatorKey>>(new Set());
+  const [ready, setReady] = useState(false);
+
+  const display = useMemo<WatchPriceDisplay>(
+    () => ({ currency: entry.currency, unit: entry.unit }),
+    [entry.currency, entry.unit],
+  );
+  const intraday = isIntradayPreset(preset);
+  const klineData = useMemo(() => toKLineData(bars), [bars]);
+  const { period } = TIMEFRAME_CONFIG[preset];
+
+  // Init once. Styles are applied synchronously here (mount vars are already
+  // in place) to avoid a flash of klinecharts' defaults, then re-applied by the
+  // theme effect on subsequent theme/symbol/locale changes.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const chart = init(el);
+    if (!chart) return;
+    chartRef.current = chart;
+    chart.setStyles(buildChartStyles(ft, display, intraday));
+    setReady(true);
+    return () => {
+      dispose(chart);
+      chartRef.current = null;
+      appliedRef.current = new Set();
+      setReady(false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Re-apply styles when the theme, symbol currency/unit, locale, or preset
+  // changes. Deferred to rAF so the ThemeProvider (an ancestor) has committed
+  // its CSS-var updates before we read them.
+  useEffect(() => {
+    if (!ready) return;
+    const id = requestAnimationFrame(() => {
+      chartRef.current?.setStyles(buildChartStyles(ft, display, intraday));
+    });
+    return () => cancelAnimationFrame(id);
+  }, [ready, themeName, ft, display, intraday]);
+
+  // Feed data: set the symbol (precision), the period, then a data loader that
+  // serves the current window. Runs on every symbol/preset/bars change so
+  // async-derived bars (AU9999) load once the FX quote settles.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !ready) return;
+    chart.setSymbol({
+      ticker: entry.symbol,
+      pricePrecision: 2,
+      volumePrecision: 0,
+    });
+    chart.setPeriod(period);
+    chart.setDataLoader({
+      getBars: ({ type, callback }) => {
+        // Fixed window — no lazy backward/forward loading (more = false).
+        callback(type === "init" ? klineData : [], false);
+      },
+    });
+  }, [ready, entry.symbol, period, klineData]);
+
+  // Reconcile indicators: add/remove built-ins as the active set changes.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !ready) return;
+    const applied = appliedRef.current;
+    for (const def of INDICATORS) {
+      const want = active.has(def.key);
+      const has = applied.has(def.key);
+      if (want && !has) {
+        const create: IndicatorCreate = { name: def.key };
+        if (def.calcParams) create.calcParams = def.calcParams;
+        if (def.overlay) create.paneId = CANDLE_PANE_ID;
+        chart.createIndicator(create, def.overlay);
+        applied.add(def.key);
+      } else if (!want && has) {
+        chart.removeIndicator(
+          def.overlay ? { paneId: CANDLE_PANE_ID, name: def.key } : { name: def.key },
+        );
+        applied.delete(def.key);
+      }
+    }
+  }, [ready, active]);
+
+  const showEmpty =
+    status === "error" ||
+    (status !== "loading" && klineData.length < 2 && ready);
+  const showLoading = status === "loading" && klineData.length === 0;
+
   return (
-    <div
-      className="pointer-events-none absolute z-10 min-w-[8.5rem] border border-border bg-background/95 px-2 py-1.5 font-mondwest normal-case text-xs shadow-md backdrop-blur-sm"
-      style={style}
-    >
-      <div className="mb-1 text-text-tertiary">{fmtTs(bar.ts)}</div>
-      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
-        {row(ft.watch.open, formatValue(bar.open))}
-        {row(ft.watch.high, formatValue(bar.high))}
-        {row(ft.watch.low, formatValue(bar.low))}
-        {row(
-          ft.watch.close,
-          formatValue(bar.close),
-          up ? "text-success" : "text-destructive",
-        )}
-      </div>
-      {bar.volume > 0 && (
-        <div className="mt-1 flex justify-between gap-3">
-          <span className="text-text-tertiary">{ft.watch.volume}</span>
-          <span className="text-foreground">
-            {bar.volume.toLocaleString()}
-          </span>
+    <div className="relative w-full">
+      <div
+        ref={containerRef}
+        className="h-[460px] w-full sm:h-[500px]"
+        role="img"
+        aria-label={`${entry.symbol} ${timeframeLabel(preset, ft)}`}
+      />
+      {(showLoading || showEmpty) && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <p className="font-mondwest normal-case text-sm text-muted-foreground">
+            {showLoading ? ft.watch.chartLoading : ft.watch.noData}
+          </p>
         </div>
       )}
     </div>
   );
 }
 
-/**
- * Candlestick chart drawn as inline SVG from OHLCV bars (no charting
- * dependency, Loop.md §3). `preserveAspectRatio="none"` lets it fill the card
- * width; wicks use a non-scaling stroke so they stay crisp. Up candles tint
- * success, down candles destructive. MA20/MA30 are overlaid as smooth
- * polylines in the same coordinate space. On mouse-move it renders a crosshair
- * (vertical + horizontal guide) and a compact OHLC(V) tooltip sourced from the
- * already-fetched bars — no extra fetch.
- */
-function CandlestickChart({
-  bars,
-  ma20,
-  ma30,
-  ariaLabel,
+// ── Symbol dropdown (top-left) ────────────────────────────────────────
+
+function symbolOptionLabel(entry: WatchSymbol, ft: FinanceTranslations): string {
+  const label = entry.derived ? ft.watch.au9999Label : entry.label;
+  return `${label} · ${entry.symbol}`;
+}
+
+function SymbolDropdown({
+  symbols,
+  selected,
+  onSelect,
   ft,
-  formatValue,
 }: {
-  bars: FinanceBar[];
-  ma20: (number | null)[];
-  ma30: (number | null)[];
-  ariaLabel: string;
+  symbols: WatchSymbol[];
+  selected: string;
+  onSelect: (symbol: string) => void;
   ft: FinanceTranslations;
-  /** Compact per-symbol price formatter for the axis labels + hover tooltip. */
-  formatValue: (v: number) => string;
 }) {
-  const slot = 6; // viewBox units per candle
-  const bodyW = 4;
-  const H = 100;
-  const PAD = 4;
-  const W = Math.max(bars.length * slot, slot);
-  const highs = bars.map((b) => b.high);
-  const lows = bars.map((b) => b.low);
-  const max = Math.max(...highs);
-  const min = Math.min(...lows);
-  const range = max - min || 1;
-  const y = (v: number) => PAD + (1 - (v - min) / range) * (H - PAD * 2);
-  const cx = (i: number) => i * slot + slot / 2;
+  return (
+    <div className="relative inline-flex">
+      <select
+        aria-label={ft.watch.selectSymbol}
+        value={selected}
+        onChange={(e) => onSelect(e.target.value)}
+        className="appearance-none rounded-md border border-border bg-background py-1.5 pl-2.5 pr-8 font-mono-ui text-sm text-foreground outline-none transition-colors hover:border-foreground/25 focus-visible:ring-1 focus-visible:ring-primary/60"
+      >
+        {symbols.map((s) => (
+          <option key={s.symbol} value={s.symbol}>
+            {symbolOptionLabel(s, ft)}
+          </option>
+        ))}
+      </select>
+      <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
+    </div>
+  );
+}
 
-  // MA overlays share the candle coordinate space; the polyline skips the
-  // leading bars where the SMA is still undefined (fewer than N closes).
-  const maPoints = (values: (number | null)[]): string =>
-    values
-      .map((v, i) => (v === null ? null : `${cx(i)},${y(v)}`))
-      .filter((p): p is string => p !== null)
-      .join(" ");
-  const ma20Points = maPoints(ma20);
-  const ma30Points = maPoints(ma30);
+// ── Indicators menu (toggle analysis tools + descriptions) ────────────
 
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const [hover, setHover] = useState<HoverState | null>(null);
-  const hoveredBar = hover ? (bars[hover.index] ?? null) : null;
+function IndicatorsMenu({
+  active,
+  onToggle,
+  ft,
+}: {
+  active: Set<IndicatorKey>;
+  onToggle: (key: IndicatorKey) => void;
+  ft: FinanceTranslations;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
 
-  const onMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    const el = wrapRef.current;
-    if (!el || bars.length === 0) return;
-    const rect = el.getBoundingClientRect();
-    const relX = e.clientX - rect.left;
-    const relY = e.clientY - rect.top;
-    // Bars occupy equal horizontal space, so pixel-x maps linearly to index.
-    let index = Math.floor((relX / rect.width) * bars.length);
-    index = Math.max(0, Math.min(bars.length - 1, index));
-    setHover({
-      index,
-      xPct: (index + 0.5) / bars.length,
-      xPx: relX,
-      yPx: relY,
-      width: rect.width,
-      height: rect.height,
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <Button
+        type="button"
+        size="sm"
+        outlined
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        prefix={<SlidersHorizontal className="h-3.5 w-3.5" />}
+      >
+        {ft.watch.indicators.title}
+      </Button>
+      {open && (
+        <div className="absolute right-0 z-30 mt-1 w-80 max-w-[85vw] overflow-hidden rounded-md border border-border bg-background/95 shadow-md backdrop-blur-sm">
+          <p className="border-b border-border px-3 py-2 font-mondwest normal-case text-xs text-text-tertiary">
+            {ft.watch.indicators.hint}
+          </p>
+          <ul className="max-h-[60vh] overflow-y-auto py-1">
+            {INDICATORS.map((def) => {
+              const on = active.has(def.key);
+              return (
+                <li key={def.key}>
+                  <button
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => onToggle(def.key)}
+                    className="flex w-full items-start gap-2.5 px-3 py-2 text-left outline-none transition-colors hover:bg-secondary/60 focus-visible:bg-secondary/60"
+                  >
+                    <span
+                      className={cn(
+                        "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                        on
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : "border-border text-transparent",
+                      )}
+                    >
+                      <Check className="h-3 w-3" />
+                    </span>
+                    <span className="flex min-w-0 flex-col gap-0.5">
+                      <span className="flex items-center gap-2">
+                        <span className="font-mono-ui text-sm text-foreground">
+                          {def.name(ft)}
+                        </span>
+                        <Badge tone="secondary">
+                          {def.overlay
+                            ? ft.watch.indicators.overlay
+                            : ft.watch.indicators.pane}
+                        </Badge>
+                      </span>
+                      <span className="font-mondwest normal-case text-xs text-muted-foreground">
+                        {def.desc(ft)}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Timeframe switcher (bottom-right) ─────────────────────────────────
+
+function TimeframeSwitcher({
+  preset,
+  onPreset,
+  ft,
+}: {
+  preset: TimeframePresetKey;
+  onPreset: (p: TimeframePresetKey) => void;
+  ft: FinanceTranslations;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={ft.watch.timeframe.label}
+      className="inline-flex overflow-hidden rounded-md border border-border"
+    >
+      {TIMEFRAME_ORDER.map((key, i) => {
+        const activeSeg = key === preset;
+        return (
+          <button
+            key={key}
+            type="button"
+            aria-pressed={activeSeg}
+            title={timeframeHint(key, ft)}
+            onClick={() => onPreset(key)}
+            className={cn(
+              "px-2.5 py-1 font-mondwest text-display text-[0.6875rem] uppercase tracking-wider outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/60",
+              i > 0 && "border-l border-border",
+              activeSeg
+                ? "bg-primary text-primary-foreground"
+                : "text-text-tertiary hover:bg-secondary/60 hover:text-foreground",
+            )}
+          >
+            {timeframeLabel(key, ft)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Chart card (dropdown + last price + indicators + chart + timeframe) ─
+
+function ChartCard({
+  symbols,
+  selected,
+  onSelect,
+  ft,
+}: {
+  symbols: WatchSymbol[];
+  selected: string;
+  onSelect: (symbol: string) => void;
+  ft: FinanceTranslations;
+}) {
+  const entry = useMemo(
+    () => symbols.find((s) => s.symbol === selected) ?? symbols[0],
+    [symbols, selected],
+  );
+  const [preset, setPreset] = useState<TimeframePresetKey>(DEFAULT_PRESET);
+  const [active, setActive] = useState<Set<IndicatorKey>>(
+    () => new Set(DEFAULT_INDICATORS),
+  );
+
+  const toggleIndicator = (key: IndicatorKey) => {
+    setActive((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
     });
   };
 
-  return (
-    <div
-      ref={wrapRef}
-      className="relative h-32 w-full cursor-crosshair select-none"
-      onMouseMove={onMove}
-      onMouseLeave={() => setHover(null)}
-    >
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        preserveAspectRatio="none"
-        className="h-full w-full"
-        role="img"
-        aria-label={ariaLabel}
-      >
-        {bars.map((b, i) => {
-          const x = cx(i);
-          const up = b.close >= b.open;
-          const bodyTop = y(Math.max(b.open, b.close));
-          const bodyBottom = y(Math.min(b.open, b.close));
-          const bodyH = Math.max(bodyBottom - bodyTop, 0.75);
-          const dim = hover !== null && hover.index !== i;
-          return (
-            <g
-              key={`${b.ts}-${i}`}
-              className={up ? "text-success" : "text-destructive"}
-              opacity={dim ? 0.5 : 1}
-            >
-              <line
-                x1={x}
-                x2={x}
-                y1={y(b.high)}
-                y2={y(b.low)}
-                stroke="currentColor"
-                strokeWidth="1"
-                vectorEffect="non-scaling-stroke"
-              />
-              <rect
-                x={x - bodyW / 2}
-                y={bodyTop}
-                width={bodyW}
-                height={bodyH}
-                fill="currentColor"
-              />
-            </g>
-          );
-        })}
-
-        {/* Moving-average overlays: drawn over the candles (under the HTML
-            crosshair). Each line carries a background-colored casing so it
-            stays legible over red/green candles in light + dark. */}
-        {ma20Points && (
-          <g fill="none" strokeLinejoin="round" strokeLinecap="round">
-            <polyline
-              points={ma20Points}
-              className="text-background"
-              stroke="currentColor"
-              strokeWidth={3}
-              strokeOpacity={0.55}
-              vectorEffect="non-scaling-stroke"
-            />
-            <polyline
-              points={ma20Points}
-              stroke={MA20_COLOR}
-              strokeWidth={1.5}
-              vectorEffect="non-scaling-stroke"
-            />
-          </g>
-        )}
-        {ma30Points && (
-          <g fill="none" strokeLinejoin="round" strokeLinecap="round">
-            <polyline
-              points={ma30Points}
-              className="text-background"
-              stroke="currentColor"
-              strokeWidth={3}
-              strokeOpacity={0.55}
-              vectorEffect="non-scaling-stroke"
-            />
-            <polyline
-              points={ma30Points}
-              stroke={MA30_COLOR}
-              strokeWidth={1.5}
-              vectorEffect="non-scaling-stroke"
-            />
-          </g>
-        )}
-      </svg>
-
-      {/* Price (y) axis: high at the top, low at the bottom — currency-aware
-          so the candle scale is legible without hovering. */}
-      <div className="pointer-events-none absolute right-1 top-0.5 font-mondwest normal-case text-[0.625rem] leading-none text-text-tertiary">
-        {formatValue(max)}
-      </div>
-      <div className="pointer-events-none absolute bottom-0.5 right-1 font-mondwest normal-case text-[0.625rem] leading-none text-text-tertiary">
-        {formatValue(min)}
-      </div>
-
-      {/* Crosshair guides. */}
-      {hover && (
-        <>
-          <div
-            className="pointer-events-none absolute inset-y-0 w-px bg-foreground/30"
-            style={{ left: `${hover.xPct * 100}%` }}
-          />
-          <div
-            className="pointer-events-none absolute inset-x-0 h-px bg-foreground/30"
-            style={{ top: hover.yPx }}
-          />
-        </>
-      )}
-
-      {/* Crosshair tooltip. */}
-      {hover && hoveredBar && (
-        <CrosshairTooltip
-          bar={hoveredBar}
-          hover={hover}
-          ft={ft}
-          formatValue={formatValue}
-        />
-      )}
-    </div>
+  const display = useMemo<WatchPriceDisplay>(
+    () => ({ currency: entry.currency, unit: entry.unit }),
+    [entry.currency, entry.unit],
   );
-}
+  const { quote } = useWatchSymbol(entry, preset);
+  const unitCaption =
+    entry.unit === "pct"
+      ? "%"
+      : entry.currency
+        ? entry.unit
+          ? `${entry.currency} / ${ft.watch.units[entry.unit]}`
+          : entry.currency
+        : entry.unit
+          ? ft.watch.units[entry.unit]
+          : "";
 
-// ── First-load skeleton (calm shimmer, no spinner-then-flash) ─────────
-
-const SKELETON_BARS = [42, 60, 48, 72, 55, 80, 46, 66, 52, 76, 50, 64, 58, 70];
-
-function ChartSkeleton({ label }: { label: string }) {
-  return (
-    <div
-      className="flex h-32 w-full items-end gap-1"
-      role="img"
-      aria-label={label}
-    >
-      {SKELETON_BARS.map((h, i) => (
-        <div
-          key={i}
-          className="flex-1 animate-pulse rounded-sm bg-secondary/50"
-          style={{ height: `${h}%`, animationDelay: `${i * 60}ms` }}
-        />
-      ))}
-    </div>
-  );
-}
-
-function WatchSymbolSkeleton({ label }: { label: string }) {
   return (
     <Card>
       <CardContent className="flex flex-col gap-3 py-4">
-        <div className="flex items-center gap-2">
-          <div className="h-4 w-16 animate-pulse rounded bg-secondary/60" />
-          <div className="h-3 w-24 animate-pulse rounded bg-secondary/40" />
-          <div className="ml-auto h-4 w-20 animate-pulse rounded bg-secondary/60" />
+        {/* Top row: symbol dropdown (left) + last price + indicators (right). */}
+        <div className="flex flex-wrap items-center gap-3">
+          <SymbolDropdown
+            symbols={symbols}
+            selected={selected}
+            onSelect={onSelect}
+            ft={ft}
+          />
+          {quote && quote.last !== null && (
+            <span className="flex items-baseline gap-2">
+              <span className="text-xs text-text-tertiary">{ft.watch.price}</span>
+              <span className="font-mono-ui text-lg text-foreground">
+                {fmtWatchPrice(quote.last, display, ft)}
+              </span>
+              {quote.as_of && (
+                <span className="font-mondwest normal-case text-xs text-text-tertiary">
+                  {ft.watch.asOf.replace("{time}", fmtTs(quote.as_of))}
+                </span>
+              )}
+            </span>
+          )}
+          <div className="ml-auto">
+            <IndicatorsMenu active={active} onToggle={toggleIndicator} ft={ft} />
+          </div>
         </div>
-        <ChartSkeleton label={label} />
+
+        {/* Derived-symbol provenance (AU9999 = international gold × CNY). */}
+        {entry.derived && (
+          <p className="font-mondwest normal-case text-[0.6875rem] text-text-tertiary">
+            {ft.watch.au9999Note}
+          </p>
+        )}
+
+        {/* The one large K-line chart. `entry.symbol` keys it so switching
+            instruments rebuilds cleanly (fresh indicators + data). */}
+        <KLineChart
+          key={entry.symbol}
+          entry={entry}
+          preset={preset}
+          active={active}
+          ft={ft}
+        />
+
+        {/* Bottom row: price-scale unit (left) + timeframe switcher (right). */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {unitCaption ? (
+            <span className="font-mondwest normal-case text-[0.6875rem] text-text-tertiary">
+              {ft.watch.priceScale}: {unitCaption}
+            </span>
+          ) : (
+            <span />
+          )}
+          <TimeframeSwitcher preset={preset} onPreset={setPreset} ft={ft} />
+        </div>
       </CardContent>
     </Card>
   );
@@ -731,249 +1054,16 @@ function AnalyzePanel({
   );
 }
 
-// ── Timeframe switcher + MA legend (attached to each chart) ───────────
-
-/**
- * Compact segmented row of timeframe presets. The chart lives inside a
- * clickable card (click = focus the symbol for Analyze), so this swallows
- * pointer/keyboard events — changing the timeframe is a chart interaction,
- * not a symbol selection.
- */
-function TimeframeSwitcher({
-  preset,
-  onPreset,
-  ft,
-}: {
-  preset: TimeframePresetKey;
-  onPreset: (p: TimeframePresetKey) => void;
-  ft: FinanceTranslations;
-}) {
-  return (
-    <div
-      role="group"
-      aria-label={ft.watch.timeframe.label}
-      className="inline-flex overflow-hidden rounded-md border border-border"
-      onClick={(e) => e.stopPropagation()}
-      onKeyDown={(e) => e.stopPropagation()}
-    >
-      {TIMEFRAME_ORDER.map((key, i) => {
-        const active = key === preset;
-        return (
-          <button
-            key={key}
-            type="button"
-            aria-pressed={active}
-            onClick={() => onPreset(key)}
-            className={cn(
-              "px-2 py-1 font-mondwest text-display text-[0.6875rem] uppercase tracking-wider outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/60",
-              i > 0 && "border-l border-border",
-              active
-                ? "bg-primary text-primary-foreground"
-                : "text-text-tertiary hover:bg-secondary/60 hover:text-foreground",
-            )}
-          >
-            {timeframeLabel(key, ft)}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-/** Small MA20/MA30 legend with color swatches matching the overlay lines. */
-function MaLegend({
-  hasMa20,
-  hasMa30,
-  ft,
-}: {
-  hasMa20: boolean;
-  hasMa30: boolean;
-  ft: FinanceTranslations;
-}) {
-  const chip = (color: string, label: string) => (
-    <span className="inline-flex items-center gap-1.5">
-      <span
-        className="inline-block h-0.5 w-3.5 rounded-full"
-        style={{ backgroundColor: color }}
-      />
-      {label}
-    </span>
-  );
-  return (
-    <div className="flex items-center gap-3 font-mondwest normal-case text-[0.6875rem] text-text-tertiary">
-      {hasMa20 && chip(MA20_COLOR, ft.watch.ma20)}
-      {hasMa30 && chip(MA30_COLOR, ft.watch.ma30)}
-    </div>
-  );
-}
-
-// ── Per-symbol card (quote + chart, selectable) ───────────────────────
-
-function WatchSymbolCard({
-  entry,
-  ft,
-  selected,
-  onSelect,
-}: {
-  entry: WatchSymbol;
-  ft: FinanceTranslations;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  const [preset, setPreset] = useState<TimeframePresetKey>(DEFAULT_PRESET);
-  const { status, quote, bars, barsDone } = useWatchSymbol(entry, preset);
-
-  // Per-symbol currency + unit for price rendering. `display` drives the full
-  // "value currency / unit" readout; `formatValue` is the compact variant
-  // (currency-prefixed, no unit) reused by the axis labels + hover tooltip.
-  const display = useMemo<WatchPriceDisplay>(
-    () => ({ currency: entry.currency, unit: entry.unit }),
-    [entry.currency, entry.unit],
-  );
-  const formatValue = useMemo(
-    () => (v: number) => fmtWatchPrice(v, display, ft, { withUnit: false }),
-    [display, ft],
-  );
-  // Derived symbols (AU9999) carry a localized descriptor + provenance note.
-  const label = entry.derived ? ft.watch.au9999Label : entry.label;
-
-  // MA20/MA30 computed once per bars change (frontend-only, no extra fetch).
-  const ma20 = useMemo(() => sma(bars, 20), [bars]);
-  const ma30 = useMemo(() => sma(bars, 30), [bars]);
-  const hasMa20 = ma20.some((v) => v !== null);
-  const hasMa30 = ma30.some((v) => v !== null);
-
-  if (status === "loading") {
-    return <WatchSymbolSkeleton label={ft.watch.chartLoading} />;
-  }
-
-  return (
-    <Card
-      role="button"
-      tabIndex={0}
-      aria-pressed={selected}
-      onClick={onSelect}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onSelect();
-        }
-      }}
-      className={cn(
-        "cursor-pointer outline-none transition-colors focus-visible:ring-1 focus-visible:ring-primary/60",
-        selected
-          ? "border-primary ring-1 ring-primary"
-          : "hover:border-foreground/25",
-      )}
-    >
-      <CardContent className="flex flex-col gap-3 py-4">
-        <div className="flex flex-wrap items-baseline gap-2">
-          <span className="font-mono-ui text-base font-semibold text-foreground">
-            {entry.symbol}
-          </span>
-          <span className="font-mondwest normal-case text-sm text-muted-foreground">
-            {label}
-          </span>
-          {quote && (
-            <span className="ml-auto flex items-baseline gap-2">
-              <span className="text-xs text-text-tertiary">
-                {ft.watch.price}
-              </span>
-              <span className="font-mono-ui text-base text-foreground">
-                {fmtWatchPrice(quote.last, display, ft)}
-              </span>
-            </span>
-          )}
-        </div>
-
-        {/* Derived-symbol provenance (AU9999 = international gold × CNY). */}
-        {entry.derived && (
-          <p className="-mt-2 font-mondwest normal-case text-[0.6875rem] text-text-tertiary">
-            {ft.watch.au9999Note}
-          </p>
-        )}
-
-        {status === "error" ? (
-          <p className="font-mondwest normal-case py-3 text-sm text-muted-foreground">
-            {ft.watch.noData}
-          </p>
-        ) : (
-          <>
-            {/* Quote meta line. */}
-            {quote && (
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mondwest normal-case text-xs text-muted-foreground">
-                {quote.bid !== null && (
-                  <span>
-                    {ft.watch.bid}{" "}
-                    <span className="text-foreground">
-                      {formatValue(quote.bid)}
-                    </span>
-                  </span>
-                )}
-                {quote.ask !== null && (
-                  <span>
-                    {ft.watch.ask}{" "}
-                    <span className="text-foreground">
-                      {formatValue(quote.ask)}
-                    </span>
-                  </span>
-                )}
-                {quote.volume !== null && (
-                  <span>
-                    {ft.watch.volume}{" "}
-                    <span className="text-foreground">
-                      {quote.volume.toLocaleString()}
-                    </span>
-                  </span>
-                )}
-                {quote.as_of && (
-                  <span className="text-text-tertiary">
-                    {ft.watch.asOf.replace("{time}", fmtTs(quote.as_of))}
-                  </span>
-                )}
-              </div>
-            )}
-
-            {/* Timeframe switcher + MA legend — attached to the chart. */}
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <TimeframeSwitcher preset={preset} onPreset={setPreset} ft={ft} />
-              {(hasMa20 || hasMa30) && (
-                <MaLegend hasMa20={hasMa20} hasMa30={hasMa30} ft={ft} />
-              )}
-            </div>
-
-            {/* Price chart (candles + MA20/MA30 overlays + hover crosshair). */}
-            {bars.length > 1 ? (
-              <CandlestickChart
-                bars={bars}
-                ma20={ma20}
-                ma30={ma30}
-                ariaLabel={`${entry.symbol} ${label}`}
-                ft={ft}
-                formatValue={formatValue}
-              />
-            ) : barsDone ? (
-              <p className="font-mondwest normal-case text-xs text-text-tertiary">
-                {ft.watch.chartUnavailable}
-              </p>
-            ) : (
-              <ChartSkeleton label={ft.watch.chartLoading} />
-            )}
-          </>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
 // ── The module panel ──────────────────────────────────────────────────
 
 /**
- * Read-only cross-asset watch module (Gold/Oil/Rates/Crypto). For each
- * configured symbol it shows the current price and an inline-SVG K-line with
- * TradingView-style hover details. Exactly ONE Analyze control (top-right)
- * runs the multi-agent analysis for the currently-selected symbol. READ-ONLY —
- * no order or approval control exists here (Loop.md §3).
+ * Read-only cross-asset watch module (Gold/Oil/Rates/Crypto). ONE large,
+ * professional klinecharts K-line per page: a symbol dropdown (top-left)
+ * changes the target, a timeframe switcher (bottom-right) changes the range,
+ * and an Indicators menu toggles built-in studies (each with a short
+ * educational note). Exactly ONE Analyze control (top-right) runs the
+ * multi-agent analysis for the selected symbol. READ-ONLY — no order or
+ * approval control exists here (Loop.md §3).
  */
 export function WatchModule({ moduleKey }: { moduleKey: WatchModuleKey }) {
   const ft = useFinanceT();
@@ -1056,6 +1146,14 @@ export function WatchModule({ moduleKey }: { moduleKey: WatchModuleKey }) {
         {ft.watch.dataDelay}
       </p>
 
+      {/* The one large K-line chart + its controls. */}
+      <ChartCard
+        symbols={symbols}
+        selected={selected}
+        onSelect={selectSymbol}
+        ft={ft}
+      />
+
       {/* Analysis panel for the selected symbol (single, page-level). */}
       {analyze.status === "error" && (
         <Card>
@@ -1073,17 +1171,6 @@ export function WatchModule({ moduleKey }: { moduleKey: WatchModuleKey }) {
           </CardContent>
         </Card>
       )}
-
-      {/* Symbol cards (click/enter to focus the Analyze target). */}
-      {symbols.map((entry) => (
-        <WatchSymbolCard
-          key={entry.symbol}
-          entry={entry}
-          ft={ft}
-          selected={selected === entry.symbol}
-          onSelect={() => selectSymbol(entry.symbol)}
-        />
-      ))}
     </section>
   );
 }

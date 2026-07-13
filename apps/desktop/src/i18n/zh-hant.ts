@@ -70,14 +70,37 @@ export const zhHant = defineLocale({
       chartLoading: '載入圖表…',
       timeframeAria: '圖表週期',
       timeframes: {
-        intraday1d: '1日',
+        intraday1d: '分時',
         intraday5d: '5日',
-        day: '日線',
-        week: '週線',
-        month: '月線'
+        day: '日K',
+        week: '週K',
+        month: '月K'
+      },
+      symbolSelectAria: '選擇標的',
+      indicatorsButton: '指標',
+      indicatorsOverlayGroup: '主圖疊加',
+      indicatorsSubchartGroup: '副圖',
+      indicatorLabels: {
+        MA: '均線',
+        EMA: 'EMA',
+        BOLL: '布林通道',
+        VOL: '成交量',
+        MACD: 'MACD',
+        RSI: 'RSI',
+        KDJ: 'KDJ'
+      },
+      indicatorDescriptions: {
+        MA: '均線：平滑價格以顯示趨勢；價格在均線上方多為上升趨勢。',
+        EMA: '與均線類似，但更看重近期價格，因此反應更快。',
+        BOLL: '布林通道：均線 ± 2 倍標準差；靠近上軌代表偏高，靠近下軌代表偏低。',
+        VOL: '成交量：成交多少；高量配合大漲大跌更可信。',
+        MACD: '趨勢加動能；MACD 上穿訊號線為看多訊號。',
+        RSI: '動能 0–100；高於 70 超買，低於 30 超賣。',
+        KDJ: '隨機動能；K 線上穿 D 線可能預示轉漲。'
       },
       ma20: 'MA20',
       ma30: 'MA30',
+      hoverTime: '時間',
       hoverOpen: '開',
       hoverHigh: '高',
       hoverLow: '低',

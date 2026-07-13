@@ -1769,12 +1769,35 @@ export const en: Translations = {
       timeframes: {
         intraday1d: '1D',
         intraday5d: '5D',
-        day: 'Day',
-        week: 'Week',
-        month: 'Month'
+        day: 'D',
+        week: 'M',
+        month: 'Y'
+      },
+      symbolSelectAria: 'Select symbol',
+      indicatorsButton: 'Indicators',
+      indicatorsOverlayGroup: 'On price',
+      indicatorsSubchartGroup: 'Sub-charts',
+      indicatorLabels: {
+        MA: 'MA',
+        EMA: 'EMA',
+        BOLL: 'Bollinger',
+        VOL: 'Volume',
+        MACD: 'MACD',
+        RSI: 'RSI',
+        KDJ: 'KDJ'
+      },
+      indicatorDescriptions: {
+        MA: 'Moving average: smooths price to show the trend; price above the line = uptrend.',
+        EMA: 'Like MA but weights recent prices more, so it reacts faster.',
+        BOLL: 'Bollinger Bands: MA ± 2σ; near the upper band = stretched high, lower = stretched low.',
+        VOL: 'Volume: how much traded; big moves on high volume are more convincing.',
+        MACD: 'Trend + momentum; MACD crossing above its signal line is bullish.',
+        RSI: 'Momentum 0–100; above 70 overbought, below 30 oversold.',
+        KDJ: 'Stochastic momentum; K crossing above D can signal a turn up.'
       },
       ma20: 'MA20',
       ma30: 'MA30',
+      hoverTime: 'Time',
       hoverOpen: 'O',
       hoverHigh: 'H',
       hoverLow: 'L',
