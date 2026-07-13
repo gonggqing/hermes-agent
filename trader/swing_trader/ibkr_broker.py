@@ -89,6 +89,16 @@ class IbTradeState:
     filled: float = 0.0
     remaining: float = 0.0
     avg_fill_px: Optional[float] = None
+    # Order shape — needed to reconstruct an ADOPTED order (one IBKR reports
+    # that this process did not place, e.g. a GTC protective stop that survived
+    # a restart). Optional so a bare status-only state still constructs.
+    symbol: Optional[str] = None
+    action: Optional[str] = None  # BUY | SELL
+    qty: Optional[float] = None
+    order_type: Optional[str] = None  # LMT | STP | MOC | LOC | MKT
+    lmt: Optional[float] = None
+    aux: Optional[float] = None
+    broker_ref: Optional[str] = None
 
 
 @dataclass
@@ -345,11 +355,36 @@ class IBKRBroker(BrokerInterface):
                 o.filled_qty = st.filled
                 o.avg_fill_px = st.avg_fill_px
             out.append(o)
+        # ADOPTED orders — ones IBKR reports that THIS process did not place
+        # (e.g. a GTC protective stop that survived a restart, or a manual TWS
+        # order). Surfacing them keeps reconciliation/sync honest so the loop
+        # never re-protects an already-protected position (Loop.md §5.8).
+        for ref, st in states.items():
+            if ref in self._submitted:
+                continue
+            adopted = self._adopted_order(st)
+            if adopted is not None:
+                out.append(adopted)
         if active_only:
             out = [o for o in out if o.status in (
                 OrderStatus.NEW, OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED)]
         out.sort(key=lambda o: o.ts)
         return out
+
+    def _adopted_order(self, st: IbTradeState) -> Optional[Order]:
+        """Reconstruct an Order from an IB trade state we didn't place. Returns
+        None when the state lacks the shape needed (bare status-only state)."""
+        if not st.symbol or not st.action or st.qty is None or not st.order_type:
+            return None
+        ot = {"STP": OrderType.STP, "LMT": OrderType.LMT, "MOC": OrderType.MOC,
+              "LOC": OrderType.LOC}.get(st.order_type, OrderType.LMT)
+        return Order(
+            id=st.order_ref, mode=self.mode, symbol=st.symbol, side=Side(st.action),
+            qty=st.qty, order_type=ot, limit=st.lmt, stop=st.aux,
+            tif=TimeInForce.GTC, status=_map_status(st.status, st.filled),
+            filled_qty=st.filled, avg_fill_px=st.avg_fill_px,
+            broker_ref=st.broker_ref,
+        )
 
     # --------------------------------------------------------------- fills
 
@@ -421,9 +456,16 @@ class _IbAsyncClient:
         out = []
         for trade in self._ib.trades():
             os = trade.orderStatus
-            out.append(IbTradeState(order_ref=trade.order.orderRef, status=os.status,
-                                    filled=os.filled, remaining=os.remaining,
-                                    avg_fill_px=os.avgFillPrice or None))
+            o, c = trade.order, trade.contract
+            # Carry the order shape too, so IBKRBroker can reconstruct ADOPTED
+            # orders (ones this process did not place) after a reconnect.
+            out.append(IbTradeState(
+                order_ref=o.orderRef, status=os.status, filled=os.filled,
+                remaining=os.remaining, avg_fill_px=os.avgFillPrice or None,
+                symbol=getattr(c, "symbol", None), action=o.action,
+                qty=o.totalQuantity, order_type=o.orderType,
+                lmt=o.lmtPrice or None, aux=o.auxPrice or None,
+                broker_ref=str(o.orderId)))
         return out
 
     def fills(self) -> list[IbExec]:  # pragma: no cover

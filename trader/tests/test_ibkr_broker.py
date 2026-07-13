@@ -56,9 +56,11 @@ class FakeIBClient:
         self._n += 1
         bref = f"ib-{self._n}"
         self._specs[spec.order_ref] = spec
-        self._trades[spec.order_ref] = IbTradeState(order_ref=spec.order_ref,
-                                                    status="Submitted", filled=0.0,
-                                                    remaining=spec.qty)
+        self._trades[spec.order_ref] = IbTradeState(
+            order_ref=spec.order_ref, status="Submitted", filled=0.0,
+            remaining=spec.qty, symbol=spec.symbol, action=spec.action,
+            qty=spec.qty, order_type=spec.order_type, lmt=spec.lmt, aux=spec.aux,
+            broker_ref=bref)
         self._by_broker[bref] = spec.order_ref
         self.placed.append(spec)
         return bref
@@ -286,6 +288,45 @@ class TestLifecycle:
         tp = next(c for c in r.child_orders if c.order_type is OrderType.LMT)
         assert by_id[stp.id].status is OrderStatus.FILLED
         assert by_id[tp.id].status is OrderStatus.CANCELLED
+
+
+class TestAdoptedOrders:
+    """Reconnect/restart: IBKR reports orders this process never placed (a GTC
+    protective stop that survived a restart). get_orders must surface them so
+    reconciliation/sync stays honest (Loop.md §5.8)."""
+
+    def test_surfaces_order_not_in_submitted(self):
+        # Broker A places a protective stop, populating the shared IB transport.
+        fake = FakeIBClient()
+        a = IBKRBroker(client_factory=lambda: fake)
+        stop = _order(side=Side.SELL, order_type=OrderType.STP, limit=None, stop=95.0)
+        a.place_order(stop)
+        # Broker B is a FRESH process (empty _submitted) on the SAME IB account.
+        b = IBKRBroker(client_factory=lambda: fake)
+        adopted = b.get_orders()
+        assert len(adopted) == 1
+        o = adopted[0]
+        assert o.id == stop.id and o.symbol == "NVDA" and o.side is Side.SELL
+        assert o.order_type is OrderType.STP and o.stop == 95.0
+        assert o.status is OrderStatus.SUBMITTED
+
+    def test_adopted_order_respects_active_only(self):
+        fake = FakeIBClient()
+        a = IBKRBroker(client_factory=lambda: fake)
+        o = _order()
+        a.place_order(o)
+        fake.fill(o.id, 10, 100.0)  # fully filled → not active
+        b = IBKRBroker(client_factory=lambda: fake)
+        assert b.get_orders(active_only=True) == []
+        assert len(b.get_orders()) == 1  # still visible in the full list
+
+    def test_bare_status_state_is_skipped(self):
+        # A status-only state (no shape) can't be reconstructed → skipped, not raised.
+        fake = FakeIBClient()
+        fake._trades["mystery"] = IbTradeState(order_ref="mystery", status="Submitted",
+                                               filled=0.0, remaining=5.0)
+        b = IBKRBroker(client_factory=lambda: fake)
+        assert b.get_orders() == []
 
 
 class TestAccountPositions:
