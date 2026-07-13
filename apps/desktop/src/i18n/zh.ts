@@ -2036,6 +2036,12 @@ export const zh: Translations = {
       colCurrency: '币种',
       colAmount: '金额',
       colAccounts: '账户',
+      colCurrentPrice: '现价',
+      colMarketValue: '市值',
+      colPnl: '盈亏',
+      colPnlPct: '盈亏%',
+      colActions: '操作',
+      unknownValue: '未知',
       unknownCost: '未知',
       unknownCash: '未知',
       holdingsEmpty: '暂无持仓 — 记录一笔交易或导入对账单以建立该账户。',
@@ -2143,7 +2149,22 @@ export const zh: Translations = {
       importRowDuplicate: '重复',
       importCommitted: n => `已导入 ${n} 条事件。`,
       importFailed: '无法提交导入。',
-      previewFailed: '无法预览该 CSV。'
+      previewFailed: '无法预览该 CSV。',
+      totalMarketValue: '总市值',
+      totalCost: '总成本',
+      totalPnl: '总盈亏',
+      pricedUnpriced: (priced, unpriced) => `${priced} 已定价 · ${unpriced} 未定价`,
+      refreshPrices: '刷新实时价',
+      refreshing: '刷新中…',
+      refreshTitle: '实时价已刷新',
+      refreshDone: (refreshed, skipped, failed) => `刷新 ${refreshed} · 跳过 ${skipped} · 失败 ${failed}`,
+      refreshFailed: '无法刷新实时价。',
+      updateMark: '更新现价',
+      updateMarkTitle: symbol => `更新现价 · ${symbol}`,
+      updateMarkDesc: '手动设置该标的的现价 — 适用于无实时行情的场外基金。',
+      markCurrencyNote: currency => `币种：${currency}`,
+      markSaved: symbol => `已更新 ${symbol} 的现价。`,
+      markFailed: '无法更新现价。'
     },
     enums: {
       regime: {
@@ -2240,6 +2261,12 @@ export const zh: Translations = {
       accountType: {
         cash: '现金账户',
         margin: '保证金账户'
+      },
+      priceSource: {
+        live: '实时',
+        csv: '导入',
+        manual: '手动',
+        none: '未知'
       }
     }
   },

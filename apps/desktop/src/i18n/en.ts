@@ -1863,6 +1863,12 @@ export const en: Translations = {
       colCurrency: 'Currency',
       colAmount: 'Amount',
       colAccounts: 'Accounts',
+      colCurrentPrice: 'Current price',
+      colMarketValue: 'Market value',
+      colPnl: 'Unrealized P&L',
+      colPnlPct: 'P&L %',
+      colActions: 'Actions',
+      unknownValue: 'Unknown',
       unknownCost: 'unknown',
       unknownCash: 'unknown',
       holdingsEmpty: 'No holdings yet — record a trade or import a statement to build this account.',
@@ -1971,7 +1977,23 @@ export const en: Translations = {
       importRowDuplicate: 'duplicate',
       importCommitted: n => `Imported ${n} events.`,
       importFailed: 'Could not commit the import.',
-      previewFailed: 'Could not preview the CSV.'
+      previewFailed: 'Could not preview the CSV.',
+      totalMarketValue: 'Total value',
+      totalCost: 'Total cost',
+      totalPnl: 'Total P&L',
+      pricedUnpriced: (priced, unpriced) => `${priced} priced · ${unpriced} unpriced`,
+      refreshPrices: 'Refresh prices',
+      refreshing: 'Refreshing…',
+      refreshTitle: 'Prices refreshed',
+      refreshDone: (refreshed, skipped, failed) =>
+        `${refreshed} refreshed · ${skipped} skipped · ${failed} failed`,
+      refreshFailed: 'Could not refresh prices.',
+      updateMark: 'Update price',
+      updateMarkTitle: symbol => `Update price · ${symbol}`,
+      updateMarkDesc: 'Set the current price by hand — for off-exchange funds with no live feed.',
+      markCurrencyNote: currency => `Currency: ${currency}`,
+      markSaved: symbol => `Updated the price for ${symbol}.`,
+      markFailed: 'Could not update the price.'
     },
     enums: {
       regime: {
@@ -2068,6 +2090,12 @@ export const en: Translations = {
       accountType: {
         cash: 'Cash',
         margin: 'Margin'
+      },
+      priceSource: {
+        live: 'Live',
+        csv: 'Imported',
+        manual: 'Manual',
+        none: 'Unknown'
       }
     }
   },

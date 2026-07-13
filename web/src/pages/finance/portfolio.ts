@@ -89,6 +89,14 @@ export function authorityLabel(
 ) {
   return labelFrom(ft.portfolio.authority as Record<string, string>, a);
 }
+/** Localized tag for a valuation price source (live / imported / manual /
+ * unknown). Falls back to the raw value for any future source. */
+export function priceSourceLabel(
+  s: string | null | undefined,
+  ft: FinanceTranslations,
+) {
+  return labelFrom(ft.portfolio.valuation.sources as Record<string, string>, s);
+}
 
 // ── Tone helpers ─────────────────────────────────────────────────────────
 
@@ -105,6 +113,22 @@ export function draftStatusTone(
     case "draft":
     default:
       return "outline";
+  }
+}
+
+/** Badge tone for a valuation price-source tag. `none` (unpriced) is
+ * neutral-muted — an unpriced 场外基金 is normal, not an error. */
+export function priceSourceTone(source: string): BadgeTone {
+  switch (source) {
+    case "live":
+      return "success";
+    case "csv":
+      return "secondary";
+    case "manual":
+      return "outline";
+    case "none":
+    default:
+      return "secondary";
   }
 }
 
@@ -277,4 +301,24 @@ export function parseDraftEdits(
   if (note !== "") edits.note = note;
 
   return edits;
+}
+
+// ── Update-mark input parsing (the inline "更新现价" action) ───────────────
+
+/**
+ * Validate the inline "update current price" input. Returns a positive price,
+ * or a localized error string. A blank/non-positive price is rejected — a
+ * mark override must be an actual number (unlike an unknown cost, which is
+ * simply omitted upstream).
+ */
+export function parseMarkPrice(
+  raw: string,
+  ft: FinanceTranslations,
+): number | string {
+  const trimmed = raw.trim();
+  const price = Number(trimmed);
+  if (trimmed === "" || !Number.isFinite(price) || price <= 0) {
+    return ft.portfolio.valuation.markErrPrice;
+  }
+  return price;
 }

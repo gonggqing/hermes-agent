@@ -1446,6 +1446,22 @@ export const api = {
         include_in_risk_only: includeInRiskOnly || undefined,
       })}`,
     ),
+  /**
+   * Market-value + P&L valuation. With an `accountId` it values that single
+   * account; without one it values the aggregate across accounts (and the
+   * response carries an `accounts[]` id→name list + per-holding
+   * `account_names`). `includeInRiskOnly` only applies to the aggregate.
+   * Reader — throws when the Finance service is offline so the tab shows its
+   * offline/error note.
+   */
+  financePortfolioValuation: (accountId?: string, includeInRiskOnly?: boolean) =>
+    fetchJSON<FinancePortfolioValuation>(
+      accountId
+        ? `/api/finance/v1/portfolio/accounts/${encodeURIComponent(accountId)}/valuation`
+        : `/api/finance/v1/portfolio/valuation${financeQuery({
+            include_in_risk_only: includeInRiskOnly || undefined,
+          })}`,
+    ),
   financePortfolioAudit: (accountId?: string) =>
     fetchJSON<FinancePortfolioAudit[]>(
       `/api/finance/v1/portfolio/audit${financeQuery({ account_id: accountId })}`,
@@ -1505,6 +1521,21 @@ export const api = {
     financePortfolioWrite<FinanceImportCommit>(
       `/api/finance/v1/portfolio/accounts/${encodeURIComponent(id)}/import/commit`,
       { csv, actor },
+    ),
+  /** Refresh marks from live quotes for held EXCHANGE symbols. 场外基金 (bare
+   * fund codes) have no live feed and come back in `skipped`. */
+  financeRefreshMarks: () =>
+    financePortfolioWrite<FinancePortfolioMarksRefresh>(
+      "/api/finance/v1/portfolio/marks/refresh",
+      {},
+    ),
+  /** Set/override the current price (mark) for one symbol — used to update a
+   * 场外基金 NAV by hand. Currency defaults to CNY and source to `manual` on
+   * the service when omitted. */
+  financeSetMark: (body: FinancePortfolioSetMarkRequest) =>
+    financePortfolioWrite<FinancePortfolioMark>(
+      "/api/finance/v1/portfolio/marks",
+      body,
     ),
   /**
    * POST a human confirm/edit/reject action for a portfolio draft. Mirrors
@@ -3411,6 +3442,91 @@ export interface FinancePortfolioAggregate {
   as_of: string;
   holdings: FinancePortfolioAggregateHolding[];
   cash: FinancePortfolioCash[];
+}
+
+// ── Valuation (market value + P&L) ──
+// Where the source price came from: a live quote, an imported CSV mark, a
+// hand-entered manual mark, or `none` (unpriced — e.g. a 场外基金 whose NAV
+// has no live feed). Render "unknown"/dash for `none`, never a fabricated 0.
+export type FinancePortfolioPriceSource = "live" | "csv" | "manual" | "none";
+
+export interface FinancePortfolioValuationHolding {
+  symbol: string;
+  market: FinancePortfolioMarket | null;
+  currency: string;
+  qty: number;
+  /** Nullable — see `cost_basis_known`. */
+  avg_cost: number | null;
+  cost_basis_known: boolean;
+  /** Nullable when unpriced (`price_source === "none"`). */
+  price: number | null;
+  price_as_of: string | null;
+  price_source: FinancePortfolioPriceSource;
+  /** qty × price. Null when the price is unknown. */
+  market_value: number | null;
+  /** qty × avg_cost. Null when the cost basis is unknown. */
+  cost: number | null;
+  /** market_value − cost. Null when either is unknown. */
+  unrealized_pnl: number | null;
+  /** unrealized_pnl / cost, as a FRACTION (0.2 = +20%). Null when unknown. */
+  pnl_pct: number | null;
+  /** Account ids this row rolls up (aggregate); a single id per-account. */
+  accounts: string[];
+  /** Human account names parallel to `accounts` (aggregate only; [] per-account). */
+  account_names: string[];
+}
+
+export interface FinancePortfolioValuationTotal {
+  currency: string;
+  /** holdings_value + cash. */
+  market_value: number;
+  holdings_value: number;
+  cash: number;
+  cost: number;
+  unrealized_pnl: number;
+  /** Fraction (0.2 = +20%); null when total cost is 0/unknown. */
+  pnl_pct: number | null;
+  n_priced: number;
+  n_unpriced: number;
+}
+
+/** id → name pair for the accounts an aggregate valuation rolls up. */
+export interface FinancePortfolioAccountRef {
+  id: string;
+  name: string;
+}
+
+export interface FinancePortfolioValuation {
+  as_of: string;
+  /** Present only on the aggregate endpoint. */
+  accounts?: FinancePortfolioAccountRef[];
+  totals: FinancePortfolioValuationTotal[];
+  holdings: FinancePortfolioValuationHolding[];
+}
+
+/** Body for POST /portfolio/marks (set/override one symbol's current price). */
+export interface FinancePortfolioSetMarkRequest {
+  symbol: string;
+  price: number;
+  currency?: string;
+  source?: "manual" | "csv" | "live";
+  actor: string;
+}
+
+/** Result of POST /portfolio/marks. */
+export interface FinancePortfolioMark {
+  symbol: string;
+  price: number;
+  currency: string;
+  as_of: string;
+  source: string;
+}
+
+/** Result of POST /portfolio/marks/refresh. */
+export interface FinancePortfolioMarksRefresh {
+  refreshed: string[];
+  failed: string[];
+  skipped: string[];
 }
 
 export interface FinancePortfolioAudit {

@@ -1867,6 +1867,86 @@ export interface FinanceAggregateResponse {
   cash: FinanceCashBalance[]
 }
 
+// ── Valuation (Phase 0.9 P&L) ────────────────────────────────────────────────
+// The valuation endpoints layer live/imported/manual price marks over the
+// derived holdings so the UI can show 现价/市值/盈亏. When the price OR the cost
+// basis is unknown the money fields are null and the holding is "unpriced" — the
+// UI shows a dash/未知, NEVER 0. `price_source` tells the user where the price
+// came from (live feed, imported CSV, or a manual override).
+export type FinancePriceSource = 'csv' | 'live' | 'manual' | 'none'
+
+// One valued holding. `market_value` = qty·price, `cost` = qty·avg_cost,
+// `unrealized_pnl` = market_value − cost — each null when its inputs are unknown.
+// `accounts`/`account_names` are the accounts the holding is held across.
+export interface FinanceValuationHolding {
+  symbol: string
+  market: FinancePortfolioMarket | null
+  currency: string
+  qty: number
+  avg_cost: null | number
+  cost_basis_known: boolean
+  price: null | number
+  price_as_of: null | string
+  price_source: FinancePriceSource
+  market_value: null | number
+  cost: null | number
+  unrealized_pnl: null | number
+  pnl_pct: null | number
+  accounts: string[]
+  account_names: string[]
+}
+
+// One per-currency roll-up (for this user, all CNY). `market_value` includes
+// cash; `holdings_value` is the priced holdings only. `n_priced`/`n_unpriced`
+// let the UI warn that some 场外基金 may be unpriced.
+export interface FinanceValuationTotal {
+  currency: string
+  market_value: number
+  holdings_value: number
+  cash: number
+  cost: number
+  unrealized_pnl: number
+  pnl_pct: null | number
+  n_priced: number
+  n_unpriced: number
+}
+
+export interface FinanceValuationAccountRef {
+  id: string
+  name: string
+}
+
+// `accounts` is present on the aggregate valuation (the accounts rolled up) and
+// absent on a single-account valuation.
+export interface FinanceValuationResponse {
+  as_of: string
+  accounts?: FinanceValuationAccountRef[]
+  totals: FinanceValuationTotal[]
+  holdings: FinanceValuationHolding[]
+}
+
+export interface FinanceMarkPayload {
+  symbol: string
+  price: number
+  currency?: string
+  source?: 'csv' | 'live' | 'manual'
+  actor: string
+}
+
+export interface FinanceMarkResult {
+  symbol: string
+  price: number
+  currency: string
+  as_of: string
+  source: string
+}
+
+export interface FinanceMarksRefreshResult {
+  refreshed: string[]
+  failed: string[]
+  skipped: string[]
+}
+
 export interface FinancePortfolioEvent {
   event_type: string
   symbol: null | string
@@ -2086,6 +2166,46 @@ export function getPortfolioReconcile(id: string): Promise<FinanceReconcile> {
 export function getPortfolioAggregate(opts: { includeInRiskOnly?: boolean } = {}): Promise<FinanceAggregateResponse> {
   return window.hermesDesktop.api<FinanceAggregateResponse>({
     path: `/api/finance/v1/portfolio/aggregate${financeQuery({ include_in_risk_only: opts.includeInRiskOnly })}`
+  })
+}
+
+// Portfolio valuation (Phase 0.9 P&L). With an `accountId` this reads the single
+// account's valuation; without it the cross-account aggregate (which also lists
+// the accounts rolled up in `accounts`). `includeInRiskOnly` only applies to the
+// aggregate — the service ignores it on the per-account path.
+export function getPortfolioValuation(
+  opts: { accountId?: string; includeInRiskOnly?: boolean } = {}
+): Promise<FinanceValuationResponse> {
+  if (opts.accountId) {
+    return window.hermesDesktop.api<FinanceValuationResponse>({
+      path: `/api/finance/v1/portfolio/accounts/${encodeURIComponent(opts.accountId)}/valuation`
+    })
+  }
+
+  return window.hermesDesktop.api<FinanceValuationResponse>({
+    path: `/api/finance/v1/portfolio/valuation${financeQuery({ include_in_risk_only: opts.includeInRiskOnly })}`
+  })
+}
+
+// Set/override the current price for one symbol — used to update a 场外基金 NAV
+// by hand, since a bare fund code has no live feed. As elsewhere, the human
+// `surface` rides in the body because the IPC bridge drops the X-Finance-Surface
+// header; the service keeps the audit trail attributed to "desktop".
+export function setPortfolioMark(payload: FinanceMarkPayload): Promise<FinanceMarkResult> {
+  return window.hermesDesktop.api<FinanceMarkResult>({
+    path: '/api/finance/v1/portfolio/marks',
+    method: 'POST',
+    body: { surface: 'desktop', ...payload }
+  })
+}
+
+// Refresh marks from live quotes for held EXCHANGE symbols. Bare fund codes have
+// no live feed and come back in `skipped`, never as an error.
+export function refreshPortfolioMarks(): Promise<FinanceMarksRefreshResult> {
+  return window.hermesDesktop.api<FinanceMarksRefreshResult>({
+    path: '/api/finance/v1/portfolio/marks/refresh',
+    method: 'POST',
+    body: { surface: 'desktop' }
   })
 }
 

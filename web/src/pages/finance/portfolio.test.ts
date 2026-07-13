@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import { financeEn } from "@/i18n/en";
+import { fmtPnlPct } from "./format";
 import {
   EMPTY_TRADE_FORM,
   eventTypeLabel,
   fmtCashAmount,
   fmtCostBasis,
   parseDraftEdits,
+  parseMarkPrice,
   parseTradeForm,
+  priceSourceLabel,
+  priceSourceTone,
   type SelectedInstrument,
 } from "./portfolio";
 
@@ -131,5 +135,49 @@ describe("eventTypeLabel", () => {
 
   it("falls back to the raw enum value for an unknown event type", () => {
     expect(eventTypeLabel("some_new_type", ft)).toBe("some_new_type");
+  });
+});
+
+describe("parseMarkPrice", () => {
+  it("accepts a positive price", () => {
+    expect(parseMarkPrice("4.744", ft)).toBe(4.744);
+  });
+
+  it("rejects a blank price", () => {
+    expect(parseMarkPrice("", ft)).toBe(ft.portfolio.valuation.markErrPrice);
+    expect(parseMarkPrice("   ", ft)).toBe(ft.portfolio.valuation.markErrPrice);
+  });
+
+  it("rejects a non-positive or non-numeric price", () => {
+    expect(parseMarkPrice("0", ft)).toBe(ft.portfolio.valuation.markErrPrice);
+    expect(parseMarkPrice("-3", ft)).toBe(ft.portfolio.valuation.markErrPrice);
+    expect(parseMarkPrice("abc", ft)).toBe(ft.portfolio.valuation.markErrPrice);
+  });
+});
+
+describe("priceSourceLabel", () => {
+  it("localizes each known source", () => {
+    expect(priceSourceLabel("live", ft)).toBe(ft.portfolio.valuation.sources.live);
+    expect(priceSourceLabel("csv", ft)).toBe(ft.portfolio.valuation.sources.csv);
+    expect(priceSourceLabel("manual", ft)).toBe(
+      ft.portfolio.valuation.sources.manual,
+    );
+    expect(priceSourceLabel("none", ft)).toBe(ft.portfolio.valuation.sources.none);
+  });
+
+  it("gives each source a badge tone", () => {
+    expect(priceSourceTone("live")).toBe("success");
+    expect(priceSourceTone("none")).toBe("secondary");
+  });
+});
+
+describe("fmtPnlPct", () => {
+  it("renders a fraction as a signed percentage", () => {
+    expect(fmtPnlPct(0.2)).toBe("+20.0%");
+    expect(fmtPnlPct(-0.011)).toBe("-1.1%");
+  });
+
+  it("renders a dash for an unknown P&L%", () => {
+    expect(fmtPnlPct(null)).toBe("—");
   });
 });

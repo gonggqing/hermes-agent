@@ -462,6 +462,33 @@ export interface FinanceTranslations {
       riskOnly: string;
       accountsCount: string; // "{n} accounts"
     };
+    // Valuation: P&L columns, totals summary, refresh + update-mark actions.
+    valuation: {
+      price: string; // 现价
+      marketValue: string; // 市值
+      pnl: string; // 盈亏
+      pnlPct: string; // 盈亏%
+      action: string; // update-mark column header
+      // price_source tag (live / imported CSV / manual / unpriced).
+      sources: { live: string; csv: string; manual: string; none: string };
+      unknown: string; // localized "—" for a null price/value/pnl
+      totalMarketValue: string; // 总市值 (incl. cash)
+      totalCost: string; // 总成本
+      totalPnl: string; // 总盈亏
+      cash: string; // 现金
+      pricedCount: string; // "{priced} priced · {unpriced} unpriced"
+      refresh: string; // 刷新实时价
+      refreshing: string;
+      refreshDone: string; // "{refreshed} refreshed · {skipped} skipped · {failed} failed"
+      refreshFailed: string; // "Could not refresh prices ({message})."
+      updateMark: string; // 更新现价
+      markPlaceholder: string;
+      markSave: string;
+      markCancel: string;
+      markSaved: string; // "{symbol} price updated."
+      markFailed: string; // "Could not update the price ({message})."
+      markErrPrice: string;
+    };
     // Record trade / opening position form (instrument type-ahead + confirm).
     record: {
       title: string;

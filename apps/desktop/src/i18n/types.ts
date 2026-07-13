@@ -1563,6 +1563,14 @@ export interface Translations {
       colCurrency: string
       colAmount: string
       colAccounts: string
+      // Valuation / P&L columns (Phase 0.9): current price + source tag, market
+      // value, unrealized P&L, P&L %.
+      colCurrentPrice: string
+      colMarketValue: string
+      colPnl: string
+      colPnlPct: string
+      colActions: string
+      unknownValue: string
       unknownCost: string
       unknownCash: string
       holdingsEmpty: string
@@ -1678,6 +1686,24 @@ export interface Translations {
       importCommitted: (n: number) => string
       importFailed: string
       previewFailed: string
+      // Valuation summary totals (per currency) + priced/unpriced count.
+      totalMarketValue: string
+      totalCost: string
+      totalPnl: string
+      pricedUnpriced: (priced: number, unpriced: number) => string
+      // Refresh live prices.
+      refreshPrices: string
+      refreshing: string
+      refreshTitle: string
+      refreshDone: (refreshed: number, skipped: number, failed: number) => string
+      refreshFailed: string
+      // Manual price mark (update 现价, esp. for off-exchange funds).
+      updateMark: string
+      updateMarkTitle: (symbol: string) => string
+      updateMarkDesc: string
+      markCurrencyNote: (currency: string) => string
+      markSaved: (symbol: string) => string
+      markFailed: string
     }
     // Localized labels for the fixed backend enum vocabularies (Loop.md
     // schemas): looked up by the raw wire value, humanized fallback for any
@@ -1700,6 +1726,8 @@ export interface Translations {
       authority: Record<string, string>
       provider: Record<string, string>
       accountType: Record<string, string>
+      // Where a holding's current price came from (valuation marks).
+      priceSource: Record<string, string>
     }
   }
 

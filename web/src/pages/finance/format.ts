@@ -78,6 +78,16 @@ export function fmtSignedPct(v: number | null | undefined, digits = 1): string {
   return `${v > 0 ? "+" : ""}${v.toFixed(digits)}%`;
 }
 
+/**
+ * Signed P&L percentage from a *fraction* (0.2 → "+20.0%"): the valuation
+ * endpoint reports `pnl_pct` as unrealized_pnl / cost. Nullish / NaN → "—",
+ * never a fabricated 0%.
+ */
+export function fmtPnlPct(v: number | null | undefined, digits = 1): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  return `${v > 0 ? "+" : ""}${(v * 100).toFixed(digits)}%`;
+}
+
 export function fmtTs(ts: string | null | undefined): string {
   if (!ts) return "—";
   try {

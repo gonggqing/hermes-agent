@@ -20,6 +20,7 @@ import {
   ListChecks,
   Pencil,
   Plus,
+  RefreshCw,
   Search,
   Upload,
   Wallet,
@@ -30,16 +31,15 @@ import type {
   FinanceImportPreview,
   FinanceInstrumentMatch,
   FinancePortfolioAccount,
-  FinancePortfolioAggregate,
-  FinancePortfolioCash,
   FinancePortfolioDraft,
   FinancePortfolioDraftActionOutcome,
   FinancePortfolioDraftStatus,
   FinancePortfolioEvent,
-  FinancePortfolioHolding,
-  FinancePortfolioHoldings,
   FinancePortfolioMarket,
   FinancePortfolioReconcile,
+  FinancePortfolioValuation,
+  FinancePortfolioValuationHolding,
+  FinancePortfolioValuationTotal,
 } from "@/lib/api";
 import type { FinanceTranslations } from "@/i18n/types";
 import { cn } from "@/lib/utils";
@@ -50,12 +50,21 @@ import { Input } from "@nous-research/ui/ui/components/input";
 import { Segmented } from "@nous-research/ui/ui/components/segmented";
 import { Select, SelectOption } from "@nous-research/ui/ui/components/select";
 import { Spinner } from "@nous-research/ui/ui/components/spinner";
+import { Stats } from "@nous-research/ui/ui/components/stats";
 import { Switch } from "@nous-research/ui/ui/components/switch";
 import { Toast } from "@nous-research/ui/ui/components/toast";
 import { useToast } from "@nous-research/ui/hooks/use-toast";
 import { MasterDetail, SidebarButton, SidebarGroup } from "./layout";
 import { useFinanceT } from "./i18n";
-import { FINANCE_ACTOR, fmtMoney, fmtQty, fmtTs } from "./format";
+import {
+  FINANCE_ACTOR,
+  fmtMoney,
+  fmtPnlPct,
+  fmtQty,
+  fmtSigned,
+  fmtTs,
+  pnlClass,
+} from "./format";
 import {
   ACCOUNT_TYPE_OPTIONS,
   DRAFT_STATUS_OPTIONS,
@@ -72,11 +81,13 @@ import {
   draftStatusLabel,
   draftStatusTone,
   eventTypeLabel,
-  fmtCashAmount,
   fmtCostBasis,
   marketLabel,
   parseDraftEdits,
+  parseMarkPrice,
   parseTradeForm,
+  priceSourceLabel,
+  priceSourceTone,
   providerLabel,
   securityTypeLabel,
 } from "./portfolio";
@@ -123,21 +134,77 @@ function Field({
   );
 }
 
-// ── Holdings + cash tables (shared by per-account and aggregate views) ───
+// ── Valuation table + totals (shared by per-account and aggregate views) ─
 
-function HoldingsTable({
+/** Current price + its source tag, or a localized dash + the "unknown" tag
+ * when the holding is unpriced (never a fabricated 0). */
+function PriceCell({
+  holding,
+  ft,
+}: {
+  holding: FinancePortfolioValuationHolding;
+  ft: FinanceTranslations;
+}) {
+  const v = ft.portfolio.valuation;
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <span className={holding.price === null ? "text-text-tertiary" : ""}>
+        {holding.price === null ? v.unknown : fmtMoney(holding.price)}
+      </span>
+      <Badge tone={priceSourceTone(holding.price_source)}>
+        {priceSourceLabel(holding.price_source, ft)}
+      </Badge>
+    </div>
+  );
+}
+
+function ValuationTable({
   holdings,
   showAccounts,
   emptyText,
+  onSetMark,
+  savingSymbol,
   ft,
 }: {
-  holdings: (FinancePortfolioHolding & { accounts?: string[] })[];
+  holdings: FinancePortfolioValuationHolding[];
   showAccounts?: boolean;
   emptyText: string;
+  onSetMark: (
+    symbol: string,
+    currency: string,
+    price: number,
+  ) => Promise<boolean>;
+  savingSymbol: string | null;
   ft: FinanceTranslations;
 }) {
   const h = ft.portfolio.holdings;
+  const v = ft.portfolio.valuation;
+  // Inline "更新现价" editor state — one row at a time (ApprovalQueue pattern).
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [editError, setEditError] = useState<string | null>(null);
+
   if (holdings.length === 0) return <Note>{emptyText}</Note>;
+
+  const startEdit = (row: FinancePortfolioValuationHolding) => {
+    setEditing(row.symbol);
+    setDraft(row.price === null ? "" : String(row.price));
+    setEditError(null);
+  };
+  const cancelEdit = () => {
+    setEditing(null);
+    setEditError(null);
+  };
+  const save = async (row: FinancePortfolioValuationHolding) => {
+    const parsed = parseMarkPrice(draft, ft);
+    if (typeof parsed === "string") {
+      setEditError(parsed);
+      return;
+    }
+    const ok = await onSetMark(row.symbol, row.currency, parsed);
+    if (ok) cancelEdit();
+  };
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full font-mondwest normal-case text-sm">
@@ -147,123 +214,253 @@ function HoldingsTable({
             <th className="text-left py-2 px-4 font-medium">{h.market}</th>
             <th className="text-right py-2 px-4 font-medium">{h.qty}</th>
             <th className="text-right py-2 px-4 font-medium">{h.avgCost}</th>
+            <th className="text-right py-2 px-4 font-medium">{v.price}</th>
+            <th className="text-right py-2 px-4 font-medium">{v.marketValue}</th>
+            <th className="text-right py-2 px-4 font-medium">{v.pnl}</th>
+            <th className="text-right py-2 px-4 font-medium">{v.pnlPct}</th>
             <th className="text-left py-2 px-4 font-medium">{h.currency}</th>
             {showAccounts && (
-              <th className="text-right py-2 pl-4 font-medium">{h.accounts}</th>
+              <th className="text-left py-2 px-4 font-medium">{h.accounts}</th>
             )}
+            <th className="text-right py-2 pl-4 font-medium">
+              <span className="sr-only">{v.action}</span>
+            </th>
           </tr>
         </thead>
         <tbody>
-          {holdings.map((row) => (
-            <tr
-              key={`${row.symbol}:${row.market}`}
-              className="border-b border-border/50 hover:bg-secondary/20 transition-colors"
-            >
-              <td className="py-2 pr-4">
-                <span className="font-mono-ui text-xs">{row.symbol}</span>
-              </td>
-              <td className="py-2 px-4">
-                <Badge tone="outline">{marketLabel(row.market, ft)}</Badge>
-              </td>
-              <td className="text-right py-2 px-4">{fmtQty(row.qty)}</td>
-              <td
-                className={cn(
-                  "text-right py-2 px-4",
-                  row.cost_basis_known ? "" : "text-text-tertiary italic",
-                )}
+          {holdings.map((row) => {
+            const isEditing = editing === row.symbol;
+            const busy = savingSymbol === row.symbol;
+            const pnlTone = pnlClass(row.unrealized_pnl);
+            return (
+              <tr
+                key={`${row.symbol}:${row.market ?? ""}`}
+                className="border-b border-border/50 hover:bg-secondary/20 transition-colors"
               >
-                {fmtCostBasis(row.avg_cost, row.cost_basis_known, ft)}
-              </td>
-              <td className="py-2 px-4 text-muted-foreground">{row.currency}</td>
-              {showAccounts && (
-                <td className="text-right py-2 pl-4 text-muted-foreground">
-                  {row.accounts?.length ?? 0}
+                <td className="py-2 pr-4">
+                  <span className="font-mono-ui text-xs">{row.symbol}</span>
                 </td>
-              )}
-            </tr>
-          ))}
+                <td className="py-2 px-4">
+                  <Badge tone="outline">{marketLabel(row.market, ft)}</Badge>
+                </td>
+                <td className="text-right py-2 px-4">{fmtQty(row.qty)}</td>
+                <td
+                  className={cn(
+                    "text-right py-2 px-4",
+                    row.cost_basis_known ? "" : "text-text-tertiary italic",
+                  )}
+                >
+                  {fmtCostBasis(row.avg_cost, row.cost_basis_known, ft)}
+                </td>
+                <td className="text-right py-2 px-4">
+                  {isEditing ? (
+                    <div className="flex flex-col items-end gap-1">
+                      <Input
+                        type="number"
+                        step="any"
+                        min="0"
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        placeholder={v.markPlaceholder}
+                        aria-label={v.updateMark}
+                        className="w-28 text-right"
+                      />
+                      {editError && (
+                        <span className="text-xs text-destructive">
+                          {editError}
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <PriceCell holding={row} ft={ft} />
+                  )}
+                </td>
+                <td className="text-right py-2 px-4">
+                  {row.market_value === null ? (
+                    <span className="text-text-tertiary">{v.unknown}</span>
+                  ) : (
+                    fmtMoney(row.market_value)
+                  )}
+                </td>
+                <td className={cn("text-right py-2 px-4", pnlTone)}>
+                  {fmtSigned(row.unrealized_pnl)}
+                </td>
+                <td className={cn("text-right py-2 px-4", pnlTone)}>
+                  {fmtPnlPct(row.pnl_pct)}
+                </td>
+                <td className="py-2 px-4 text-muted-foreground">
+                  {row.currency}
+                </td>
+                {showAccounts && (
+                  <td className="py-2 px-4 text-muted-foreground">
+                    {row.account_names.length > 0
+                      ? row.account_names.join(", ")
+                      : v.unknown}
+                  </td>
+                )}
+                <td className="text-right py-2 pl-4">
+                  {isEditing ? (
+                    <div className="flex items-center justify-end gap-1">
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => void save(row)}
+                        prefix={busy ? <Spinner /> : <Check />}
+                      >
+                        {v.markSave}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        outlined
+                        disabled={busy}
+                        onClick={cancelEdit}
+                        prefix={<X />}
+                      >
+                        {v.markCancel}
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="sm"
+                      ghost
+                      disabled={editing !== null}
+                      onClick={() => startEdit(row)}
+                      prefix={<Pencil />}
+                    >
+                      {v.updateMark}
+                    </Button>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
   );
 }
 
-function CashTable({
-  cash,
+// ── Totals summary (per-currency market value / cost / P&L) ───────────────
+
+function TotalsSummary({
+  totals,
   ft,
 }: {
-  cash: FinancePortfolioCash[];
+  totals: FinancePortfolioValuationTotal[];
   ft: FinanceTranslations;
 }) {
-  const h = ft.portfolio.holdings;
+  const v = ft.portfolio.valuation;
+  if (totals.length === 0) return null;
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{h.cashTitle}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        {cash.length === 0 ? (
-          <Note>{h.cashEmpty}</Note>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full font-mondwest normal-case text-sm">
-              <thead>
-                <tr className="border-b border-border text-muted-foreground text-xs">
-                  <th className="text-left py-2 pr-4 font-medium">
-                    {h.currency}
-                  </th>
-                  <th className="text-right py-2 pl-4 font-medium">
-                    {h.cashAmount}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {cash.map((c) => (
-                  <tr
-                    key={c.currency}
-                    className="border-b border-border/50 hover:bg-secondary/20 transition-colors"
-                  >
-                    <td className="py-2 pr-4 text-muted-foreground">
-                      {c.currency}
-                    </td>
-                    <td
-                      className={cn(
-                        "text-right py-2 pl-4",
-                        c.known ? "" : "text-text-tertiary italic",
-                      )}
-                    >
-                      {fmtCashAmount(c.amount, c.known, ft)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+    <div className="flex flex-col gap-5">
+      {totals.map((t) => {
+        const money = (n: number) => `${fmtMoney(n)} ${t.currency}`;
+        const items = [
+          {
+            label: v.totalMarketValue,
+            value: {
+              key: "mv",
+              node: (
+                <span className="text-foreground">{money(t.market_value)}</span>
+              ),
+            },
+          },
+          {
+            label: v.totalCost,
+            value: {
+              key: "cost",
+              node: <span className="text-foreground">{money(t.cost)}</span>,
+            },
+          },
+          {
+            label: v.totalPnl,
+            value: {
+              key: "pnl",
+              node: (
+                <span className={pnlClass(t.unrealized_pnl)}>
+                  {fmtSigned(t.unrealized_pnl)} {t.currency}
+                </span>
+              ),
+            },
+          },
+          {
+            label: v.pnlPct,
+            value: {
+              key: "pct",
+              node: (
+                <span className={pnlClass(t.unrealized_pnl)}>
+                  {fmtPnlPct(t.pnl_pct)}
+                </span>
+              ),
+            },
+          },
+          {
+            label: v.cash,
+            value: {
+              key: "cash",
+              node: (
+                <span className="text-muted-foreground">{money(t.cash)}</span>
+              ),
+            },
+          },
+        ];
+        return (
+          <div key={t.currency} className="flex flex-col gap-2">
+            {totals.length > 1 && (
+              <span className="font-mono-ui text-xs text-muted-foreground">
+                {t.currency}
+              </span>
+            )}
+            <Stats flip items={items} />
+            <p className="font-mondwest normal-case text-xs text-text-tertiary">
+              {v.pricedCount
+                .replace("{priced}", String(t.n_priced))
+                .replace("{unpriced}", String(t.n_unpriced))}
+            </p>
           </div>
-        )}
-      </CardContent>
-    </Card>
+        );
+      })}
+    </div>
   );
 }
 
-// ── Aggregate ("All accounts") ───────────────────────────────────────────
+// ── Valuation view (per-account & aggregate: totals + P&L holdings) ───────
+// Backs both the account "Holdings" tab (accountId set) and the "All
+// accounts" aggregate (accountId undefined). Reads the /valuation endpoints
+// so every row carries a live/imported/manual price + market value + P&L.
 
-function AggregateView({
+function ValuationView({
+  accountId,
   reloadToken,
+  showToast,
   ft,
 }: {
+  accountId?: string;
   reloadToken: number;
+  showToast: ShowToast;
   ft: FinanceTranslations;
 }) {
+  const p = ft.portfolio;
+  const v = p.valuation;
+  const isAggregate = accountId === undefined;
   const [riskOnly, setRiskOnly] = useState(false);
-  const [data, setData] = useState<FinancePortfolioAggregate | null>(null);
+  const [data, setData] = useState<FinancePortfolioValuation | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-  const p = ft.portfolio;
+  const [localReload, setLocalReload] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [savingSymbol, setSavingSymbol] = useState<string | null>(null);
 
+  // Loader mirrors the house pattern: no synchronous setState in the effect
+  // body — the initial `loading` covers first paint; a refetch keeps the
+  // stale table on screen until it resolves.
   useEffect(() => {
     let cancelled = false;
     api
-      .financePortfolioAggregate(riskOnly)
+      .financePortfolioValuation(accountId, isAggregate ? riskOnly : undefined)
       .then((d) => {
         if (!cancelled) {
           setData(d);
@@ -279,25 +476,107 @@ function AggregateView({
     return () => {
       cancelled = true;
     };
-  }, [riskOnly, reloadToken]);
+  }, [accountId, isAggregate, riskOnly, reloadToken, localReload]);
+
+  const reload = () => setLocalReload((n) => n + 1);
+
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      const res = await api.financeRefreshMarks();
+      if (!res.ok || res.data === null) {
+        showToast(v.refreshFailed.replace("{message}", res.error), "error");
+        return;
+      }
+      const r = res.data;
+      showToast(
+        v.refreshDone
+          .replace("{refreshed}", String(r.refreshed.length))
+          .replace("{skipped}", String(r.skipped.length))
+          .replace("{failed}", String(r.failed.length)),
+        "success",
+      );
+      reload();
+    } catch (err) {
+      showToast(v.refreshFailed.replace("{message}", String(err)), "error");
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const setMark = async (
+    symbol: string,
+    currency: string,
+    price: number,
+  ): Promise<boolean> => {
+    setSavingSymbol(symbol);
+    try {
+      const res = await api.financeSetMark({
+        symbol,
+        price,
+        currency,
+        source: "manual",
+        actor: FINANCE_ACTOR,
+      });
+      if (!res.ok || res.data === null) {
+        showToast(v.markFailed.replace("{message}", res.error), "error");
+        return false;
+      }
+      showToast(v.markSaved.replace("{symbol}", symbol), "success");
+      reload();
+      return true;
+    } catch (err) {
+      showToast(v.markFailed.replace("{message}", String(err)), "error");
+      return false;
+    } finally {
+      setSavingSymbol(null);
+    }
+  };
+
+  // Bug fix: render account NAMES, never the raw UUIDs from accounts[].id.
+  const accountNames = data?.accounts?.map((a) => a.name) ?? [];
 
   return (
     <div className="flex flex-col gap-6">
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center gap-2">
-            <Wallet className="h-5 w-5 text-muted-foreground" />
-            <CardTitle className="text-base">{p.aggregate.title}</CardTitle>
-            {data && (
+            {isAggregate && <Wallet className="h-5 w-5 text-muted-foreground" />}
+            <CardTitle className="text-base">
+              {isAggregate ? p.aggregate.title : p.holdings.title}
+            </CardTitle>
+            {isAggregate && data?.accounts && (
               <Badge tone="secondary">
-                {p.aggregate.accountsCount.replace("{n}", String(data.accounts))}
+                {p.aggregate.accountsCount.replace(
+                  "{n}",
+                  String(data.accounts.length),
+                )}
               </Badge>
             )}
-            <label className="ml-auto flex items-center gap-2 font-mondwest normal-case text-xs text-muted-foreground">
-              <Switch checked={riskOnly} onCheckedChange={setRiskOnly} />
-              {p.aggregate.riskOnly}
-            </label>
+            <div className="ml-auto flex flex-wrap items-center gap-3">
+              <Button
+                type="button"
+                size="sm"
+                outlined
+                disabled={refreshing}
+                onClick={() => void refresh()}
+                prefix={refreshing ? <Spinner /> : <RefreshCw />}
+              >
+                {refreshing ? v.refreshing : v.refresh}
+              </Button>
+              {isAggregate && (
+                <label className="flex items-center gap-2 font-mondwest normal-case text-xs text-muted-foreground">
+                  <Switch checked={riskOnly} onCheckedChange={setRiskOnly} />
+                  {p.aggregate.riskOnly}
+                </label>
+              )}
+            </div>
           </div>
+          {isAggregate && accountNames.length > 0 && (
+            <p className="font-mondwest normal-case text-xs text-muted-foreground">
+              {accountNames.join(" · ")}
+            </p>
+          )}
           {data && (
             <p className="font-mondwest normal-case text-xs text-text-tertiary">
               {p.holdings.asOf.replace("{time}", fmtTs(data.as_of))}
@@ -310,16 +589,22 @@ function AggregateView({
           ) : error && data === null ? (
             <Note>{p.loadError}</Note>
           ) : (
-            <HoldingsTable
-              holdings={data?.holdings ?? []}
-              showAccounts
-              emptyText={p.holdings.emptyAggregate}
-              ft={ft}
-            />
+            <div className="flex flex-col gap-6">
+              <TotalsSummary totals={data?.totals ?? []} ft={ft} />
+              <ValuationTable
+                holdings={data?.holdings ?? []}
+                showAccounts={isAggregate}
+                emptyText={
+                  isAggregate ? p.holdings.emptyAggregate : p.holdings.empty
+                }
+                onSetMark={setMark}
+                savingSymbol={savingSymbol}
+                ft={ft}
+              />
+            </div>
           )}
         </CardContent>
       </Card>
-      {data && data.cash.length > 0 && <CashTable cash={data.cash} ft={ft} />}
     </div>
   );
 }
@@ -677,77 +962,6 @@ function RecordTradeForm({
         </div>
       </CardContent>
     </Card>
-  );
-}
-
-// ── Per-account holdings ─────────────────────────────────────────────────
-
-function AccountHoldingsView({
-  accountId,
-  reloadToken,
-  ft,
-}: {
-  accountId: string;
-  reloadToken: number;
-  ft: FinanceTranslations;
-}) {
-  const [data, setData] = useState<FinancePortfolioHoldings | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-  const p = ft.portfolio;
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .financePortfolioHoldings(accountId)
-      .then((d) => {
-        if (!cancelled) {
-          setData(d);
-          setError(false);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setError(true);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [accountId, reloadToken]);
-
-  if (loading && data === null) return <Loading />;
-  if (error && data === null) return <Note>{p.loadError}</Note>;
-
-  return (
-    <div className="flex flex-col gap-6">
-      <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-center gap-2">
-            <CardTitle className="text-base">{p.holdings.title}</CardTitle>
-            {data && (
-              <>
-                <Badge tone="secondary">
-                  {p.holdings.nEvents.replace("{n}", String(data.n_events))}
-                </Badge>
-                <span className="ml-auto font-mondwest normal-case text-xs text-text-tertiary">
-                  {p.holdings.asOf.replace("{time}", fmtTs(data.as_of))}
-                </span>
-              </>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent>
-          <HoldingsTable
-            holdings={data?.holdings ?? []}
-            emptyText={p.holdings.empty}
-            ft={ft}
-          />
-        </CardContent>
-      </Card>
-      {data && <CashTable cash={data.cash} ft={ft} />}
-    </div>
   );
 }
 
@@ -1375,9 +1589,10 @@ function AccountDetail({
       />
 
       {tab === "holdings" && (
-        <AccountHoldingsView
+        <ValuationView
           accountId={account.id}
           reloadToken={token}
+          showToast={showToast}
           ft={ft}
         />
       )}
@@ -2106,7 +2321,9 @@ export function PortfolioManager() {
       </Card>
     );
   } else {
-    detail = <AggregateView reloadToken={reloadToken} ft={ft} />;
+    detail = (
+      <ValuationView reloadToken={reloadToken} showToast={showToast} ft={ft} />
+    );
   }
 
   return (

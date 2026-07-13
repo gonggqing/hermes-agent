@@ -30,30 +30,32 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import {
   type FinanceAccountType,
-  type FinanceCashBalance,
   type FinanceDraftActionPayload,
-  type FinanceHolding,
   type FinanceImportPreview,
   type FinanceInstrumentMatch,
   type FinancePortfolioAccount,
   type FinancePortfolioDraft,
   type FinancePortfolioMarket,
+  type FinancePriceSource,
+  type FinanceValuationHolding,
+  type FinanceValuationTotal,
   getPortfolioAccounts,
-  getPortfolioAggregate,
   getPortfolioDrafts,
   getPortfolioEvents,
-  getPortfolioHoldings,
   getPortfolioReconcile,
+  getPortfolioValuation,
   postPortfolioAccount,
   postPortfolioAccountUpdate,
   postPortfolioDraft,
   postPortfolioDraftAction,
   postPortfolioImportCommit,
   postPortfolioImportPreview,
-  searchInstruments
+  refreshPortfolioMarks,
+  searchInstruments,
+  setPortfolioMark
 } from '@/hermes'
 import { useI18n } from '@/i18n'
-import { FileText, Landmark, Pencil, Plus, Search, Upload } from '@/lib/icons'
+import { FileText, Landmark, Pencil, Plus, RefreshCw, Search, Upload } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { notify, notifyError } from '@/store/notifications'
 
@@ -70,12 +72,15 @@ import {
   fmtMoney,
   fmtPrice,
   fmtQty,
+  fmtSignedMoney,
+  fmtSignedPct,
   fmtTs,
   idempotencyKeyFor,
   parseFinanceError,
+  pnlClass,
   settleIdempotencyKey
 } from './lib'
-import { FinanceCard, FinancePill, FinanceSectionLabel, FinanceTable, QuerySection } from './primitives'
+import { FinanceCard, FinancePill, FinanceSectionLabel, FinanceTable, QuerySection, StatTile } from './primitives'
 
 // Real multi-account holdings (Loop.md Phase 0.9): the user's REAL US/HK/CN
 // brokerage accounts, tracked separately from the paper book. READ / DRAFT
@@ -252,9 +257,73 @@ export function FinanceHoldingsView({ enabled }: { enabled: boolean }) {
   )
 }
 
-// ── Holdings + cash tables (shared by the account and aggregate views) ───────
+// ── Valuation tables + summary (shared by the account and aggregate views) ───
+// The valuation endpoints layer live/imported/manual price marks over the
+// derived holdings so we can show 现价/市值/盈亏. When the price OR the cost is
+// unknown the money fields are null and we render a muted 未知, NEVER a 0.
 
-function HoldingsTable({ holdings, showAccounts }: { holdings: FinanceHolding[]; showAccounts?: boolean }) {
+// price_source → tag tone. A manual override is highlighted (warn), a live feed
+// reads as an accent, an imported CSV is muted, and "none" (no price) is a quiet
+// outline.
+const PRICE_SOURCE_VARIANT: Record<FinancePriceSource, 'default' | 'muted' | 'outline' | 'warn'> = {
+  csv: 'muted',
+  live: 'default',
+  manual: 'warn',
+  none: 'outline'
+}
+
+function PriceSourceTag({ source }: { source: FinancePriceSource }) {
+  const { t } = useI18n()
+
+  return (
+    <FinancePill variant={PRICE_SOURCE_VARIANT[source]}>{enumLabel(t.finance.enums.priceSource, source)}</FinancePill>
+  )
+}
+
+// A muted "未知" for a null money/price field — the shared "never render 0" cell.
+function UnknownCell() {
+  const { t } = useI18n()
+
+  return <span className="italic text-muted-foreground/70">{t.finance.holdings.unknownValue}</span>
+}
+
+// POST /portfolio/marks/refresh, then reload the valuation. Bare fund codes have
+// no live feed and come back in `skipped` — the toast surfaces the counts.
+function RefreshPricesButton() {
+  const { t } = useI18n()
+  const copy = t.finance.holdings
+  const queryClient = useQueryClient()
+
+  const mutation = useMutation({
+    mutationFn: refreshPortfolioMarks,
+    onError: error_ => notifyError(new Error(parseFinanceError(error_).message), copy.refreshFailed),
+    onSuccess: result => {
+      notify({
+        kind: 'success',
+        message: copy.refreshDone(result.refreshed.length, result.skipped.length, result.failed.length),
+        title: copy.refreshTitle
+      })
+      void queryClient.invalidateQueries({ queryKey: FINANCE_KEY })
+    }
+  })
+
+  return (
+    <Button disabled={mutation.isPending} onClick={() => mutation.mutate()} size="xs" variant="outline">
+      <RefreshCw className="size-3" />
+      {mutation.isPending ? copy.refreshing : copy.refreshPrices}
+    </Button>
+  )
+}
+
+function ValuationHoldingsTable({
+  holdings,
+  onEditMark,
+  showAccounts
+}: {
+  holdings: FinanceValuationHolding[]
+  onEditMark: (holding: FinanceValuationHolding) => void
+  showAccounts?: boolean
+}) {
   const { t } = useI18n()
   const copy = t.finance.holdings
 
@@ -263,8 +332,13 @@ function HoldingsTable({ holdings, showAccounts }: { holdings: FinanceHolding[];
     { label: copy.colMarket },
     { align: 'right' as const, label: copy.colQty },
     { align: 'right' as const, label: copy.colAvgCost },
+    { align: 'right' as const, label: copy.colCurrentPrice },
+    { align: 'right' as const, label: copy.colMarketValue },
+    { align: 'right' as const, label: copy.colPnl },
+    { align: 'right' as const, label: copy.colPnlPct },
     { label: copy.colCurrency },
-    ...(showAccounts ? [{ align: 'right' as const, label: copy.colAccounts }] : [])
+    ...(showAccounts ? [{ align: 'right' as const, label: copy.colAccounts }] : []),
+    { align: 'right' as const, label: copy.colActions }
   ]
 
   return (
@@ -275,7 +349,7 @@ function HoldingsTable({ holdings, showAccounts }: { holdings: FinanceHolding[];
           <span className="font-medium text-foreground" key="s">
             {holding.symbol}
           </span>,
-          enumLabel(t.finance.enums.market, holding.market),
+          holding.market ? enumLabel(t.finance.enums.market, holding.market) : <UnknownCell key="m" />,
           fmtQty(holding.qty),
           // Never fabricate a cost when the basis is unknown — show a muted word.
           holding.cost_basis_known && holding.avg_cost !== null ? (
@@ -285,40 +359,168 @@ function HoldingsTable({ holdings, showAccounts }: { holdings: FinanceHolding[];
               {copy.unknownCost}
             </span>
           ),
+          // 现价 + a small tag for where the price came from.
+          <span className="inline-flex items-center justify-end gap-1.5" key="px">
+            {holding.price === null ? <UnknownCell /> : fmtPrice(holding.price)}
+            <PriceSourceTag source={holding.price_source} />
+          </span>,
+          holding.market_value === null ? <UnknownCell key="mv" /> : fmtMoney(holding.market_value),
+          holding.unrealized_pnl === null ? (
+            <UnknownCell key="pnl" />
+          ) : (
+            <span className={pnlClass(holding.unrealized_pnl)} key="pnl">
+              {fmtSignedMoney(holding.unrealized_pnl)}
+            </span>
+          ),
+          holding.pnl_pct === null ? (
+            <UnknownCell key="pct" />
+          ) : (
+            <span className={pnlClass(holding.pnl_pct)} key="pct">
+              {fmtSignedPct(holding.pnl_pct)}
+            </span>
+          ),
           holding.currency,
-          ...(showAccounts ? [copy.heldInAccounts(holding.accounts?.length ?? 0)] : [])
+          ...(showAccounts ? [copy.heldInAccounts(holding.account_names.length)] : []),
+          <Button key="act" onClick={() => onEditMark(holding)} size="xs" variant="ghost">
+            <Pencil className="size-3" />
+            {copy.updateMark}
+          </Button>
         ],
-        key: `${holding.symbol}-${holding.market}`
+        key: `${holding.symbol}-${holding.market ?? 'na'}`
       }))}
     />
   )
 }
 
-function CashTable({ cash }: { cash: FinanceCashBalance[] }) {
+// Per-currency totals: 总市值 (incl. cash), 现金, 总成本, 总盈亏 (+%), plus how many
+// holdings are priced vs unpriced so the user knows some 场外基金 may be unpriced.
+function ValuationSummary({ totals }: { totals: FinanceValuationTotal[] }) {
   const { t } = useI18n()
   const copy = t.finance.holdings
 
-  if (cash.length === 0) {
-    return <div className="py-1 text-xs text-muted-foreground">{copy.cashEmpty}</div>
+  if (totals.length === 0) {
+    return null
   }
 
   return (
-    <FinanceTable
-      columns={[{ label: copy.colCurrency }, { align: 'right', label: copy.colAmount }]}
-      rows={cash.map(balance => ({
-        cells: [
-          balance.currency,
-          balance.known && balance.amount !== null ? (
-            fmtMoney(balance.amount)
-          ) : (
-            <span className="italic text-muted-foreground/70" key="a">
-              {copy.unknownCash}
-            </span>
-          )
-        ],
-        key: balance.currency
-      }))}
-    />
+    <div className="space-y-3">
+      {totals.map(total => (
+        <div className="space-y-1.5" key={total.currency}>
+          {totals.length > 1 && <FinanceSectionLabel>{total.currency}</FinanceSectionLabel>}
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <StatTile hint={total.currency} label={copy.totalMarketValue} value={fmtMoney(total.market_value)} />
+            <StatTile hint={total.currency} label={copy.cashTitle} value={fmtMoney(total.cash)} />
+            <StatTile hint={total.currency} label={copy.totalCost} value={fmtMoney(total.cost)} />
+            <StatTile
+              hint={fmtSignedPct(total.pnl_pct)}
+              label={copy.totalPnl}
+              tone={pnlClass(total.unrealized_pnl)}
+              value={fmtSignedMoney(total.unrealized_pnl)}
+            />
+          </div>
+          <div className="text-[0.62rem] text-muted-foreground/70">
+            {copy.pricedUnpriced(total.n_priced, total.n_unpriced)}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// Manual price mark — set/override 现价 for one holding (esp. a 场外基金 whose NAV
+// has no live feed). Mirrors the EditDraftDialog form house style; the service
+// records the "manual" source and the valuation is reloaded on success.
+function EditMarkDialog({
+  holding,
+  onClose
+}: {
+  holding: FinanceValuationHolding | null
+  onClose: () => void
+}) {
+  const { t } = useI18n()
+  const copy = t.finance.holdings
+  const queryClient = useQueryClient()
+  const open = holding !== null
+  const [price, setPrice] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (holding) {
+      setPrice(holding.price?.toString() ?? '')
+      setError('')
+    }
+  }, [holding])
+
+  const mutation = useMutation({
+    mutationFn: () => {
+      if (!holding) {
+        throw new Error('no holding')
+      }
+
+      return setPortfolioMark({
+        actor: FINANCE_ACTOR,
+        currency: holding.currency,
+        price: Number(price),
+        symbol: holding.symbol
+      })
+    },
+    onError: error_ => notifyError(new Error(parseFinanceError(error_).message), copy.markFailed),
+    onSuccess: result => {
+      notify({ kind: 'success', message: '', title: copy.markSaved(result.symbol) })
+      void queryClient.invalidateQueries({ queryKey: FINANCE_KEY })
+      onClose()
+    }
+  })
+
+  function handleSubmit(event: FormEvent) {
+    event.preventDefault()
+    const value = Number(price.trim())
+
+    if (!price.trim() || !Number.isFinite(value) || value <= 0) {
+      setError(copy.positiveNumber(copy.colCurrentPrice))
+
+      return
+    }
+
+    setError('')
+    mutation.mutate()
+  }
+
+  return (
+    <Dialog onOpenChange={value => !value && !mutation.isPending && onClose()} open={open}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>{copy.updateMarkTitle(holding?.symbol ?? '')}</DialogTitle>
+          <DialogDescription>{copy.updateMarkDesc}</DialogDescription>
+        </DialogHeader>
+
+        <form className="grid gap-3" onSubmit={handleSubmit}>
+          <Field htmlFor="mark-price" label={copy.colCurrentPrice}>
+            <Input
+              id="mark-price"
+              inputMode="decimal"
+              onChange={event => setPrice(event.target.value)}
+              placeholder="—"
+              value={price}
+            />
+            {holding ? (
+              <span className="text-[0.62rem] text-muted-foreground/70">{copy.markCurrencyNote(holding.currency)}</span>
+            ) : null}
+          </Field>
+
+          {error && <ErrorBanner>{error}</ErrorBanner>}
+
+          <DialogFooter>
+            <Button disabled={mutation.isPending} onClick={onClose} type="button" variant="outline">
+              {t.common.cancel}
+            </Button>
+            <Button disabled={mutation.isPending} type="submit">
+              {mutation.isPending ? t.common.saving : copy.updateMark}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -328,48 +530,52 @@ function AggregateSection({ enabled }: { enabled: boolean }) {
   const { t } = useI18n()
   const copy = t.finance.holdings
   const [riskOnly, setRiskOnly] = useState(false)
+  const [editingMark, setEditingMark] = useState<FinanceValuationHolding | null>(null)
 
-  const aggregateQuery = useQuery({
+  const valuationQuery = useQuery({
     enabled,
-    queryFn: () => getPortfolioAggregate({ includeInRiskOnly: riskOnly }),
-    queryKey: financeKey('portfolio', 'aggregate', riskOnly ? 'risk' : 'all'),
+    queryFn: () => getPortfolioValuation({ includeInRiskOnly: riskOnly }),
+    queryKey: financeKey('portfolio', 'valuation', 'aggregate', riskOnly ? 'risk' : 'all'),
     retry: 1
   })
 
-  const data = aggregateQuery.data
+  const data = valuationQuery.data
+  // Bug fix: render account NAMES, never the raw UUIDs the roll-up carries.
+  const accountNames = data?.accounts?.map(account => account.name) ?? []
 
   return (
     <section className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <FinanceSectionLabel>{copy.aggregateTitle}</FinanceSectionLabel>
-        <label className="flex items-center gap-1.5 text-[0.65rem] text-(--ui-text-secondary)">
-          <Switch checked={riskOnly} onCheckedChange={setRiskOnly} size="xs" />
-          {copy.riskOnly}
-        </label>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-1.5 text-[0.65rem] text-(--ui-text-secondary)">
+            <Switch checked={riskOnly} onCheckedChange={setRiskOnly} size="xs" />
+            {copy.riskOnly}
+          </label>
+          <RefreshPricesButton />
+        </div>
       </div>
 
       {data && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.62rem] text-muted-foreground/70">
-          <span>{copy.accountsCount(data.accounts)}</span>
+          <span>{copy.accountsCount(data.accounts?.length ?? 0)}</span>
+          {accountNames.length > 0 && <span className="text-(--ui-text-secondary)">{accountNames.join(' · ')}</span>}
           <span>{copy.asOf(fmtTs(data.as_of))}</span>
         </div>
       )}
 
+      {data && data.totals.length > 0 && <ValuationSummary totals={data.totals} />}
+
       <QuerySection
         empty={copy.aggregateEmpty}
-        error={aggregateQuery.isError ? aggregateQuery.error : undefined}
+        error={valuationQuery.isError ? valuationQuery.error : undefined}
         isEmpty={!data || data.holdings.length === 0}
-        loading={aggregateQuery.isPending}
+        loading={valuationQuery.isPending}
       >
-        {data && <HoldingsTable holdings={data.holdings} showAccounts />}
+        {data && <ValuationHoldingsTable holdings={data.holdings} onEditMark={setEditingMark} showAccounts />}
       </QuerySection>
 
-      {data && data.cash.length > 0 && (
-        <section className="space-y-2">
-          <FinanceSectionLabel>{copy.cashTitle}</FinanceSectionLabel>
-          <CashTable cash={data.cash} />
-        </section>
-      )}
+      <EditMarkDialog holding={editingMark} onClose={() => setEditingMark(null)} />
     </section>
   )
 }
@@ -452,40 +658,40 @@ function AccountDetail({
 function AccountHoldingsTab({ account, enabled }: { account: FinancePortfolioAccount; enabled: boolean }) {
   const { t } = useI18n()
   const copy = t.finance.holdings
+  const [editingMark, setEditingMark] = useState<FinanceValuationHolding | null>(null)
 
-  const holdingsQuery = useQuery({
+  const valuationQuery = useQuery({
     enabled,
-    queryFn: () => getPortfolioHoldings(account.id),
-    queryKey: financeKey('portfolio', 'holdings', account.id),
+    queryFn: () => getPortfolioValuation({ accountId: account.id }),
+    queryKey: financeKey('portfolio', 'valuation', account.id),
     retry: 1
   })
 
-  const data = holdingsQuery.data
+  const data = valuationQuery.data
 
   return (
     <div className="space-y-3">
-      {data && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.62rem] text-muted-foreground/70">
-          <span>{copy.nEvents(data.n_events)}</span>
-          <span>{copy.asOf(fmtTs(data.as_of))}</span>
-        </div>
-      )}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {data ? (
+          <span className="text-[0.62rem] text-muted-foreground/70">{copy.asOf(fmtTs(data.as_of))}</span>
+        ) : (
+          <span />
+        )}
+        <RefreshPricesButton />
+      </div>
+
+      {data && data.totals.length > 0 && <ValuationSummary totals={data.totals} />}
 
       <QuerySection
         empty={copy.holdingsEmpty}
-        error={holdingsQuery.isError ? holdingsQuery.error : undefined}
+        error={valuationQuery.isError ? valuationQuery.error : undefined}
         isEmpty={!data || data.holdings.length === 0}
-        loading={holdingsQuery.isPending}
+        loading={valuationQuery.isPending}
       >
-        {data && <HoldingsTable holdings={data.holdings} />}
+        {data && <ValuationHoldingsTable holdings={data.holdings} onEditMark={setEditingMark} />}
       </QuerySection>
 
-      {data && data.cash.length > 0 && (
-        <section className="space-y-2">
-          <FinanceSectionLabel>{copy.cashTitle}</FinanceSectionLabel>
-          <CashTable cash={data.cash} />
-        </section>
-      )}
+      <EditMarkDialog holding={editingMark} onClose={() => setEditingMark(null)} />
     </div>
   )
 }
