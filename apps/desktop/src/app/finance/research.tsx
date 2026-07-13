@@ -21,13 +21,13 @@ import {
 } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { ExternalLink } from '@/lib/external-link'
-import { AlertTriangle, Info, Search } from '@/lib/icons'
+import { AlertTriangle, Bitcoin, Coin, GasStation, Info, Landmark, Search } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 
 import { useRouteEnumParam } from '../hooks/use-route-enum-param'
 import { DetailColumn, ListColumn, MasterDetail } from '../master-detail'
 
-import { FinanceComingSoonBadge, FinanceListGroup, FinanceNavRow } from './chrome'
+import { FinanceComingSoonBadge, FinanceListGroup, FinanceNavRow, FinanceRowGlyph } from './chrome'
 import {
   enumLabel,
   financeKey,
@@ -70,6 +70,28 @@ const COMING_SOON_MARKETS = ['uk', 'korea', 'japan'] as const
 
 const isMarketDesk = (desk: ResearchDesk): desk is (typeof ACTIVE_MARKETS)[number] =>
   (ACTIVE_MARKETS as readonly string[]).includes(desk)
+
+// DESKTOP-ONLY sidebar glyphs (region markers + asset marks) rendered as the
+// leading chip on each Finance row — mirrors the messaging PlatformAvatar.
+// Markets use recognizable flag emoji; the coming-soon placeholders render
+// muted. Each accent tints the chip behind its glyph.
+const MARKET_GLYPH: Record<string, { color: string; emoji: string }> = {
+  us: { color: '#3B82F6', emoji: '🇺🇸' },
+  china: { color: '#EF4444', emoji: '🇨🇳' },
+  hk: { color: '#F43F5E', emoji: '🇭🇰' },
+  uk: { color: '#6366F1', emoji: '🇬🇧' },
+  korea: { color: '#0EA5E9', emoji: '🇰🇷' },
+  japan: { color: '#EC4899', emoji: '🇯🇵' }
+}
+
+// Watch modules use crisp tabler asset marks: a coin for gold, a fuel pump for
+// oil, a bank/landmark for rates & bonds, and the Bitcoin mark for crypto.
+const MODULE_GLYPH: Record<WatchModuleId, { color: string; icon: React.ComponentType<React.SVGProps<SVGSVGElement>> }> = {
+  gold: { color: '#F59E0B', icon: Coin },
+  oil: { color: '#78716C', icon: GasStation },
+  rates: { color: '#0D9488', icon: Landmark },
+  crypto: { color: '#F7931A', icon: Bitcoin }
+}
 
 // China & Hong Kong derive from the ONE CN brief (research-only). China shows
 // mainland listings (.SS/.SZ); HK shows .HK. Regime/news/themes/freshness are
@@ -136,6 +158,7 @@ export function FinanceResearchView({
             <FinanceNavRow
               active={desk === id}
               key={id}
+              leading={<FinanceRowGlyph color={MARKET_GLYPH[id].color} emoji={MARKET_GLYPH[id].emoji} />}
               onSelect={() => setDesk(id)}
               title={marketLabel[id]}
             />
@@ -146,6 +169,7 @@ export function FinanceResearchView({
               badge={<FinanceComingSoonBadge>{copy.phaseBadge}</FinanceComingSoonBadge>}
               disabled
               key={id}
+              leading={<FinanceRowGlyph emoji={MARKET_GLYPH[id].emoji} muted />}
               onSelect={() => undefined}
               title={id === 'uk' ? copy.marketUk : id === 'korea' ? copy.marketKorea : copy.marketJapan}
             />
@@ -154,7 +178,13 @@ export function FinanceResearchView({
 
         <FinanceListGroup label={copy.watchGroup}>
           {WATCH_MODULE_IDS.map(id => (
-            <FinanceNavRow active={desk === id} key={id} onSelect={() => setDesk(id)} title={t.finance.watch.modules[id]} />
+            <FinanceNavRow
+              active={desk === id}
+              key={id}
+              leading={<FinanceRowGlyph color={MODULE_GLYPH[id].color} icon={MODULE_GLYPH[id].icon} />}
+              onSelect={() => setDesk(id)}
+              title={t.finance.watch.modules[id]}
+            />
           ))}
         </FinanceListGroup>
       </ListColumn>

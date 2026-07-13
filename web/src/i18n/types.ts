@@ -303,7 +303,18 @@ export interface FinanceTranslations {
     high: string;
     low: string;
     close: string;
-    liveBadge: string; // "LIVE" chip on a live-updating chart
+    // Timeframe presets (segmented switcher on the K-line chart).
+    timeframe: {
+      label: string; // aria-label for the switcher group
+      intraday: string; // "1D" — one intraday session
+      fiveDay: string; // "5D"
+      day: string; // "Day" (default)
+      week: string; // "Week"
+      month: string; // "Month"
+    };
+    // Moving-average overlay legend (均线).
+    ma20: string; // "MA20"
+    ma30: string; // "MA30"
     analyze: string;
     analyzing: string;
     analysisFor: string; // "Analysis · {symbol}"

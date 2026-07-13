@@ -1465,14 +1465,18 @@ export interface Translations {
       chartAria: (symbol: string) => string
       chartEmpty: string
       chartLoading: string
-      // TradingView-style crosshair tooltip: short OHLCV labels + the live
-      // last-candle tag on the growing bar.
+      // Compact segmented timeframe switcher on each chart.
+      timeframeAria: string
+      timeframes: Record<'day' | 'intraday1d' | 'intraday5d' | 'month' | 'week', string>
+      // MA20 / MA30 overlay legend labels (均线).
+      ma20: string
+      ma30: string
+      // TradingView-style crosshair tooltip: short OHLCV labels.
       hoverOpen: string
       hoverHigh: string
       hoverLow: string
       hoverClose: string
       hoverVolume: string
-      liveTag: string
       analyze: string
       hideAnalysis: string
       analyzing: string

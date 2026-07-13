@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { ComponentType, ReactNode, SVGProps } from 'react'
 
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
@@ -22,6 +22,48 @@ export function FinanceListGroup({ children, label }: { children: ReactNode; lab
       </div>
       <div className="space-y-0.5">{children}</div>
     </div>
+  )
+}
+
+// A small brand-tinted rounded square holding a region/asset glyph — mirrors
+// the messaging sidebar's PlatformAvatar so the Finance rows read as one
+// system. DESKTOP-ONLY chrome: the web sidebar carries no leading row glyphs.
+// Pass an `icon` (lucide/tabler mark) or an `emoji` (flag / asset); `muted`
+// renders the neutral, de-saturated chip used for coming-soon placeholders.
+export function FinanceRowGlyph({
+  color,
+  emoji,
+  icon: Icon,
+  muted
+}: {
+  color?: string
+  emoji?: string
+  icon?: ComponentType<SVGProps<SVGSVGElement>>
+  muted?: boolean
+}) {
+  const base = 'inline-grid size-6 shrink-0 place-items-center rounded-md text-[0.8rem] leading-none'
+
+  if (muted || !color) {
+    return (
+      <span aria-hidden="true" className={cn(base, 'bg-(--ui-bg-tertiary) text-(--ui-text-tertiary)')}>
+        {Icon ? <Icon className="size-3.5" /> : <span className="opacity-60 grayscale">{emoji}</span>}
+      </span>
+    )
+  }
+
+  return (
+    <span
+      aria-hidden="true"
+      className={base}
+      style={{
+        // 16% tint of the accent so the glyph reads on any surface without the
+        // chip dominating the row (same recipe as messaging's PlatformAvatar).
+        backgroundColor: `color-mix(in srgb, ${color} 16%, transparent)`,
+        color
+      }}
+    >
+      {Icon ? <Icon className="size-3.5" /> : emoji}
+    </span>
   )
 }
 

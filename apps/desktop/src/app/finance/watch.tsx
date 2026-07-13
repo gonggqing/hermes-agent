@@ -1,5 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
-import { type CSSProperties, type MouseEvent as ReactMouseEvent, useMemo, useRef, useState } from 'react'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { type CSSProperties, type MouseEvent as ReactMouseEvent, useRef, useState } from 'react'
 
 import { StatusDot, type StatusTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
@@ -40,21 +40,40 @@ export const WATCH_MODULE_SYMBOLS: Record<WatchModuleId, readonly string[]> = {
   crypto: ['BTC-USD', 'ETH-USD']
 }
 
-const CHART_TIMEFRAME = '1d'
-const BARS_LIMIT = 120
-// Full bars are refetched SPARINGLY — daily candles barely move intraday, and
-// the last candle grows LIVE from the lightweight quote poll instead. Long
-// stale/gc windows keep the chart cached so navigating away and back (or
-// re-selecting a symbol) renders instantly with no full-screen reload flash.
-const BARS_REFETCH_MS = 60_000
+// On-chart timeframe presets. Each maps to the (timeframe, limit) passed to
+// financeBars; the backend supports these intervals. Bars are cached per
+// (symbol, timeframe) so flipping back to a previously-viewed preset is
+// instant — no full-screen reload.
+type TimeframeId = 'day' | 'intraday1d' | 'intraday5d' | 'month' | 'week'
+
+const TIMEFRAME_PRESETS: Record<TimeframeId, { limit: number; timeframe: string }> = {
+  intraday1d: { limit: 78, timeframe: '5m' }, // one intraday session
+  intraday5d: { limit: 70, timeframe: '30m' },
+  day: { limit: 120, timeframe: '1d' }, // DEFAULT
+  week: { limit: 104, timeframe: '1wk' },
+  month: { limit: 60, timeframe: '1mo' }
+}
+
+// Rendered left-to-right order of the segmented switcher (intraday → longer).
+const TIMEFRAME_ORDER: TimeframeId[] = ['intraday1d', 'intraday5d', 'day', 'week', 'month']
+
+const DEFAULT_TIMEFRAME: TimeframeId = 'day'
+
+// Long stale/gc windows keep each (symbol, timeframe) chart cached so navigating
+// away and back — or re-selecting a preset — renders instantly from cache.
 const BARS_STALE_MS = 60_000
 const BARS_GC_MS = 30 * 60_000
-// Lightweight last-price poll that grows the live candle without touching the
-// heavy bars endpoint. Data is ~15-min delayed, so ~4s stays backend-friendly.
-const QUOTE_POLL_MS = 4_000
+// The quote header (Last/Bid/Ask/Volume) is fetched once and kept warm. The old
+// ~4s live-price poll (and the LIVE last-candle it grew) has been removed — the
+// chart is now cached candlesticks + MA20/30 + the timeframe switch + hover.
+const QUOTE_STALE_MS = 60_000
 
-// Stable empty reference so the live-candle memo doesn't recompute every render
-// while a symbol has no bars yet (react-hooks/exhaustive-deps).
+// MA20 / MA30 overlay accents — vivid mid-tones that read over the green/red
+// candles in both light and dark themes.
+const MA20_COLOR = '#f59e0b'
+const MA30_COLOR = '#3b82f6'
+
+// Stable empty reference so a symbol with no bars yet doesn't churn renders.
 const NO_BARS: FinanceBar[] = []
 
 export function WatchModulePanel({ enabled, module }: { enabled: boolean; module: WatchModuleId }) {
@@ -141,24 +160,28 @@ function WatchSymbolCard({
 }) {
   const { t } = useI18n()
   const copy = t.finance.watch
+  const [timeframe, setTimeframe] = useState<TimeframeId>(DEFAULT_TIMEFRAME)
+  const preset = TIMEFRAME_PRESETS[timeframe]
 
   const quoteQuery = useQuery({
     enabled,
     queryFn: () => financeQuote(symbol),
     queryKey: financeKey('watch', 'quote', symbol),
-    refetchInterval: QUOTE_POLL_MS,
     // 404 from yfinance is an expected per-symbol state, not worth retrying.
-    retry: false
+    retry: false,
+    staleTime: QUOTE_STALE_MS
   })
 
-  // Bars are keyed by symbol + timeframe and cached long (stale/gc), so the
-  // chart renders instantly from cache on revisit — no fresh full-screen load.
+  // Bars are keyed by symbol + timeframe and cached long (stale/gc), so a
+  // revisit — or flipping back to a previously-viewed preset — renders instantly
+  // from cache. keepPreviousData holds the current candles while a new preset
+  // loads, so switching timeframe never flashes a full-screen skeleton.
   const barsQuery = useQuery({
     enabled,
     gcTime: BARS_GC_MS,
-    queryFn: () => financeBars(symbol, { limit: BARS_LIMIT, timeframe: CHART_TIMEFRAME }),
-    queryKey: financeKey('watch', 'bars', symbol, CHART_TIMEFRAME),
-    refetchInterval: BARS_REFETCH_MS,
+    placeholderData: keepPreviousData,
+    queryFn: () => financeBars(symbol, { limit: preset.limit, timeframe: preset.timeframe }),
+    queryKey: financeKey('watch', 'bars', symbol, preset.timeframe),
     retry: false,
     staleTime: BARS_STALE_MS
   })
@@ -168,28 +191,6 @@ function WatchSymbolCard({
   const label = copy.labels[symbol] ?? symbol
   const quoteFailed = quoteQuery.isError
   const barsFailed = barsQuery.isError
-  const livePrice = !quoteFailed && quote?.last != null && Number.isFinite(quote.last) ? quote.last : null
-
-  // Grow the LAST candle in place from the lightweight quote poll — no bars
-  // refetch: move the close to the live price and extend the running high/low.
-  const liveBars = useMemo(() => {
-    if (bars.length === 0 || livePrice === null) {
-      return bars
-    }
-
-    const last = bars[bars.length - 1]
-
-    const merged: FinanceBar = {
-      ...last,
-      close: livePrice,
-      high: Math.max(last.high, livePrice),
-      low: Math.min(last.low, livePrice)
-    }
-
-    return [...bars.slice(0, -1), merged]
-  }, [bars, livePrice])
-
-  const isLive = livePrice !== null && !barsFailed && bars.length > 0
 
   return (
     <div
@@ -202,7 +203,9 @@ function WatchSymbolCard({
       )}
       onClick={onSelect}
       onKeyDown={event => {
-        if (event.key === 'Enter' || event.key === ' ') {
+        // Only select on keys aimed at the card itself — not at the nested
+        // timeframe buttons, whose Enter/Space belong to them.
+        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
           event.preventDefault()
           onSelect()
         }
@@ -258,21 +261,58 @@ function WatchSymbolCard({
             <BarChart3 className="size-3" />
             {copy.chartTitle}
           </div>
-          {isLive && (
-            <span className="inline-flex items-center gap-1 text-[0.55rem] font-semibold uppercase tracking-wide text-primary">
-              <span className="size-1.5 animate-pulse rounded-full bg-primary" />
-              {copy.liveTag}
-            </span>
-          )}
+          <TimeframeSwitcher onChange={setTimeframe} value={timeframe} />
         </div>
         {barsQuery.isPending ? (
           <ChartSkeleton label={copy.chartLoading} />
         ) : barsFailed || bars.length === 0 ? (
           <div className="py-1 text-[0.65rem] text-muted-foreground">{barsFailed ? copy.noData : copy.chartEmpty}</div>
         ) : (
-          <CandlestickChart aria={copy.chartAria(symbol)} bars={liveBars} />
+          <CandlestickChart aria={copy.chartAria(symbol)} bars={bars} />
         )}
       </div>
+    </div>
+  )
+}
+
+// Compact segmented timeframe presets over the chart. Selecting a preset swaps
+// the (timeframe, limit) fed to financeBars and re-renders; bars are cached per
+// (symbol, timeframe) so re-selecting a previously-viewed preset is instant.
+function TimeframeSwitcher({ onChange, value }: { onChange: (id: TimeframeId) => void; value: TimeframeId }) {
+  const { t } = useI18n()
+  const copy = t.finance.watch
+
+  return (
+    <div
+      aria-label={copy.timeframeAria}
+      className="inline-flex items-center gap-0.5 rounded-md bg-(--ui-bg-tertiary) p-0.5"
+      role="group"
+    >
+      {TIMEFRAME_ORDER.map(id => {
+        const selected = id === value
+
+        return (
+          <button
+            aria-pressed={selected}
+            className={cn(
+              'rounded px-1.5 py-0.5 text-[0.6rem] font-medium tabular-nums transition-colors',
+              selected
+                ? 'bg-(--ui-bg-elevated) text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+            key={id}
+            // Isolate the preset click from the card's onSelect so switching a
+            // chart's timeframe never re-selects the whole symbol row.
+            onClick={event => {
+              event.stopPropagation()
+              onChange(id)
+            }}
+            type="button"
+          >
+            {copy.timeframes[id]}
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -298,13 +338,37 @@ interface ChartHover {
   y: number
 }
 
-// Dependency-free candlestick chart over daily OHLCV bars. Vertical scale is
-// price (shared min-low / max-high); horizontal is evenly spaced sessions. Up
-// candles use the primary tone, down candles the destructive tone. A
-// TradingView-style crosshair + OHLC tooltip tracks the cursor (values come
-// straight from the already-fetched bars — no extra fetch), and the live last
-// candle transitions smoothly as the quote poll grows it.
+// Simple moving average of the last `period` closes at each bar; null until
+// enough bars exist, so the overlay line only starts once its window fills.
+function simpleMovingAverage(bars: FinanceBar[], period: number): (null | number)[] {
+  const out: (null | number)[] = new Array(bars.length).fill(null)
+  let sum = 0
+
+  for (let index = 0; index < bars.length; index++) {
+    sum += bars[index].close
+
+    if (index >= period) {
+      sum -= bars[index - period].close
+    }
+
+    if (index >= period - 1) {
+      out[index] = sum / period
+    }
+  }
+
+  return out
+}
+
+// Dependency-free candlestick chart over OHLCV bars for the selected timeframe.
+// Vertical scale is price (shared min-low / max-high); horizontal is evenly
+// spaced sessions. Up candles use the primary tone, down candles the
+// destructive tone. MA20 / MA30 overlays (均线) — computed from the fetched
+// closes, no extra fetch — ride the SAME coordinate space in two distinct,
+// theme-safe colors, with a small legend. A TradingView-style crosshair + OHLC
+// tooltip tracks the cursor (values straight from the already-fetched bars).
 function CandlestickChart({ aria, bars }: { aria: string; bars: FinanceBar[] }) {
+  const { t } = useI18n()
+  const copy = t.finance.watch
   const containerRef = useRef<HTMLDivElement>(null)
   const [hover, setHover] = useState<ChartHover | null>(null)
 
@@ -318,7 +382,18 @@ function CandlestickChart({ aria, bars }: { aria: string; bars: FinanceBar[] }) 
   const slot = width / bars.length
   const bodyWidth = Math.max(slot * 0.6, 0.4)
   const y = (value: number) => height - ((value - min) / span) * height
-  const lastIndex = bars.length - 1
+  const cx = (index: number) => index * slot + slot / 2
+
+  // MA polylines in the same coordinate space as the candles. Each MA close is
+  // between its bar's low and high, so every point stays on the shared scale.
+  const maPolyline = (period: number) =>
+    simpleMovingAverage(bars, period)
+      .map((value, index) => (value === null ? null : `${cx(index)},${y(value)}`))
+      .filter((point): point is string => point !== null)
+      .join(' ')
+
+  const ma20Points = maPolyline(20)
+  const ma30Points = maPolyline(30)
 
   const handleMove = (event: ReactMouseEvent<HTMLDivElement>) => {
     const el = containerRef.current
@@ -353,14 +428,10 @@ function CandlestickChart({ aria, bars }: { aria: string; bars: FinanceBar[] }) 
         viewBox={`0 0 ${width} ${height}`}
       >
         {bars.map((bar, index) => {
-          const cx = index * slot + slot / 2
+          const barCx = cx(index)
           const up = bar.close >= bar.open
           const bodyTop = y(Math.max(bar.open, bar.close))
           const bodyBottom = y(Math.min(bar.open, bar.close))
-
-          // Only the live last candle animates as the quote poll updates it.
-          const liveStyle: CSSProperties | undefined =
-            index === lastIndex ? { transition: 'y 300ms ease-out, height 300ms ease-out' } : undefined
 
           return (
             <g className={up ? 'text-primary' : 'text-destructive'} key={`${bar.ts}-${index}`}>
@@ -368,23 +439,51 @@ function CandlestickChart({ aria, bars }: { aria: string; bars: FinanceBar[] }) 
                 stroke="currentColor"
                 strokeWidth="0.6"
                 vectorEffect="non-scaling-stroke"
-                x1={cx}
-                x2={cx}
+                x1={barCx}
+                x2={barCx}
                 y1={y(bar.high)}
                 y2={y(bar.low)}
               />
               <rect
                 fill="currentColor"
                 height={Math.max(bodyBottom - bodyTop, 0.4)}
-                style={liveStyle}
                 width={bodyWidth}
-                x={cx - bodyWidth / 2}
+                x={barCx - bodyWidth / 2}
                 y={bodyTop}
               />
             </g>
           )
         })}
+
+        {/* MA overlays drawn ON TOP of the candles so they read clearly. */}
+        {ma20Points && (
+          <polyline
+            fill="none"
+            points={ma20Points}
+            stroke={MA20_COLOR}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.1"
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
+        {ma30Points && (
+          <polyline
+            fill="none"
+            points={ma30Points}
+            stroke={MA30_COLOR}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.1"
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
       </svg>
+
+      <div className="pointer-events-none absolute left-1 top-0.5 flex items-center gap-2 text-[0.5rem] font-semibold leading-none tabular-nums">
+        <MaLegendItem color={MA20_COLOR} label={copy.ma20} />
+        <MaLegendItem color={MA30_COLOR} label={copy.ma30} />
+      </div>
 
       {hover && hoveredBar && (
         <>
@@ -397,6 +496,17 @@ function CandlestickChart({ aria, bars }: { aria: string; bars: FinanceBar[] }) 
         </>
       )}
     </div>
+  )
+}
+
+// One MA legend entry: a short colored rule + its label, painted in the line's
+// own color so the pairing reads at a glance over the candles.
+function MaLegendItem({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1" style={{ color }}>
+      <span className="inline-block h-0.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
+      {label}
+    </span>
   )
 }
 

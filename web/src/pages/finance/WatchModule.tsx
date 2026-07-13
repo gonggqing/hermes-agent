@@ -1,6 +1,6 @@
 import {
-  useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -22,22 +22,63 @@ import {
   type WatchSymbol,
 } from "./constants";
 
-// ── Bars/quote cache + live-update tuning (Loop.md §3: READ-ONLY) ─────
+// ── Per-(symbol,timeframe) bars cache + timeframe presets ─────────────
 //
-// A module-level cache keyed by symbol+timeframe. It persists across desk
-// switches (the components unmount, the Map does not), so navigating away and
-// back renders the K-line instantly with NO refetch/loading flash. The heavy
-// /bars endpoint is refetched only sparingly; live growth of the newest candle
-// comes from the lightweight /quote endpoint on a backend-friendly interval.
+// A module-level cache keyed by symbol+timeframe+limit. It persists across desk
+// switches AND timeframe flips (the components unmount, the Map does not), so
+// navigating away and back — or flipping back to a previously-viewed preset —
+// renders the K-line instantly with NO refetch/loading flash. There is NO
+// live-price poll: the chart is cached candlesticks + MA overlays + the
+// timeframe switch + the hover crosshair/tooltip (Loop.md §3: READ-ONLY).
 
-const BARS_TIMEFRAME = "1d";
-const BARS_LIMIT = 120;
-/** Lightweight live-price poll → grows the last candle in place. */
-const QUOTE_POLL_MS = 4_000;
-/** Full K-line refetch — sparing, so we never hammer the heavy endpoint. */
-const BARS_REFRESH_MS = 60_000;
-/** Cached bars are treated as fresh within this window (no refetch on mount). */
-const BARS_STALE_MS = 60_000;
+/** MA overlay colors — distinct from the red/green candles, and (with a
+ * background-colored casing behind each line) legible in light + dark. */
+const MA20_COLOR = "#f59e0b"; // amber
+const MA30_COLOR = "#a855f7"; // violet
+
+/** Compact chart timeframe presets. Each maps to a (timeframe, limit) passed
+ * to the financeBars client. Default = Day. Labels are localized. */
+type TimeframePresetKey = "intraday" | "fiveDay" | "day" | "week" | "month";
+
+const TIMEFRAME_CONFIG: Record<
+  TimeframePresetKey,
+  { timeframe: string; limit: number }
+> = {
+  intraday: { timeframe: "5m", limit: 78 }, // one intraday session
+  fiveDay: { timeframe: "30m", limit: 70 },
+  day: { timeframe: "1d", limit: 120 }, // DEFAULT
+  week: { timeframe: "1wk", limit: 104 },
+  month: { timeframe: "1mo", limit: 60 },
+};
+
+const TIMEFRAME_ORDER: TimeframePresetKey[] = [
+  "intraday",
+  "fiveDay",
+  "day",
+  "week",
+  "month",
+];
+
+const DEFAULT_PRESET: TimeframePresetKey = "day";
+
+/** Localized segment label for a timeframe preset. */
+function timeframeLabel(
+  key: TimeframePresetKey,
+  ft: FinanceTranslations,
+): string {
+  switch (key) {
+    case "intraday":
+      return ft.watch.timeframe.intraday;
+    case "fiveDay":
+      return ft.watch.timeframe.fiveDay;
+    case "day":
+      return ft.watch.timeframe.day;
+    case "week":
+      return ft.watch.timeframe.week;
+    case "month":
+      return ft.watch.timeframe.month;
+  }
+}
 
 interface BarsCacheEntry {
   bars: FinanceBar[];
@@ -46,29 +87,28 @@ interface BarsCacheEntry {
 const barsCache = new Map<string, BarsCacheEntry>();
 const quoteCache = new Map<string, FinanceQuote>();
 
-function barsKey(symbol: string): string {
-  return `${symbol}|${BARS_TIMEFRAME}|${BARS_LIMIT}`;
+function barsKey(symbol: string, timeframe: string, limit: number): string {
+  return `${symbol}|${timeframe}|${limit}`;
 }
 
 /**
- * Grow/adjust the newest candle from a fresh live price without a full reload:
- * close tracks the live last, and high/low widen to include it. Earlier bars
- * are untouched. Returns a new array so React re-renders (and the last candle's
- * CSS transition animates the move).
+ * Simple moving average of the last `period` closes at each bar. Returns one
+ * value per bar; `null` for the leading bars where fewer than `period` closes
+ * exist (the overlay line starts once enough bars are available). Computed in
+ * the frontend from the already-fetched bars — no extra fetch.
  */
-function patchLastBar(bars: FinanceBar[], price: number | null): FinanceBar[] {
-  if (price === null || bars.length === 0) return bars;
-  const last = bars[bars.length - 1];
-  const next: FinanceBar = {
-    ...last,
-    close: price,
-    high: Math.max(last.high, price),
-    low: Math.min(last.low, price),
-  };
-  return [...bars.slice(0, -1), next];
+function sma(bars: FinanceBar[], period: number): (number | null)[] {
+  const out: (number | null)[] = new Array(bars.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < bars.length; i++) {
+    sum += bars[i].close;
+    if (i >= period) sum -= bars[i - period].close;
+    if (i >= period - 1) out[i] = sum / period;
+  }
+  return out;
 }
 
-// ── Per-symbol data hook (cache-first + live last candle) ─────────────
+// ── Per-symbol data hook (cache-first, per-timeframe bars) ────────────
 
 type SymbolStatus = "loading" | "error" | "ready";
 
@@ -76,109 +116,102 @@ interface WatchSymbolData {
   status: SymbolStatus;
   quote: FinanceQuote | null;
   bars: FinanceBar[];
-  /** True once a live /quote poll has grown the newest candle this session. */
-  live: boolean;
+  /** True once the bars fetch for the current timeframe has settled. */
+  barsDone: boolean;
 }
 
-function useWatchSymbol(symbol: string): WatchSymbolData {
-  const key = barsKey(symbol);
-  const cachedBars = barsCache.get(key);
-  const cachedQuote = quoteCache.get(symbol) ?? null;
-  // Seed from cache so re-selecting a symbol renders instantly — the skeleton
-  // shows only on a true first load (cold cache).
-  const [bars, setBars] = useState<FinanceBar[]>(cachedBars?.bars ?? []);
-  const [quote, setQuote] = useState<FinanceQuote | null>(cachedQuote);
-  const [status, setStatus] = useState<SymbolStatus>(
-    cachedBars || cachedQuote ? "ready" : "loading",
-  );
-  const [live, setLive] = useState(false);
-  const aliveRef = useRef(true);
+/**
+ * Cache-first data for one symbol at one timeframe preset. The quote is
+ * per-symbol (fetched once); bars are per (symbol, timeframe) and cached, so
+ * flipping back to a previously-viewed preset is instant — no network, no
+ * loading flash. No live poll: the newest candle is whatever the last fetch
+ * returned (Loop.md §3: READ-ONLY).
+ */
+function useWatchSymbol(
+  symbol: string,
+  preset: TimeframePresetKey,
+): WatchSymbolData {
+  const { timeframe, limit } = TIMEFRAME_CONFIG[preset];
+  const key = barsKey(symbol, timeframe, limit);
 
-  // Full quote + bars fetch (cold/stale cache, and the periodic refresh).
-  const loadBars = useCallback(
-    (opts?: { force?: boolean }) => {
-      const entry = barsCache.get(key);
-      const fresh = entry && Date.now() - entry.fetchedAt < BARS_STALE_MS;
-      if (fresh && !opts?.force) return; // warm cache — no network, no flash
-      // Quote and bars fetched independently so one 404 (common for
-      // GC=F/^TNX/518880.SS) never blanks the other.
-      Promise.allSettled([
-        api.financeQuote(symbol),
-        api.financeBars(symbol, {
-          timeframe: BARS_TIMEFRAME,
-          limit: BARS_LIMIT,
-        }),
-      ]).then(([q, b]) => {
-        if (!aliveRef.current) return;
-        const nextQuote = q.status === "fulfilled" ? q.value : null;
-        const nextBars = b.status === "fulfilled" ? b.value.bars : [];
-        if (
-          nextQuote === null &&
-          nextBars.length === 0 &&
-          barsCache.get(key) === undefined
-        ) {
-          // Nothing to show and nothing cached — surface the inline error.
-          setStatus("error");
-          return;
-        }
-        if (nextBars.length > 0) {
-          barsCache.set(key, { bars: nextBars, fetchedAt: Date.now() });
-          setBars(nextBars);
-          setLive(false); // fresh bars supersede the live-patched candle
-        }
-        if (nextQuote) {
-          quoteCache.set(symbol, nextQuote);
-          setQuote(nextQuote);
-        }
-        setStatus("ready");
-      });
-    },
-    [key, symbol],
+  // Quote — per-symbol, timeframe-independent. Seeded from cache.
+  const [quote, setQuote] = useState<FinanceQuote | null>(
+    () => quoteCache.get(symbol) ?? null,
+  );
+  const [quoteDone, setQuoteDone] = useState<boolean>(() =>
+    quoteCache.has(symbol),
   );
 
-  // Lightweight live-price poll — grows the newest candle without a reload.
-  const pollQuote = useCallback(() => {
+  // Bars — per (symbol, timeframe). Seeded from cache, and re-synced
+  // synchronously when the preset flips so we never flash the prior
+  // timeframe's candles (React's "adjust state on prop change" pattern).
+  const [bars, setBars] = useState<FinanceBar[]>(
+    () => barsCache.get(key)?.bars ?? [],
+  );
+  const [barsDone, setBarsDone] = useState<boolean>(() => barsCache.has(key));
+  const [renderedKey, setRenderedKey] = useState(key);
+  if (renderedKey !== key) {
+    setRenderedKey(key);
+    setBars(barsCache.get(key)?.bars ?? []);
+    setBarsDone(barsCache.has(key));
+  }
+
+  // Quote fetch (once per symbol; independent of bars so one 404 — common for
+  // GC=F/^TNX/518880.SS — never blanks the other). A cache hit is already
+  // seeded by the useState initializer above, so this only fetches on a miss
+  // (all setState happens in the async callback, never in the effect body).
+  useEffect(() => {
+    if (quoteCache.has(symbol)) return;
+    let alive = true;
     api.financeQuote(symbol).then(
       (q) => {
-        if (!aliveRef.current) return;
+        if (!alive) return;
         quoteCache.set(symbol, q);
         setQuote(q);
-        if (q.last !== null) {
-          setBars((prev) => {
-            if (prev.length === 0) return prev;
-            const patched = patchLastBar(prev, q.last);
-            const entry = barsCache.get(key);
-            if (entry) barsCache.set(key, { ...entry, bars: patched });
-            return patched;
-          });
-          setLive(true);
-        }
+        setQuoteDone(true);
       },
       () => {
-        /* transient live-poll failure — keep the last good candle */
+        if (alive) setQuoteDone(true);
       },
     );
-  }, [key, symbol]);
+    return () => {
+      alive = false;
+    };
+  }, [symbol]);
 
-  // The card is keyed by symbol in the parent, so it mounts fresh per symbol —
-  // the useState seeds above already reflect the cache. This effect only wires
-  // up the fetch + the two polls (live quote, sparing bars refresh).
+  // Bars fetch (per symbol+timeframe) — cache-first, so a repeat view is
+  // instant and never re-hits the heavy endpoint. A cache hit is already
+  // seeded synchronously during render (initializer + the renderedKey sync),
+  // so this only fetches on a miss.
   useEffect(() => {
-    aliveRef.current = true;
-    loadBars(); // fills a miss / refreshes stale; no-op when warm
-    const quoteId = window.setInterval(pollQuote, QUOTE_POLL_MS);
-    const barsId = window.setInterval(
-      () => loadBars({ force: true }),
-      BARS_REFRESH_MS,
+    if (barsCache.has(key)) return;
+    let alive = true;
+    api.financeBars(symbol, { timeframe, limit }).then(
+      (res) => {
+        if (!alive) return;
+        barsCache.set(key, { bars: res.bars, fetchedAt: Date.now() });
+        setBars(res.bars);
+        setBarsDone(true);
+      },
+      () => {
+        if (!alive) return;
+        setBars([]);
+        setBarsDone(true);
+      },
     );
     return () => {
-      aliveRef.current = false;
-      window.clearInterval(quoteId);
-      window.clearInterval(barsId);
+      alive = false;
     };
-  }, [loadBars, pollQuote]);
+  }, [key, symbol, timeframe, limit]);
 
-  return { status, quote, bars, live };
+  const status: SymbolStatus =
+    quote === null && bars.length === 0
+      ? quoteDone && barsDone
+        ? "error"
+        : "loading"
+      : "ready";
+
+  return { status, quote, bars, barsDone };
 }
 
 // ── Inline SVG candlestick chart with TradingView-style crosshair ─────
@@ -251,20 +284,22 @@ function CrosshairTooltip({
  * Candlestick chart drawn as inline SVG from OHLCV bars (no charting
  * dependency, Loop.md §3). `preserveAspectRatio="none"` lets it fill the card
  * width; wicks use a non-scaling stroke so they stay crisp. Up candles tint
- * success, down candles destructive. On mouse-move it renders a crosshair
+ * success, down candles destructive. MA20/MA30 are overlaid as smooth
+ * polylines in the same coordinate space. On mouse-move it renders a crosshair
  * (vertical + horizontal guide) and a compact OHLC(V) tooltip sourced from the
- * already-fetched bars — no extra fetch. The newest candle transitions
- * smoothly as the live price grows it.
+ * already-fetched bars — no extra fetch.
  */
 function CandlestickChart({
   bars,
+  ma20,
+  ma30,
   ariaLabel,
-  live,
   ft,
 }: {
   bars: FinanceBar[];
+  ma20: (number | null)[];
+  ma30: (number | null)[];
   ariaLabel: string;
-  live: boolean;
   ft: FinanceTranslations;
 }) {
   const slot = 6; // viewBox units per candle
@@ -278,10 +313,20 @@ function CandlestickChart({
   const min = Math.min(...lows);
   const range = max - min || 1;
   const y = (v: number) => PAD + (1 - (v - min) / range) * (H - PAD * 2);
+  const cx = (i: number) => i * slot + slot / 2;
+
+  // MA overlays share the candle coordinate space; the polyline skips the
+  // leading bars where the SMA is still undefined (fewer than N closes).
+  const maPoints = (values: (number | null)[]): string =>
+    values
+      .map((v, i) => (v === null ? null : `${cx(i)},${y(v)}`))
+      .filter((p): p is string => p !== null)
+      .join(" ");
+  const ma20Points = maPoints(ma20);
+  const ma30Points = maPoints(ma30);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
-  const lastIndex = bars.length - 1;
   const hoveredBar = hover ? (bars[hover.index] ?? null) : null;
 
   const onMove = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -318,21 +363,12 @@ function CandlestickChart({
         aria-label={ariaLabel}
       >
         {bars.map((b, i) => {
-          const cx = i * slot + slot / 2;
+          const x = cx(i);
           const up = b.close >= b.open;
           const bodyTop = y(Math.max(b.open, b.close));
           const bodyBottom = y(Math.min(b.open, b.close));
           const bodyH = Math.max(bodyBottom - bodyTop, 0.75);
-          const isLast = i === lastIndex;
           const dim = hover !== null && hover.index !== i;
-          // Only the newest candle transitions (it's the one that grows live);
-          // animating every candle on a full refetch would look jittery.
-          const liveStyle: CSSProperties | undefined = isLast
-            ? {
-                transition:
-                  "y 0.4s ease, height 0.4s ease, y1 0.4s ease, y2 0.4s ease",
-              }
-            : undefined;
           return (
             <g
               key={`${b.ts}-${i}`}
@@ -340,26 +376,64 @@ function CandlestickChart({
               opacity={dim ? 0.5 : 1}
             >
               <line
-                x1={cx}
-                x2={cx}
+                x1={x}
+                x2={x}
                 y1={y(b.high)}
                 y2={y(b.low)}
                 stroke="currentColor"
                 strokeWidth="1"
                 vectorEffect="non-scaling-stroke"
-                style={liveStyle}
               />
               <rect
-                x={cx - bodyW / 2}
+                x={x - bodyW / 2}
                 y={bodyTop}
                 width={bodyW}
                 height={bodyH}
                 fill="currentColor"
-                style={liveStyle}
               />
             </g>
           );
         })}
+
+        {/* Moving-average overlays: drawn over the candles (under the HTML
+            crosshair). Each line carries a background-colored casing so it
+            stays legible over red/green candles in light + dark. */}
+        {ma20Points && (
+          <g fill="none" strokeLinejoin="round" strokeLinecap="round">
+            <polyline
+              points={ma20Points}
+              className="text-background"
+              stroke="currentColor"
+              strokeWidth={3}
+              strokeOpacity={0.55}
+              vectorEffect="non-scaling-stroke"
+            />
+            <polyline
+              points={ma20Points}
+              stroke={MA20_COLOR}
+              strokeWidth={1.5}
+              vectorEffect="non-scaling-stroke"
+            />
+          </g>
+        )}
+        {ma30Points && (
+          <g fill="none" strokeLinejoin="round" strokeLinecap="round">
+            <polyline
+              points={ma30Points}
+              className="text-background"
+              stroke="currentColor"
+              strokeWidth={3}
+              strokeOpacity={0.55}
+              vectorEffect="non-scaling-stroke"
+            />
+            <polyline
+              points={ma30Points}
+              stroke={MA30_COLOR}
+              strokeWidth={1.5}
+              vectorEffect="non-scaling-stroke"
+            />
+          </g>
+        )}
       </svg>
 
       {/* Crosshair guides. */}
@@ -374,14 +448,6 @@ function CandlestickChart({
             style={{ top: hover.yPx }}
           />
         </>
-      )}
-
-      {/* Live-updating indicator. */}
-      {live && (
-        <span className="pointer-events-none absolute right-1 top-1 inline-flex items-center gap-1 border border-success/40 bg-background/80 px-1.5 py-0.5 font-mondwest text-display text-[0.625rem] uppercase tracking-wider text-success backdrop-blur-sm">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success" />
-          {ft.watch.liveBadge}
-        </span>
       )}
 
       {/* Crosshair tooltip. */}
@@ -563,6 +629,82 @@ function AnalyzePanel({
   );
 }
 
+// ── Timeframe switcher + MA legend (attached to each chart) ───────────
+
+/**
+ * Compact segmented row of timeframe presets. The chart lives inside a
+ * clickable card (click = focus the symbol for Analyze), so this swallows
+ * pointer/keyboard events — changing the timeframe is a chart interaction,
+ * not a symbol selection.
+ */
+function TimeframeSwitcher({
+  preset,
+  onPreset,
+  ft,
+}: {
+  preset: TimeframePresetKey;
+  onPreset: (p: TimeframePresetKey) => void;
+  ft: FinanceTranslations;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={ft.watch.timeframe.label}
+      className="inline-flex overflow-hidden rounded-md border border-border"
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
+      {TIMEFRAME_ORDER.map((key, i) => {
+        const active = key === preset;
+        return (
+          <button
+            key={key}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onPreset(key)}
+            className={cn(
+              "px-2 py-1 font-mondwest text-display text-[0.6875rem] uppercase tracking-wider outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/60",
+              i > 0 && "border-l border-border",
+              active
+                ? "bg-primary text-primary-foreground"
+                : "text-text-tertiary hover:bg-secondary/60 hover:text-foreground",
+            )}
+          >
+            {timeframeLabel(key, ft)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Small MA20/MA30 legend with color swatches matching the overlay lines. */
+function MaLegend({
+  hasMa20,
+  hasMa30,
+  ft,
+}: {
+  hasMa20: boolean;
+  hasMa30: boolean;
+  ft: FinanceTranslations;
+}) {
+  const chip = (color: string, label: string) => (
+    <span className="inline-flex items-center gap-1.5">
+      <span
+        className="inline-block h-0.5 w-3.5 rounded-full"
+        style={{ backgroundColor: color }}
+      />
+      {label}
+    </span>
+  );
+  return (
+    <div className="flex items-center gap-3 font-mondwest normal-case text-[0.6875rem] text-text-tertiary">
+      {hasMa20 && chip(MA20_COLOR, ft.watch.ma20)}
+      {hasMa30 && chip(MA30_COLOR, ft.watch.ma30)}
+    </div>
+  );
+}
+
 // ── Per-symbol card (quote + chart, selectable) ───────────────────────
 
 function WatchSymbolCard({
@@ -576,7 +718,17 @@ function WatchSymbolCard({
   selected: boolean;
   onSelect: () => void;
 }) {
-  const { status, quote, bars, live } = useWatchSymbol(entry.symbol);
+  const [preset, setPreset] = useState<TimeframePresetKey>(DEFAULT_PRESET);
+  const { status, quote, bars, barsDone } = useWatchSymbol(
+    entry.symbol,
+    preset,
+  );
+
+  // MA20/MA30 computed once per bars change (frontend-only, no extra fetch).
+  const ma20 = useMemo(() => sma(bars, 20), [bars]);
+  const ma30 = useMemo(() => sma(bars, 30), [bars]);
+  const hasMa20 = ma20.some((v) => v !== null);
+  const hasMa30 = ma30.some((v) => v !== null);
 
   if (status === "loading") {
     return <WatchSymbolSkeleton label={ft.watch.chartLoading} />;
@@ -662,18 +814,29 @@ function WatchSymbolCard({
               </div>
             )}
 
-            {/* Price chart. */}
+            {/* Timeframe switcher + MA legend — attached to the chart. */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <TimeframeSwitcher preset={preset} onPreset={setPreset} ft={ft} />
+              {(hasMa20 || hasMa30) && (
+                <MaLegend hasMa20={hasMa20} hasMa30={hasMa30} ft={ft} />
+              )}
+            </div>
+
+            {/* Price chart (candles + MA20/MA30 overlays + hover crosshair). */}
             {bars.length > 1 ? (
               <CandlestickChart
                 bars={bars}
+                ma20={ma20}
+                ma30={ma30}
                 ariaLabel={`${entry.symbol} ${entry.label}`}
-                live={live}
                 ft={ft}
               />
-            ) : (
+            ) : barsDone ? (
               <p className="font-mondwest normal-case text-xs text-text-tertiary">
                 {ft.watch.chartUnavailable}
               </p>
+            ) : (
+              <ChartSkeleton label={ft.watch.chartLoading} />
             )}
           </>
         )}
