@@ -23,36 +23,83 @@ export type FinanceDesk =
 /** Watch-module keys (the read-only cross-asset modules). */
 export type WatchModuleKey = "gold" | "oil" | "rates" | "crypto";
 
+/** Currency symbol a watch price is quoted in (null for unit-only, e.g. %). */
+export type WatchCurrency = "$" | "¥";
+
+/**
+ * Localized unit key for a watch price. Rendered via `ft.watch.units[...]`
+ * (except `pct`, which always prints "%"). `null` = no unit suffix.
+ */
+export type WatchUnitKey = "oz" | "share" | "bbl" | "gram" | "pct";
+
+/**
+ * Derived-symbol config. A derived watch symbol has no direct Yahoo quote
+ * (e.g. AU9999 / SGE domestic spot gold): its quote + candlestick are computed
+ * from a `base` symbol (a real Yahoo price series) rescaled by an `fx` quote.
+ * For AU9999: ¥/gram = GC=F(USD/oz) * CNY=X(CNY/USD) / gramsPerOunce.
+ */
+export interface WatchDerived {
+  /** Base price series (real Yahoo symbol), e.g. "GC=F" (USD/oz). */
+  base: string;
+  /** FX quote symbol whose `last` rescales the base, e.g. "CNY=X" (CNY/USD). */
+  fx: string;
+  /** Grams per troy ounce (1 oz = 31.1035 g). */
+  gramsPerOunce: number;
+}
+
 /** One symbol tracked inside a watch module. */
 export interface WatchSymbol {
   symbol: string;
   label: string;
+  /** Currency the price is quoted in; `null` for unit-only (e.g. yields). */
+  currency: WatchCurrency | null;
+  /** Localized unit suffix key; `null` for none (e.g. BTC → "$67,000"). */
+  unit: WatchUnitKey | null;
+  /** Present only for computed symbols (e.g. AU9999) — see {@link WatchDerived}. */
+  derived?: WatchDerived;
 }
 
 /**
  * Symbol config for the read-only watch modules. Defined once here and
  * shared by the sidebar + the detail panels. Some symbols (GC=F, ^TNX,
  * 518880.SS) 404 from yfinance intermittently — the panel handles that
- * per-symbol without crashing.
+ * per-symbol without crashing. Each entry carries its display currency + unit
+ * so prices render as e.g. "4079 $ / 盎司", "8.42 ¥ / 股", "4.30 %", "$67,000".
  */
 export const WATCH_MODULES: Record<WatchModuleKey, WatchSymbol[]> = {
   gold: [
-    { symbol: "GC=F", label: "COMEX Gold" },
-    { symbol: "GLD", label: "Gold ETF (SPDR)" },
-    { symbol: "518880.SS", label: "Shanghai Gold ETF" },
+    { symbol: "GC=F", label: "COMEX Gold", currency: "$", unit: "oz" },
+    { symbol: "GLD", label: "Gold ETF (SPDR)", currency: "$", unit: "share" },
+    {
+      symbol: "518880.SS",
+      label: "Shanghai Gold ETF",
+      currency: "¥",
+      unit: "share",
+    },
+    // Derived: domestic spot gold (AU9999/SGE) is NOT on Yahoo. Computed from
+    // international gold (GC=F, USD/oz) rescaled by USD/CNY (CNY=X) into ¥/gram.
+    {
+      symbol: "AU9999",
+      label: "AU9999",
+      currency: "¥",
+      unit: "gram",
+      derived: { base: "GC=F", fx: "CNY=X", gramsPerOunce: 31.1035 },
+    },
   ],
   oil: [
-    { symbol: "CL=F", label: "WTI Crude" },
-    { symbol: "BZ=F", label: "Brent Crude" },
-    { symbol: "USO", label: "Oil ETF" },
+    { symbol: "CL=F", label: "WTI Crude", currency: "$", unit: "bbl" },
+    { symbol: "BZ=F", label: "Brent Crude", currency: "$", unit: "bbl" },
+    { symbol: "USO", label: "Oil ETF", currency: "$", unit: "share" },
   ],
   rates: [
-    { symbol: "^TNX", label: "US 10Y Yield" },
-    { symbol: "TLT", label: "20Y Treasury ETF" },
+    // 10Y yield renders as a percentage ("4.30 %") — unit only, no currency.
+    { symbol: "^TNX", label: "US 10Y Yield", currency: null, unit: "pct" },
+    { symbol: "TLT", label: "20Y Treasury ETF", currency: "$", unit: "share" },
   ],
   crypto: [
-    { symbol: "BTC-USD", label: "Bitcoin" },
-    { symbol: "ETH-USD", label: "Ethereum" },
+    // Crypto renders currency-prefixed, no unit → "$67,000".
+    { symbol: "BTC-USD", label: "Bitcoin", currency: "$", unit: null },
+    { symbol: "ETH-USD", label: "Ethereum", currency: "$", unit: null },
   ],
 };
 

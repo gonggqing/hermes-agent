@@ -1,5 +1,5 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { type CSSProperties, type MouseEvent as ReactMouseEvent, useRef, useState } from 'react'
+import { type CSSProperties, type MouseEvent as ReactMouseEvent, useMemo, useRef, useState } from 'react'
 
 import { StatusDot, type StatusTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
@@ -11,7 +11,8 @@ import {
   type FinanceAnalyzeSignal,
   type FinanceBar,
   financeBars,
-  financeQuote
+  financeQuote,
+  type FinanceQuote
 } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { ExternalLink } from '@/lib/external-link'
@@ -19,7 +20,18 @@ import { BarChart3, Info } from '@/lib/icons'
 import { fmtDate } from '@/lib/time'
 import { cn } from '@/lib/utils'
 
-import { enumLabel, financeKey, fmtPct, fmtPrice, fmtQty, fmtTs, parseFinanceError } from './lib'
+import {
+  enumLabel,
+  financeKey,
+  fmtPct,
+  fmtQty,
+  fmtTs,
+  fmtWatchPrice,
+  fmtWatchValue,
+  parseFinanceError,
+  type WatchCurrency,
+  type WatchUnitKey
+} from './lib'
 import { FinanceCard, FinancePill, FinanceSectionLabel, InlineSpinner } from './primitives'
 
 // Read-only cross-asset watch modules (Loop.md §3). These read three data-only
@@ -31,13 +43,51 @@ export const WATCH_MODULE_IDS = ['gold', 'oil', 'rates', 'crypto'] as const
 
 export type WatchModuleId = (typeof WATCH_MODULE_IDS)[number]
 
+// A DERIVED symbol has no Yahoo quote of its own; its price + candles are
+// computed from a base future rescaled by an FX rate. AU9999 (国内金价) =
+// GC=F(USD/oz) × CNY=X(CNY/USD) / gramsPerOunce → ¥/gram. The candle SHAPE
+// equals the base; only the scale changes.
+export interface WatchDerivedSpec {
+  base: string
+  fx: string
+  gramsPerOunce: number
+}
+
+// Per-symbol watch config: the ticker plus how its price reads (currency + a
+// localized unit key). `null` currency + `pct` unit → a yield ("4.30 %");
+// currency + `null` unit → a currency-prefixed number ("$67,000"); currency +
+// unit → "value currency / unit" ("4,079 $ / 盎司"). `derived` turns the entry
+// into a synthetic symbol (see WatchDerivedSpec).
+export interface WatchSymbolConfig {
+  symbol: string
+  currency: WatchCurrency | null
+  unit: WatchUnitKey | null
+  derived?: WatchDerivedSpec
+}
+
 // Symbol universe per module (defined ONCE, shared). Display labels are
 // resolved from the i18n `watch.labels` map — tickers themselves never change.
-export const WATCH_MODULE_SYMBOLS: Record<WatchModuleId, readonly string[]> = {
-  gold: ['GC=F', 'GLD', '518880.SS'],
-  oil: ['CL=F', 'BZ=F', 'USO'],
-  rates: ['^TNX', 'TLT'],
-  crypto: ['BTC-USD', 'ETH-USD']
+// AU9999 is a DERIVED entry (base GC=F × CNY=X) appended to the gold module.
+export const WATCH_MODULE_SYMBOLS: Record<WatchModuleId, readonly WatchSymbolConfig[]> = {
+  gold: [
+    { symbol: 'GC=F', currency: '$', unit: 'oz' },
+    { symbol: 'GLD', currency: '$', unit: 'share' },
+    { symbol: '518880.SS', currency: '¥', unit: 'share' },
+    { symbol: 'AU9999', currency: '¥', unit: 'g', derived: { base: 'GC=F', fx: 'CNY=X', gramsPerOunce: 31.1035 } }
+  ],
+  oil: [
+    { symbol: 'CL=F', currency: '$', unit: 'bbl' },
+    { symbol: 'BZ=F', currency: '$', unit: 'bbl' },
+    { symbol: 'USO', currency: '$', unit: 'share' }
+  ],
+  rates: [
+    { symbol: '^TNX', currency: null, unit: 'pct' },
+    { symbol: 'TLT', currency: '$', unit: 'share' }
+  ],
+  crypto: [
+    { symbol: 'BTC-USD', currency: '$', unit: null },
+    { symbol: 'ETH-USD', currency: '$', unit: null }
+  ]
 }
 
 // On-chart timeframe presets. Each maps to the (timeframe, limit) passed to
@@ -80,13 +130,13 @@ export function WatchModulePanel({ enabled, module }: { enabled: boolean; module
   const { t } = useI18n()
   const copy = t.finance.watch
   const symbols = WATCH_MODULE_SYMBOLS[module]
-  const [selected, setSelected] = useState<string>(symbols[0])
+  const [selected, setSelected] = useState<string>(symbols[0].symbol)
   const [showAnalysis, setShowAnalysis] = useState(false)
 
   // Keep the selection valid when the sidebar switches modules (the symbol set
   // changes); default to the first symbol so the single Analyze always targets
   // something concrete.
-  const activeSymbol = symbols.includes(selected) ? selected : symbols[0]
+  const activeSymbol = symbols.some(config => config.symbol === selected) ? selected : symbols[0].symbol
 
   return (
     <div className="space-y-5">
@@ -117,13 +167,13 @@ export function WatchModulePanel({ enabled, module }: { enabled: boolean; module
       )}
 
       <div className="space-y-4">
-        {symbols.map(symbol => (
+        {symbols.map(config => (
           <WatchSymbolCard
-            active={symbol === activeSymbol}
+            active={config.symbol === activeSymbol}
+            config={config}
             enabled={enabled}
-            key={symbol}
-            onSelect={() => setSelected(symbol)}
-            symbol={symbol}
+            key={config.symbol}
+            onSelect={() => setSelected(config.symbol)}
           />
         ))}
       </div>
@@ -149,24 +199,32 @@ function ReadOnlyNote({ text }: { text: string }) {
 
 function WatchSymbolCard({
   active,
+  config,
   enabled,
-  onSelect,
-  symbol
+  onSelect
 }: {
   active: boolean
+  config: WatchSymbolConfig
   enabled: boolean
   onSelect: () => void
-  symbol: string
 }) {
   const { t } = useI18n()
   const copy = t.finance.watch
   const [timeframe, setTimeframe] = useState<TimeframeId>(DEFAULT_TIMEFRAME)
   const preset = TIMEFRAME_PRESETS[timeframe]
 
+  const { currency, derived, symbol, unit } = config
+  const unitWord = unit ? copy.units[unit] : null
+  // A derived symbol (AU9999) has no Yahoo endpoint of its own — its price +
+  // candles are fetched from the BASE future and rescaled by the FX quote. A
+  // bare symbol fetches itself. Fetching the base under its own cache key means
+  // the derived card and the base's own card share one request.
+  const dataSymbol = derived ? derived.base : symbol
+
   const quoteQuery = useQuery({
     enabled,
-    queryFn: () => financeQuote(symbol),
-    queryKey: financeKey('watch', 'quote', symbol),
+    queryFn: () => financeQuote(dataSymbol),
+    queryKey: financeKey('watch', 'quote', dataSymbol),
     // 404 from yfinance is an expected per-symbol state, not worth retrying.
     retry: false,
     staleTime: QUOTE_STALE_MS
@@ -180,17 +238,78 @@ function WatchSymbolCard({
     enabled,
     gcTime: BARS_GC_MS,
     placeholderData: keepPreviousData,
-    queryFn: () => financeBars(symbol, { limit: preset.limit, timeframe: preset.timeframe }),
-    queryKey: financeKey('watch', 'bars', symbol, preset.timeframe),
+    queryFn: () => financeBars(dataSymbol, { limit: preset.limit, timeframe: preset.timeframe }),
+    queryKey: financeKey('watch', 'bars', dataSymbol, preset.timeframe),
     retry: false,
     staleTime: BARS_STALE_MS
   })
 
-  const quote = quoteQuery.data
-  const bars = barsQuery.data?.bars ?? NO_BARS
+  // FX quote for the derived rescale (CNY=X). Only fetched for derived symbols.
+  const fxQuery = useQuery({
+    enabled: enabled && Boolean(derived),
+    queryFn: () => financeQuote(derived?.fx ?? ''),
+    queryKey: financeKey('watch', 'quote', derived?.fx ?? 'none'),
+    retry: false,
+    staleTime: QUOTE_STALE_MS
+  })
+
+  const baseQuote = quoteQuery.data
+  const baseBars = barsQuery.data?.bars ?? NO_BARS
+  // ¥/gram factor = CNY-per-USD ÷ grams-per-ounce, applied to the USD/oz base.
+  const fxLast = fxQuery.data?.last ?? null
+
+  const factor =
+    derived && fxLast !== null && Number.isFinite(fxLast) ? fxLast / derived.gramsPerOunce : null
+
+  // Synthetic quote: rescale the base last to ¥/gram. A derived value has no
+  // real bid/ask/volume, so those are dropped (the header just shows Last).
+  const quote = useMemo<FinanceQuote | undefined>(() => {
+    if (!derived) {
+      return baseQuote
+    }
+
+    if (!baseQuote || factor === null || baseQuote.last === null) {
+      return undefined
+    }
+
+    return { symbol, last: baseQuote.last * factor, bid: null, ask: null, volume: null, as_of: baseQuote.as_of }
+  }, [derived, baseQuote, factor, symbol])
+
+  // Synthetic candles: the base's OHLC rescaled by the same factor — identical
+  // SHAPE, ¥/gram scale. Volume + ts are carried through unchanged.
+  const bars = useMemo<FinanceBar[]>(() => {
+    if (!derived) {
+      return baseBars
+    }
+
+    if (factor === null) {
+      return NO_BARS
+    }
+
+    return baseBars.map(bar => ({
+      ...bar,
+      open: bar.open * factor,
+      high: bar.high * factor,
+      low: bar.low * factor,
+      close: bar.close * factor
+    }))
+  }, [derived, baseBars, factor])
+
   const label = copy.labels[symbol] ?? symbol
-  const quoteFailed = quoteQuery.isError
-  const barsFailed = barsQuery.isError
+
+  // A derived symbol is broken when EITHER input quote errors or yields no
+  // usable value — surfaced as a distinct no-data note (never a crash).
+  const derivedBroken =
+    Boolean(derived) &&
+    (quoteQuery.isError ||
+      fxQuery.isError ||
+      (fxQuery.isSuccess && (fxLast === null || !Number.isFinite(fxLast))) ||
+      (quoteQuery.isSuccess && (baseQuote?.last === null || baseQuote?.last === undefined)))
+
+  const quotePending = quoteQuery.isPending || (Boolean(derived) && fxQuery.isPending)
+  const barsPending = barsQuery.isPending || (Boolean(derived) && fxQuery.isPending)
+  const quoteFailed = derived ? derivedBroken : quoteQuery.isError
+  const barsFailed = derived ? barsQuery.isError || derivedBroken : barsQuery.isError
 
   return (
     <div
@@ -219,31 +338,34 @@ function WatchSymbolCard({
           <span className="truncate text-[0.68rem] text-muted-foreground">{label}</span>
         </div>
         <div className="flex items-baseline gap-2 tabular-nums">
-          {quoteQuery.isPending ? (
+          {quotePending ? (
             <span className="text-xs text-muted-foreground">—</span>
           ) : quoteFailed ? (
-            <span className="text-[0.65rem] text-muted-foreground">{copy.quoteError}</span>
+            <span className="text-[0.65rem] text-muted-foreground">{derived ? copy.derivedNoData : copy.quoteError}</span>
           ) : (
             <>
               <span className="text-[0.6rem] font-medium text-(--ui-text-tertiary)">{copy.last}</span>
               <span className="text-sm font-semibold text-foreground transition-colors duration-300">
-                {fmtPrice(quote?.last)}
+                {fmtWatchPrice(quote?.last, currency, unit, unitWord)}
               </span>
             </>
           )}
         </div>
       </div>
 
+      {/* Provenance for the DERIVED symbol (AU9999 = intl gold × USD/CNY). */}
+      {derived && <p className="text-[0.6rem] leading-4 text-muted-foreground/70">{copy.derivedNote}</p>}
+
       {!quoteFailed && quote && (
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-[0.65rem] tabular-nums text-muted-foreground">
           {quote.bid !== null && (
             <span>
-              {copy.bid} <span className="text-foreground">{fmtPrice(quote.bid)}</span>
+              {copy.bid} <span className="text-foreground">{fmtWatchValue(quote.bid, currency, unit, unitWord)}</span>
             </span>
           )}
           {quote.ask !== null && (
             <span>
-              {copy.ask} <span className="text-foreground">{fmtPrice(quote.ask)}</span>
+              {copy.ask} <span className="text-foreground">{fmtWatchValue(quote.ask, currency, unit, unitWord)}</span>
             </span>
           )}
           {quote.volume !== null && (
@@ -263,12 +385,20 @@ function WatchSymbolCard({
           </div>
           <TimeframeSwitcher onChange={setTimeframe} value={timeframe} />
         </div>
-        {barsQuery.isPending ? (
+        {barsPending ? (
           <ChartSkeleton label={copy.chartLoading} />
         ) : barsFailed || bars.length === 0 ? (
-          <div className="py-1 text-[0.65rem] text-muted-foreground">{barsFailed ? copy.noData : copy.chartEmpty}</div>
+          <div className="py-1 text-[0.65rem] text-muted-foreground">
+            {derived && derivedBroken ? copy.derivedNoData : barsFailed ? copy.noData : copy.chartEmpty}
+          </div>
         ) : (
-          <CandlestickChart aria={copy.chartAria(symbol)} bars={bars} />
+          <CandlestickChart
+            aria={copy.chartAria(symbol)}
+            bars={bars}
+            currency={currency}
+            unit={unit}
+            unitWord={unitWord}
+          />
         )}
       </div>
     </div>
@@ -366,7 +496,19 @@ function simpleMovingAverage(bars: FinanceBar[], period: number): (null | number
 // closes, no extra fetch — ride the SAME coordinate space in two distinct,
 // theme-safe colors, with a small legend. A TradingView-style crosshair + OHLC
 // tooltip tracks the cursor (values straight from the already-fetched bars).
-function CandlestickChart({ aria, bars }: { aria: string; bars: FinanceBar[] }) {
+function CandlestickChart({
+  aria,
+  bars,
+  currency,
+  unit,
+  unitWord
+}: {
+  aria: string
+  bars: FinanceBar[]
+  currency: WatchCurrency | null
+  unit: WatchUnitKey | null
+  unitWord: null | string
+}) {
   const { t } = useI18n()
   const copy = t.finance.watch
   const containerRef = useRef<HTMLDivElement>(null)
@@ -492,7 +634,7 @@ function CandlestickChart({ aria, bars }: { aria: string; bars: FinanceBar[] }) 
             style={{ left: `${crosshairLeft}%` }}
           />
           <div className="pointer-events-none absolute inset-x-0 h-px bg-foreground/25" style={{ top: hover.y }} />
-          <ChartTooltip bar={hoveredBar} hover={hover} />
+          <ChartTooltip bar={hoveredBar} currency={currency} hover={hover} unit={unit} unitWord={unitWord} />
         </>
       )}
     </div>
@@ -513,7 +655,19 @@ function MaLegendItem({ color, label }: { color: string; label: string }) {
 // Compact OHLCV readout for the hovered candle. Follows the cursor and flips to
 // whichever quadrant keeps it inside the chart. Readable in light + dark via
 // the elevated popover surface; disappears with the crosshair on mouse-leave.
-function ChartTooltip({ bar, hover }: { bar: FinanceBar; hover: ChartHover }) {
+function ChartTooltip({
+  bar,
+  currency,
+  hover,
+  unit,
+  unitWord
+}: {
+  bar: FinanceBar
+  currency: WatchCurrency | null
+  hover: ChartHover
+  unit: WatchUnitKey | null
+  unitWord: null | string
+}) {
   const { t } = useI18n()
   const copy = t.finance.watch
   const up = bar.close >= bar.open
@@ -534,13 +688,13 @@ function ChartTooltip({ bar, hover }: { bar: FinanceBar; hover: ChartHover }) {
     >
       <div className="mb-1 font-medium text-foreground">{dateLabel}</div>
       <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 tabular-nums">
-        <TooltipCell label={copy.hoverOpen} value={fmtPrice(bar.open)} />
-        <TooltipCell label={copy.hoverHigh} value={fmtPrice(bar.high)} />
-        <TooltipCell label={copy.hoverLow} value={fmtPrice(bar.low)} />
+        <TooltipCell label={copy.hoverOpen} value={fmtWatchValue(bar.open, currency, unit, unitWord)} />
+        <TooltipCell label={copy.hoverHigh} value={fmtWatchValue(bar.high, currency, unit, unitWord)} />
+        <TooltipCell label={copy.hoverLow} value={fmtWatchValue(bar.low, currency, unit, unitWord)} />
         <TooltipCell
           label={copy.hoverClose}
           tone={up ? 'text-primary' : 'text-destructive'}
-          value={fmtPrice(bar.close)}
+          value={fmtWatchValue(bar.close, currency, unit, unitWord)}
         />
       </div>
       {bar.volume > 0 && (

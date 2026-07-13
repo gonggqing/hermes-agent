@@ -1454,6 +1454,9 @@ export interface Translations {
       modules: Record<'crypto' | 'gold' | 'oil' | 'rates', string>
       // Ticker → display label (tickers themselves are never translated).
       labels: Record<string, string>
+      // Localized price units (盎司 / 股 / 桶 / 克 / %). Keyed by the unit key
+      // each watch symbol declares; percent renders as "%".
+      units: Record<'bbl' | 'g' | 'oz' | 'pct' | 'share', string>
       last: string
       bid: string
       ask: string
@@ -1461,6 +1464,10 @@ export interface Translations {
       quoteAsOf: (ts: string) => string
       quoteError: string
       noData: string
+      // AU9999 (国内金价) is DERIVED from COMEX gold × USD/CNY — a small
+      // provenance note, and a no-data note when either input quote is missing.
+      derivedNote: string
+      derivedNoData: string
       chartTitle: string
       chartAria: (symbol: string) => string
       chartEmpty: string

@@ -114,6 +114,70 @@ export const fmtPrice = (value: null | number | undefined): string =>
 export const fmtQty = (value: null | number | undefined): string =>
   value === null || value === undefined || !Number.isFinite(value) ? '—' : qtyFmt.format(value)
 
+// ── Watch-module price presentation (currency + unit) ────────────────────────
+// Each watch symbol carries a currency symbol and a localized unit key; the
+// number is rendered with both. `null` currency + `pct` unit renders a yield
+// ("4.30 %"); a currency with a `null` unit renders a currency-prefixed number
+// ("$67,000"); a currency with a unit renders "value currency / unit"
+// ("4,079 $ / 盎司"). The `unitWord` is the localized unit label (copy.units).
+export type WatchCurrency = '$' | '¥'
+export type WatchUnitKey = 'bbl' | 'g' | 'oz' | 'pct' | 'share'
+
+// Yields want ~2 fixed decimals ("4.30 %"); the shared priceFmt keeps thousands
+// separators for large values (BTC → "67,000").
+const yieldFmt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 2 })
+
+// Full header rendering of a symbol's last price with its currency + unit.
+export function fmtWatchPrice(
+  value: null | number | undefined,
+  currency: WatchCurrency | null,
+  unit: WatchUnitKey | null,
+  unitWord: null | string
+): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return '—'
+  }
+
+  if (unit === 'pct') {
+    return `${yieldFmt.format(value)} ${unitWord ?? '%'}`
+  }
+
+  if (currency && unit) {
+    return `${priceFmt.format(value)} ${currency} / ${unitWord ?? ''}`.trimEnd()
+  }
+
+  if (currency) {
+    return `${currency}${priceFmt.format(value)}`
+  }
+
+  return priceFmt.format(value)
+}
+
+// Compact currency/unit rendering for tight surfaces (chart O/H/L/C tooltip,
+// bid/ask): a currency prefix (or the "%" suffix for yields) with no trailing
+// "/ unit" so the small 2×2 grid stays legible — the full unit lives in the
+// card header.
+export function fmtWatchValue(
+  value: null | number | undefined,
+  currency: WatchCurrency | null,
+  unit: WatchUnitKey | null,
+  unitWord: null | string
+): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return '—'
+  }
+
+  if (unit === 'pct') {
+    return `${yieldFmt.format(value)} ${unitWord ?? '%'}`
+  }
+
+  if (currency) {
+    return `${currency}${priceFmt.format(value)}`
+  }
+
+  return priceFmt.format(value)
+}
+
 export const fmtPct = (value: null | number | undefined, digits = 1): string =>
   value === null || value === undefined || !Number.isFinite(value) ? '—' : `${value.toFixed(digits)}%`
 

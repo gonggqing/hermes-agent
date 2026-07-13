@@ -45,7 +45,15 @@ export const ja = defineLocale({
         '^TNX': '米国 10 年利回り',
         TLT: '20 年国債 ETF',
         'BTC-USD': 'ビットコイン',
-        'ETH-USD': 'イーサリアム'
+        'ETH-USD': 'イーサリアム',
+        AU9999: '国内金価'
+      },
+      units: {
+        oz: 'オンス',
+        share: '株',
+        bbl: 'バレル',
+        g: 'グラム',
+        pct: '%'
       },
       last: '直近',
       bid: '買気配',
@@ -54,6 +62,8 @@ export const ja = defineLocale({
       quoteAsOf: ts => `${ts} 時点`,
       quoteError: '気配を取得できません。',
       noData: 'この銘柄のデータは現在ありません。',
+      derivedNote: '国際金価 × 米ドル/人民元から算出',
+      derivedNoData: '国際金価または人民元レートが取得できず、AU9999 を算出できません。',
       chartTitle: '価格',
       chartAria: symbol => `${symbol} の価格チャート`,
       chartEmpty: '価格履歴がありません。',

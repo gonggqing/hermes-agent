@@ -45,7 +45,15 @@ export const zhHant = defineLocale({
         '^TNX': '美國 10 年期殖利率',
         TLT: '20 年期公債 ETF',
         'BTC-USD': '比特幣',
-        'ETH-USD': '以太幣'
+        'ETH-USD': '以太幣',
+        AU9999: '國內金價'
+      },
+      units: {
+        oz: '盎司',
+        share: '股',
+        bbl: '桶',
+        g: '克',
+        pct: '%'
       },
       last: '最新',
       bid: '買價',
@@ -54,6 +62,8 @@ export const zhHant = defineLocale({
       quoteAsOf: ts => `截至 ${ts}`,
       quoteError: '報價不可用。',
       noData: '該標的暫無資料。',
+      derivedNote: '由國際金價 × 美元/人民幣換算',
+      derivedNoData: '國際金價或人民幣匯率不可用，無法換算 AU9999。',
       chartTitle: '價格',
       chartAria: symbol => `${symbol} 價格走勢圖`,
       chartEmpty: '暫無價格歷史。',

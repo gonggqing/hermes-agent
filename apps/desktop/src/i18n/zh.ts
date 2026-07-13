@@ -1915,7 +1915,15 @@ export const zh: Translations = {
         '^TNX': '美国 10 年期收益率',
         TLT: '20 年期国债 ETF',
         'BTC-USD': '比特币',
-        'ETH-USD': '以太坊'
+        'ETH-USD': '以太坊',
+        AU9999: '国内金价'
+      },
+      units: {
+        oz: '盎司',
+        share: '股',
+        bbl: '桶',
+        g: '克',
+        pct: '%'
       },
       last: '最新',
       bid: '买价',
@@ -1924,6 +1932,8 @@ export const zh: Translations = {
       quoteAsOf: ts => `截至 ${ts}`,
       quoteError: '报价不可用。',
       noData: '该标的暂无数据。',
+      derivedNote: '由国际金价 × 美元/人民币折算',
+      derivedNoData: '国际金价或人民币汇率不可用，无法折算 AU9999。',
       chartTitle: '价格',
       chartAria: symbol => `${symbol} 价格走势图`,
       chartEmpty: '暂无价格历史。',

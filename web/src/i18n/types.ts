@@ -293,6 +293,16 @@ export interface FinanceTranslations {
     bid: string;
     ask: string;
     volume: string;
+    // Localized price-unit words (rendered as "… / <unit>"). Percent stays "%".
+    units: {
+      oz: string; // troy ounce (盎司)
+      share: string; // per share (股)
+      bbl: string; // barrel (桶)
+      gram: string; // gram (克)
+    };
+    // AU9999 / SGE domestic spot gold (a derived symbol in the Gold module).
+    au9999Label: string; // "AU9999 · Domestic Spot Gold"
+    au9999Note: string; // "Derived from international gold × CNY"
     asOf: string; // "as of {time}"
     noData: string; // per-symbol inline error
     chartUnavailable: string;

@@ -14,7 +14,12 @@ import { Card, CardContent } from "@nous-research/ui/ui/components/card";
 import { cn } from "@/lib/utils";
 import type { FinanceTranslations } from "@/i18n/types";
 import { useFinanceT } from "./i18n";
-import { directionTone, fmtMoney, fmtTs } from "./format";
+import {
+  directionTone,
+  fmtTs,
+  fmtWatchPrice,
+  type WatchPriceDisplay,
+} from "./format";
 import {
   WATCH_MODULES,
   watchModuleName,
@@ -121,57 +126,43 @@ interface WatchSymbolData {
 }
 
 /**
- * Cache-first data for one symbol at one timeframe preset. The quote is
- * per-symbol (fetched once); bars are per (symbol, timeframe) and cached, so
- * flipping back to a previously-viewed preset is instant — no network, no
- * loading flash. No live poll: the newest candle is whatever the last fetch
- * returned (Loop.md §3: READ-ONLY).
+ * Cache-first quote for one symbol (timeframe-independent). Seeded from the
+ * module cache; only fetches on a miss. Pass `symbol = null` to opt out (used
+ * by non-derived symbols for the unused FX slot) — it settles done with a null
+ * quote and never fetches. All setState happens in the async callback, so one
+ * 404 (common for GC=F/^TNX/518880.SS) never blanks a sibling.
  */
-function useWatchSymbol(
-  symbol: string,
-  preset: TimeframePresetKey,
-): WatchSymbolData {
-  const { timeframe, limit } = TIMEFRAME_CONFIG[preset];
-  const key = barsKey(symbol, timeframe, limit);
-
-  // Quote — per-symbol, timeframe-independent. Seeded from cache.
-  const [quote, setQuote] = useState<FinanceQuote | null>(
-    () => quoteCache.get(symbol) ?? null,
+function useSymbolQuote(symbol: string | null): {
+  quote: FinanceQuote | null;
+  done: boolean;
+} {
+  const [quote, setQuote] = useState<FinanceQuote | null>(() =>
+    symbol ? (quoteCache.get(symbol) ?? null) : null,
   );
-  const [quoteDone, setQuoteDone] = useState<boolean>(() =>
-    quoteCache.has(symbol),
+  const [done, setDone] = useState<boolean>(
+    () => symbol === null || quoteCache.has(symbol),
   );
-
-  // Bars — per (symbol, timeframe). Seeded from cache, and re-synced
-  // synchronously when the preset flips so we never flash the prior
-  // timeframe's candles (React's "adjust state on prop change" pattern).
-  const [bars, setBars] = useState<FinanceBar[]>(
-    () => barsCache.get(key)?.bars ?? [],
-  );
-  const [barsDone, setBarsDone] = useState<boolean>(() => barsCache.has(key));
-  const [renderedKey, setRenderedKey] = useState(key);
-  if (renderedKey !== key) {
-    setRenderedKey(key);
-    setBars(barsCache.get(key)?.bars ?? []);
-    setBarsDone(barsCache.has(key));
+  // Re-sync synchronously if the symbol identity changes (e.g. a derived
+  // entry's FX slot toggling in/out) — React's "adjust state on prop change".
+  const [renderedSymbol, setRenderedSymbol] = useState(symbol);
+  if (renderedSymbol !== symbol) {
+    setRenderedSymbol(symbol);
+    setQuote(symbol ? (quoteCache.get(symbol) ?? null) : null);
+    setDone(symbol === null || quoteCache.has(symbol));
   }
 
-  // Quote fetch (once per symbol; independent of bars so one 404 — common for
-  // GC=F/^TNX/518880.SS — never blanks the other). A cache hit is already
-  // seeded by the useState initializer above, so this only fetches on a miss
-  // (all setState happens in the async callback, never in the effect body).
   useEffect(() => {
-    if (quoteCache.has(symbol)) return;
+    if (symbol === null || quoteCache.has(symbol)) return;
     let alive = true;
     api.financeQuote(symbol).then(
       (q) => {
         if (!alive) return;
         quoteCache.set(symbol, q);
         setQuote(q);
-        setQuoteDone(true);
+        setDone(true);
       },
       () => {
-        if (alive) setQuoteDone(true);
+        if (alive) setDone(true);
       },
     );
     return () => {
@@ -179,10 +170,33 @@ function useWatchSymbol(
     };
   }, [symbol]);
 
-  // Bars fetch (per symbol+timeframe) — cache-first, so a repeat view is
-  // instant and never re-hits the heavy endpoint. A cache hit is already
-  // seeded synchronously during render (initializer + the renderedKey sync),
-  // so this only fetches on a miss.
+  return { quote, done };
+}
+
+/**
+ * Cache-first OHLCV bars for one (symbol, timeframe). Seeded from cache and
+ * re-synced synchronously when the preset flips so we never flash the prior
+ * timeframe's candles. Only fetches on a miss, so flipping back to a
+ * previously-viewed preset is instant (Loop.md §3: READ-ONLY, no live poll).
+ */
+function useSymbolBars(
+  symbol: string,
+  preset: TimeframePresetKey,
+): { bars: FinanceBar[]; done: boolean } {
+  const { timeframe, limit } = TIMEFRAME_CONFIG[preset];
+  const key = barsKey(symbol, timeframe, limit);
+
+  const [bars, setBars] = useState<FinanceBar[]>(
+    () => barsCache.get(key)?.bars ?? [],
+  );
+  const [done, setDone] = useState<boolean>(() => barsCache.has(key));
+  const [renderedKey, setRenderedKey] = useState(key);
+  if (renderedKey !== key) {
+    setRenderedKey(key);
+    setBars(barsCache.get(key)?.bars ?? []);
+    setDone(barsCache.has(key));
+  }
+
   useEffect(() => {
     if (barsCache.has(key)) return;
     let alive = true;
@@ -191,12 +205,12 @@ function useWatchSymbol(
         if (!alive) return;
         barsCache.set(key, { bars: res.bars, fetchedAt: Date.now() });
         setBars(res.bars);
-        setBarsDone(true);
+        setDone(true);
       },
       () => {
         if (!alive) return;
         setBars([]);
-        setBarsDone(true);
+        setDone(true);
       },
     );
     return () => {
@@ -204,14 +218,82 @@ function useWatchSymbol(
     };
   }, [key, symbol, timeframe, limit]);
 
+  return { bars, done };
+}
+
+/**
+ * Cache-first data for one watch symbol at one timeframe preset.
+ *
+ * For a plain symbol this is just its quote + bars. For a DERIVED symbol
+ * (e.g. AU9999, which is not on Yahoo) it fetches the base price series
+ * (`derived.base`, e.g. GC=F in USD/oz), the base bars, and the FX quote
+ * (`derived.fx`, e.g. CNY=X in CNY/USD), then rescales the base quote's last
+ * AND every base bar's O/H/L/C by `factor = fxLast / gramsPerOunce` — the
+ * candle SHAPE is the base series, just rescaled to ¥/gram. A missing base or
+ * FX quote degrades to "error" (a graceful no-data note) — it never crashes.
+ * All three symbols share the same module caches, so GC=F/CNY=X are fetched
+ * once even though the Gold module shows both GC=F and AU9999.
+ */
+function useWatchSymbol(
+  entry: WatchSymbol,
+  preset: TimeframePresetKey,
+): WatchSymbolData {
+  const derived = entry.derived ?? null;
+  // Hooks must run unconditionally: the "primary" series is the base symbol
+  // for a derived entry, otherwise the entry's own symbol. The FX slot is
+  // null (a no-op) for non-derived entries.
+  const primarySymbol = derived ? derived.base : entry.symbol;
+  const { quote: primaryQuote, done: quoteDone } = useSymbolQuote(primarySymbol);
+  const { bars: primaryBars, done: barsDone } = useSymbolBars(
+    primarySymbol,
+    preset,
+  );
+  const { quote: fxQuote, done: fxDone } = useSymbolQuote(
+    derived ? derived.fx : null,
+  );
+
+  const { quote, bars } = useMemo<{
+    quote: FinanceQuote | null;
+    bars: FinanceBar[];
+  }>(() => {
+    if (!derived) return { quote: primaryQuote, bars: primaryBars };
+    const fxLast = fxQuote?.last ?? null;
+    // Cannot derive without the FX rate — degrade to no-data (never crash).
+    if (fxLast === null) return { quote: null, bars: [] };
+    const factor = fxLast / derived.gramsPerOunce;
+    const scale = (v: number | null): number | null =>
+      v === null ? null : v * factor;
+    const dq: FinanceQuote | null = primaryQuote
+      ? {
+          ...primaryQuote,
+          symbol: entry.symbol,
+          last: scale(primaryQuote.last),
+          bid: scale(primaryQuote.bid),
+          ask: scale(primaryQuote.ask),
+        }
+      : null;
+    const db: FinanceBar[] = primaryBars.map((b) => ({
+      ts: b.ts,
+      open: b.open * factor,
+      high: b.high * factor,
+      low: b.low * factor,
+      close: b.close * factor,
+      volume: b.volume,
+    }));
+    return { quote: dq, bars: db };
+  }, [derived, primaryQuote, primaryBars, fxQuote, entry.symbol]);
+
+  // A derived entry only settles once its FX quote has settled too.
+  const settledQuote = derived ? quoteDone && fxDone : quoteDone;
+  const settledBars = derived ? barsDone && fxDone : barsDone;
   const status: SymbolStatus =
     quote === null && bars.length === 0
-      ? quoteDone && barsDone
+      ? settledQuote && settledBars
         ? "error"
         : "loading"
       : "ready";
 
-  return { status, quote, bars, barsDone };
+  return { status, quote, bars, barsDone: settledBars };
 }
 
 // ── Inline SVG candlestick chart with TradingView-style crosshair ─────
@@ -231,10 +313,13 @@ function CrosshairTooltip({
   bar,
   hover,
   ft,
+  formatValue,
 }: {
   bar: FinanceBar;
   hover: HoverState;
   ft: FinanceTranslations;
+  /** Compact per-symbol price formatter (currency, no unit suffix). */
+  formatValue: (v: number) => string;
 }) {
   const onRight = hover.xPx < hover.width / 2;
   const style: CSSProperties = {
@@ -259,12 +344,12 @@ function CrosshairTooltip({
     >
       <div className="mb-1 text-text-tertiary">{fmtTs(bar.ts)}</div>
       <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
-        {row(ft.watch.open, fmtMoney(bar.open))}
-        {row(ft.watch.high, fmtMoney(bar.high))}
-        {row(ft.watch.low, fmtMoney(bar.low))}
+        {row(ft.watch.open, formatValue(bar.open))}
+        {row(ft.watch.high, formatValue(bar.high))}
+        {row(ft.watch.low, formatValue(bar.low))}
         {row(
           ft.watch.close,
-          fmtMoney(bar.close),
+          formatValue(bar.close),
           up ? "text-success" : "text-destructive",
         )}
       </div>
@@ -295,12 +380,15 @@ function CandlestickChart({
   ma30,
   ariaLabel,
   ft,
+  formatValue,
 }: {
   bars: FinanceBar[];
   ma20: (number | null)[];
   ma30: (number | null)[];
   ariaLabel: string;
   ft: FinanceTranslations;
+  /** Compact per-symbol price formatter for the axis labels + hover tooltip. */
+  formatValue: (v: number) => string;
 }) {
   const slot = 6; // viewBox units per candle
   const bodyW = 4;
@@ -436,6 +524,15 @@ function CandlestickChart({
         )}
       </svg>
 
+      {/* Price (y) axis: high at the top, low at the bottom — currency-aware
+          so the candle scale is legible without hovering. */}
+      <div className="pointer-events-none absolute right-1 top-0.5 font-mondwest normal-case text-[0.625rem] leading-none text-text-tertiary">
+        {formatValue(max)}
+      </div>
+      <div className="pointer-events-none absolute bottom-0.5 right-1 font-mondwest normal-case text-[0.625rem] leading-none text-text-tertiary">
+        {formatValue(min)}
+      </div>
+
       {/* Crosshair guides. */}
       {hover && (
         <>
@@ -452,7 +549,12 @@ function CandlestickChart({
 
       {/* Crosshair tooltip. */}
       {hover && hoveredBar && (
-        <CrosshairTooltip bar={hoveredBar} hover={hover} ft={ft} />
+        <CrosshairTooltip
+          bar={hoveredBar}
+          hover={hover}
+          ft={ft}
+          formatValue={formatValue}
+        />
       )}
     </div>
   );
@@ -719,10 +821,21 @@ function WatchSymbolCard({
   onSelect: () => void;
 }) {
   const [preset, setPreset] = useState<TimeframePresetKey>(DEFAULT_PRESET);
-  const { status, quote, bars, barsDone } = useWatchSymbol(
-    entry.symbol,
-    preset,
+  const { status, quote, bars, barsDone } = useWatchSymbol(entry, preset);
+
+  // Per-symbol currency + unit for price rendering. `display` drives the full
+  // "value currency / unit" readout; `formatValue` is the compact variant
+  // (currency-prefixed, no unit) reused by the axis labels + hover tooltip.
+  const display = useMemo<WatchPriceDisplay>(
+    () => ({ currency: entry.currency, unit: entry.unit }),
+    [entry.currency, entry.unit],
   );
+  const formatValue = useMemo(
+    () => (v: number) => fmtWatchPrice(v, display, ft, { withUnit: false }),
+    [display, ft],
+  );
+  // Derived symbols (AU9999) carry a localized descriptor + provenance note.
+  const label = entry.derived ? ft.watch.au9999Label : entry.label;
 
   // MA20/MA30 computed once per bars change (frontend-only, no extra fetch).
   const ma20 = useMemo(() => sma(bars, 20), [bars]);
@@ -759,7 +872,7 @@ function WatchSymbolCard({
             {entry.symbol}
           </span>
           <span className="font-mondwest normal-case text-sm text-muted-foreground">
-            {entry.label}
+            {label}
           </span>
           {quote && (
             <span className="ml-auto flex items-baseline gap-2">
@@ -767,11 +880,18 @@ function WatchSymbolCard({
                 {ft.watch.price}
               </span>
               <span className="font-mono-ui text-base text-foreground">
-                {fmtMoney(quote.last)}
+                {fmtWatchPrice(quote.last, display, ft)}
               </span>
             </span>
           )}
         </div>
+
+        {/* Derived-symbol provenance (AU9999 = international gold × CNY). */}
+        {entry.derived && (
+          <p className="-mt-2 font-mondwest normal-case text-[0.6875rem] text-text-tertiary">
+            {ft.watch.au9999Note}
+          </p>
+        )}
 
         {status === "error" ? (
           <p className="font-mondwest normal-case py-3 text-sm text-muted-foreground">
@@ -786,7 +906,7 @@ function WatchSymbolCard({
                   <span>
                     {ft.watch.bid}{" "}
                     <span className="text-foreground">
-                      {fmtMoney(quote.bid)}
+                      {formatValue(quote.bid)}
                     </span>
                   </span>
                 )}
@@ -794,7 +914,7 @@ function WatchSymbolCard({
                   <span>
                     {ft.watch.ask}{" "}
                     <span className="text-foreground">
-                      {fmtMoney(quote.ask)}
+                      {formatValue(quote.ask)}
                     </span>
                   </span>
                 )}
@@ -828,8 +948,9 @@ function WatchSymbolCard({
                 bars={bars}
                 ma20={ma20}
                 ma30={ma30}
-                ariaLabel={`${entry.symbol} ${entry.label}`}
+                ariaLabel={`${entry.symbol} ${label}`}
                 ft={ft}
+                formatValue={formatValue}
               />
             ) : barsDone ? (
               <p className="font-mondwest normal-case text-xs text-text-tertiary">

@@ -1742,7 +1742,15 @@ export const en: Translations = {
         '^TNX': 'US 10Y Yield',
         TLT: '20Y Treasury ETF',
         'BTC-USD': 'Bitcoin',
-        'ETH-USD': 'Ethereum'
+        'ETH-USD': 'Ethereum',
+        AU9999: 'Domestic spot gold'
+      },
+      units: {
+        oz: 'oz',
+        share: 'share',
+        bbl: 'bbl',
+        g: 'g',
+        pct: '%'
       },
       last: 'Last',
       bid: 'Bid',
@@ -1751,6 +1759,8 @@ export const en: Translations = {
       quoteAsOf: ts => `as of ${ts}`,
       quoteError: 'Quote unavailable.',
       noData: 'No data for this symbol right now.',
+      derivedNote: 'Derived from COMEX gold × USD/CNY',
+      derivedNoData: 'International gold or CNY rate unavailable — cannot derive AU9999.',
       chartTitle: 'Price',
       chartAria: symbol => `Price chart for ${symbol}`,
       chartEmpty: 'No price history available.',

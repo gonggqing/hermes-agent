@@ -1,6 +1,8 @@
 // Shared formatting + tone helpers for the Finance tab (Loop.md §5.9).
 
 import type { FinanceCandidateStatus } from "@/lib/api";
+import type { FinanceTranslations } from "@/i18n/types";
+import type { WatchCurrency, WatchUnitKey } from "./constants";
 
 /** Badge tones supported by @nous-research/ui's <Badge tone=...>. */
 export type BadgeTone =
@@ -17,6 +19,42 @@ export function fmtMoney(v: number | null | undefined): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+}
+
+/** Per-symbol currency + unit for a watch-module price. */
+export interface WatchPriceDisplay {
+  currency: WatchCurrency | null;
+  unit: WatchUnitKey | null;
+}
+
+/**
+ * Format a watch-module price with its per-symbol currency + unit. Shapes:
+ *  - percent (unit "pct"):     "4.30 %"            (no currency, no slash)
+ *  - currency + unit (full):   "4,079.00 $ / 盎司"  (currency AFTER the value)
+ *  - currency, no unit:        "$67,000.00"        (currency PREFIX)
+ *  - unit only, no currency:   "12.30 / 桶"
+ * Pass `withUnit: false` for a compact readout (currency-prefixed value, or
+ * "4.30 %") used in tooltips / axis labels. Localizes the unit word via
+ * `ft.watch.units`. Nullish / NaN → "—".
+ */
+export function fmtWatchPrice(
+  value: number | null | undefined,
+  display: WatchPriceDisplay,
+  ft: FinanceTranslations,
+  opts?: { withUnit?: boolean },
+): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  const { currency, unit } = display;
+  const num = fmtMoney(value);
+  // Percent stays "%" in every context (no currency, no localization).
+  if (unit === "pct") return `${num} %`;
+  const withUnit = opts?.withUnit !== false;
+  if (currency === null) {
+    return unit && withUnit ? `${num} / ${ft.watch.units[unit]}` : num;
+  }
+  // Currency present: compact + unit-less both render as a prefix ("$67,000").
+  if (unit === null || !withUnit) return `${currency}${num}`;
+  return `${num} ${currency} / ${ft.watch.units[unit]}`;
 }
 
 export function fmtSigned(v: number | null | undefined): string {
