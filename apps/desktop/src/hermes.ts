@@ -1572,6 +1572,80 @@ export interface FinanceKnowledgeHit {
   trading_date: string
 }
 
+// ── Watch-module market data (Loop.md §3: read-only) ────────────────────────
+// The cross-asset watch modules (Gold/Oil/Rates/Crypto) read three read-only
+// endpoints proxied at /api/finance/v1/{quote,bars,analyze}. These carry NO
+// authority — there is no order or approval path here. Some tickers (GC=F,
+// ^TNX, 518880.SS) return 404 from yfinance intermittently, so callers treat a
+// per-symbol failure as an inline "no data" note and never crash the panel.
+
+export interface FinanceQuote {
+  symbol: string
+  last: null | number
+  bid: null | number
+  ask: null | number
+  volume: null | number
+  as_of: null | string
+  note?: string
+}
+
+export interface FinanceBar {
+  ts: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+
+export interface FinanceBars {
+  symbol: string
+  timeframe: string
+  bars: FinanceBar[]
+  as_of: null | string
+  note?: string
+}
+
+// The multi-agent verdict (direction + confidence) the analyze endpoint returns.
+export interface FinanceAnalyzeVerdict {
+  direction: string
+  confidence: number
+}
+
+// Per-agent signal from the analyze fan-out. Rendered defensively (optional
+// fields) so an unexpected server field never blanks the panel.
+export interface FinanceAnalyzeSignal {
+  symbol?: string
+  direction: string
+  confidence: number
+  source_agent?: string
+  thesis?: string
+}
+
+// One cited source (news item or research note). Field names vary between the
+// two collections, so every field is optional and the UI falls back across them.
+export interface FinanceAnalyzeCitation {
+  title?: string
+  headline?: string
+  label?: string
+  source?: string
+  publisher?: string
+  url?: string
+  source_url?: string
+  sentiment?: null | number
+}
+
+export interface FinanceAnalyze {
+  symbol: string
+  last: null | number
+  verdict: FinanceAnalyzeVerdict | null
+  signals: FinanceAnalyzeSignal[]
+  news: FinanceAnalyzeCitation[]
+  research: FinanceAnalyzeCitation[]
+  as_of: null | string
+  note?: string
+}
+
 function financeQuery(params: Record<string, boolean | number | string | undefined>): string {
   const query = new URLSearchParams()
 
@@ -1697,4 +1771,26 @@ export function searchFinanceKnowledge(q: string, k = 5): Promise<FinanceKnowled
   return window.hermesDesktop.api<FinanceKnowledgeHit[]>({
     path: `/api/finance/v1/knowledge/search${financeQuery({ k, q })}`
   })
+}
+
+// ── Watch-module read-only fetchers (Loop.md §3) ────────────────────────────
+// One-shot spot quote for a symbol. Not mode-scoped — market data is global.
+export function financeQuote(symbol: string): Promise<FinanceQuote> {
+  return window.hermesDesktop.api<FinanceQuote>({ path: `/api/finance/v1/quote${financeQuery({ symbol })}` })
+}
+
+// Recent OHLCV bars for a compact price chart (default: 120 daily bars).
+export function financeBars(
+  symbol: string,
+  opts: { limit?: number; timeframe?: string } = {}
+): Promise<FinanceBars> {
+  return window.hermesDesktop.api<FinanceBars>({
+    path: `/api/finance/v1/bars${financeQuery({ limit: opts.limit ?? 120, symbol, timeframe: opts.timeframe ?? '1d' })}`
+  })
+}
+
+// The multi-agent read-only verdict for a symbol (direction + confidence, the
+// per-agent signals, and the cited sources). Carries no order authority.
+export function financeAnalyze(symbol: string): Promise<FinanceAnalyze> {
+  return window.hermesDesktop.api<FinanceAnalyze>({ path: `/api/finance/v1/analyze${financeQuery({ symbol })}` })
 }

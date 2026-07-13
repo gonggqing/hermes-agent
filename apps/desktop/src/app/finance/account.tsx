@@ -4,6 +4,7 @@ import { StatusDot } from '@/components/status-dot'
 import {
   type FinanceAccount,
   type FinanceMode,
+  type FinanceOrderRow,
   type FinanceSnapshot,
   type FinanceStats,
   getFinanceAccount,
@@ -14,7 +15,7 @@ import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 
 import { BREAKER_TONE, enumLabel, financeKey, fmtMoney, fmtPct, fmtPrice, fmtQty, fmtSignedMoney, fmtTs, pnlClass } from './lib'
-import { FinanceSectionLabel, FinanceTable, QuerySection, StatTile } from './primitives'
+import { FinanceSectionLabel, FinanceTable, StatTile } from './primitives'
 
 function accountTiles(account: FinanceAccount) {
   // Loop attached → live AccountView; loop idle → last ledger snapshot.
@@ -27,10 +28,10 @@ function accountTiles(account: FinanceAccount) {
   return snap
 }
 
-export function FinanceAccountTab({ enabled, mode, query }: { enabled: boolean; mode: FinanceMode; query: string }) {
-  const { t } = useI18n()
-  const copy = t.finance.account
-
+// Shared account/orders/snapshots fetch, threaded on mode so the paper and live
+// ledgers stay strictly separate (Loop.md §5.8). Reused by the Portfolio
+// master-detail (account summary, positions list, orders, trade stats).
+export function useAccountQueries(enabled: boolean, mode: FinanceMode) {
   const accountQuery = useQuery({
     enabled,
     queryFn: () => getFinanceAccount(mode),
@@ -55,138 +56,100 @@ export function FinanceAccountTab({ enabled, mode, query }: { enabled: boolean; 
 
   const account = accountQuery.data
   const snap = account ? accountTiles(account) : null
-  const stats = account?.stats
-  const positions = account && account.source !== 'ledger' ? account.positions : []
-  const needle = query.trim().toUpperCase()
-  const visiblePositions = needle ? positions.filter(p => p.symbol.includes(needle)) : positions
-  const orders = ordersQuery.data ?? []
-  const visibleOrders = needle ? orders.filter(o => o.symbol.includes(needle)) : orders
+
+  return {
+    account,
+    accountQuery,
+    orders: ordersQuery.data ?? [],
+    ordersQuery,
+    positions: account && account.source !== 'ledger' ? account.positions : [],
+    snap,
+    snapshots: snapshotsQuery.data ?? [],
+    snapshotsQuery,
+    stats: account?.stats
+  }
+}
+
+export function AccountSummary({
+  account,
+  snap,
+  snapshots
+}: {
+  account: FinanceAccount | undefined
+  snap: ReturnType<typeof accountTiles>
+  snapshots: FinanceSnapshot[]
+}) {
+  const { t } = useI18n()
+  const copy = t.finance.account
+
+  if (!snap) {
+    return null
+  }
 
   return (
-    <div className="space-y-5">
-      <section className="space-y-2">
-        <FinanceSectionLabel>{copy.title}</FinanceSectionLabel>
-        <QuerySection
-          empty={copy.empty}
-          error={accountQuery.isError ? accountQuery.error : undefined}
-          isEmpty={!snap}
-          loading={accountQuery.isPending}
-        >
-          {snap && (
-            <>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-                <StatTile label={copy.equity} value={fmtMoney(snap.equity)} />
-                <StatTile label={copy.cash} value={fmtMoney(snap.cash)} />
-                <StatTile label={copy.upnl} tone={pnlClass(snap.upnl)} value={fmtSignedMoney(snap.upnl)} />
-                <StatTile label={copy.dayPnl} tone={pnlClass(snap.day_pnl)} value={fmtSignedMoney(snap.day_pnl)} />
-                <StatTile
-                  label={copy.drawdown}
-                  tone={snap.drawdown_pct < 0 ? 'text-destructive' : undefined}
-                  value={fmtPct(snap.drawdown_pct)}
-                />
-                <StatTile
-                  hint={account?.source === 'ledger' ? copy.sourceLedger(fmtTs(snap.ts)) : copy.sourceLive(fmtTs(snap.ts))}
-                  label={copy.breaker}
-                  tone={snap.breaker_state === 'TRIPPED' ? 'text-destructive' : undefined}
-                  value={enumLabel(t.finance.enums.breaker, snap.breaker_state)}
-                />
-              </div>
-              <EquitySparkline snapshots={snapshotsQuery.data ?? []} />
-            </>
-          )}
-        </QuerySection>
-      </section>
-
-      <section className="space-y-2">
-        <FinanceSectionLabel>
-          {copy.positionsTitle}
-          {positions.length > 0 ? ` · ${positions.length}` : ''}
-        </FinanceSectionLabel>
-        <QuerySection
-          empty={account?.source === 'ledger' ? copy.positionsLoopIdle : copy.positionsEmpty}
-          error={undefined}
-          isEmpty={visiblePositions.length === 0}
-          loading={accountQuery.isPending}
-        >
-          <FinanceTable
-            columns={[
-              { label: copy.colSymbol },
-              { align: 'right', label: copy.colQty },
-              { align: 'right', label: copy.colAvgPx },
-              { align: 'right', label: copy.colMktPx },
-              { align: 'right', label: copy.colUpnl },
-              { label: copy.colPool }
-            ]}
-            rows={visiblePositions.map(position => ({
-              cells: [
-                <span className="font-medium text-foreground" key="s">
-                  {position.symbol}
-                </span>,
-                fmtQty(position.qty),
-                fmtPrice(position.avg_px),
-                fmtPrice(position.mkt_px),
-                <span className={pnlClass(position.upnl)} key="u">
-                  {fmtSignedMoney(position.upnl)}
-                </span>,
-                position.pool
-              ],
-              key: position.symbol
-            }))}
-          />
-        </QuerySection>
-      </section>
-
-      <section className="space-y-2">
-        <FinanceSectionLabel>
-          {copy.ordersTitle}
-          {orders.length > 0 ? ` · ${orders.length}` : ''}
-        </FinanceSectionLabel>
-        <QuerySection
-          empty={copy.ordersEmpty}
-          error={ordersQuery.isError ? ordersQuery.error : undefined}
-          isEmpty={visibleOrders.length === 0}
-          loading={ordersQuery.isPending}
-        >
-          <FinanceTable
-            columns={[
-              { label: copy.colSymbol },
-              { label: copy.colSide },
-              { align: 'right', label: copy.colQty },
-              { label: copy.colType },
-              { align: 'right', label: copy.colLimit },
-              { align: 'right', label: copy.colStop },
-              { label: copy.colTif },
-              { label: copy.colStatus },
-              { label: copy.colPlaced }
-            ]}
-            rows={visibleOrders.map(order => ({
-              cells: [
-                <span className="font-medium text-foreground" key="s">
-                  {order.symbol}
-                </span>,
-                <span className={order.side === 'BUY' ? 'text-primary' : 'text-amber-600 dark:text-amber-300'} key="d">
-                  {enumLabel(t.finance.enums.side, order.side)}
-                </span>,
-                fmtQty(order.qty),
-                enumLabel(t.finance.enums.orderType, order.order_type),
-                fmtPrice(order.limit),
-                fmtPrice(order.stop),
-                enumLabel(t.finance.enums.tif, order.tif),
-                enumLabel(t.finance.enums.orderStatus, order.status),
-                fmtTs(order.ts)
-              ],
-              key: order.id
-            }))}
-          />
-        </QuerySection>
-      </section>
-
-      {stats && <TradeStatsSection stats={stats} />}
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        <StatTile label={copy.equity} value={fmtMoney(snap.equity)} />
+        <StatTile label={copy.cash} value={fmtMoney(snap.cash)} />
+        <StatTile label={copy.upnl} tone={pnlClass(snap.upnl)} value={fmtSignedMoney(snap.upnl)} />
+        <StatTile label={copy.dayPnl} tone={pnlClass(snap.day_pnl)} value={fmtSignedMoney(snap.day_pnl)} />
+        <StatTile
+          label={copy.drawdown}
+          tone={snap.drawdown_pct < 0 ? 'text-destructive' : undefined}
+          value={fmtPct(snap.drawdown_pct)}
+        />
+        <StatTile
+          hint={account?.source === 'ledger' ? copy.sourceLedger(fmtTs(snap.ts)) : copy.sourceLive(fmtTs(snap.ts))}
+          label={copy.breaker}
+          tone={snap.breaker_state === 'TRIPPED' ? 'text-destructive' : undefined}
+          value={enumLabel(t.finance.enums.breaker, snap.breaker_state)}
+        />
+      </div>
+      <EquitySparkline snapshots={snapshots} />
     </div>
   )
 }
 
-function TradeStatsSection({ stats }: { stats: FinanceStats }) {
+export function OrdersTable({ orders }: { orders: FinanceOrderRow[] }) {
+  const { t } = useI18n()
+  const copy = t.finance.account
+
+  return (
+    <FinanceTable
+      columns={[
+        { label: copy.colSymbol },
+        { label: copy.colSide },
+        { align: 'right', label: copy.colQty },
+        { label: copy.colType },
+        { align: 'right', label: copy.colLimit },
+        { align: 'right', label: copy.colStop },
+        { label: copy.colTif },
+        { label: copy.colStatus },
+        { label: copy.colPlaced }
+      ]}
+      rows={orders.map(order => ({
+        cells: [
+          <span className="font-medium text-foreground" key="s">
+            {order.symbol}
+          </span>,
+          <span className={order.side === 'BUY' ? 'text-primary' : 'text-amber-600 dark:text-amber-300'} key="d">
+            {enumLabel(t.finance.enums.side, order.side)}
+          </span>,
+          fmtQty(order.qty),
+          enumLabel(t.finance.enums.orderType, order.order_type),
+          fmtPrice(order.limit),
+          fmtPrice(order.stop),
+          enumLabel(t.finance.enums.tif, order.tif),
+          enumLabel(t.finance.enums.orderStatus, order.status),
+          fmtTs(order.ts)
+        ],
+        key: order.id
+      }))}
+    />
+  )
+}
+
+export function TradeStatsSection({ stats }: { stats: FinanceStats }) {
   const { t } = useI18n()
   const copy = t.finance.account
 

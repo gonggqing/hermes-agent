@@ -5,12 +5,10 @@ import {
   useMemo,
   useState,
 } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
-  ChevronDown,
-  ChevronRight,
   Globe,
-  ListChecks,
   Newspaper,
   PlugZap,
   RefreshCw,
@@ -25,10 +23,12 @@ import type {
   FinanceFill,
   FinanceHealth,
   FinanceMarketSnapshot,
+  FinanceMode,
+  FinanceOpenOrder,
   FinancePendingCandidate,
+  FinancePosition,
   FinanceReports,
   FinanceResearchBrief as FinanceResearchBriefData,
-  FinanceResearchMarket,
   FinanceSnapshot,
   FinanceStats,
   FinanceWatchlistItem,
@@ -38,6 +38,7 @@ import { Badge } from "@nous-research/ui/ui/components/badge";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@nous-research/ui/ui/components/card";
 import { CommandBlock } from "@nous-research/ui/ui/components/command-block";
+import { Segmented } from "@nous-research/ui/ui/components/segmented";
 import { Spinner } from "@nous-research/ui/ui/components/spinner";
 import { Stats } from "@nous-research/ui/ui/components/stats";
 import { Toast } from "@nous-research/ui/ui/components/toast";
@@ -47,7 +48,26 @@ import { useI18n } from "@/i18n";
 import { ApprovalQueue } from "@/pages/finance/ApprovalQueue";
 import { HistorySection } from "@/pages/finance/HistorySection";
 import { ResearchBrief } from "@/pages/finance/ResearchBrief";
+import { WatchModule } from "@/pages/finance/WatchModule";
+import {
+  MasterDetail,
+  ModeSwitcher,
+  SidebarButton,
+  SidebarGroup,
+} from "@/pages/finance/layout";
+import {
+  ACTIVE_MARKETS,
+  PLACEHOLDER_MARKETS,
+  WATCH_MODULE_KEYS,
+  isActiveMarketDesk,
+  isWatchDesk,
+  marketName,
+  watchModuleName,
+  type FinanceDesk,
+} from "@/pages/finance/constants";
+import { partitionCnBrief } from "@/pages/finance/partition";
 import { useFinanceT } from "@/pages/finance/i18n";
+import type { FinanceTranslations } from "@/i18n/types";
 import {
   fmtMoney,
   fmtPct,
@@ -65,6 +85,18 @@ const SNAPSHOT_LIMIT = 120;
 const SERVICE_START_COMMAND =
   "cd trader && uv run python -m swing_trader serve";
 
+type FinanceTab = "research" | "queue" | "portfolio";
+
+const TABS: FinanceTab[] = ["research", "queue", "portfolio"];
+const DESKS: FinanceDesk[] = [
+  ...ACTIVE_MARKETS,
+  ...PLACEHOLDER_MARKETS,
+  ...WATCH_MODULE_KEYS,
+];
+
+/** Portfolio sidebar entries that are not per-position rows. */
+type PortfolioView = "account" | "orders" | "history" | "market" | "reports";
+
 /** Account numbers shared by the live view and the ledger-fallback snapshot. */
 interface AccountNumbers {
   equity: number;
@@ -74,6 +106,8 @@ interface AccountNumbers {
   drawdown_pct: number;
   breaker_state: string;
 }
+
+// ── Account / positions / orders / market / reports sections ──────────
 
 function EquitySparkline({ snapshots }: { snapshots: FinanceSnapshot[] }) {
   const ft = useFinanceT();
@@ -208,146 +242,201 @@ function AccountSection({
   );
 }
 
-function PositionsAndOrders({ view }: { view: FinanceAccountView | null }) {
+function PositionsCard({ view }: { view: FinanceAccountView | null }) {
   const ft = useFinanceT();
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{ft.positions.title}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {view === null ? (
-            <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
-              {ft.positions.loopOnly}
-            </p>
-          ) : view.positions.length === 0 ? (
-            <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
-              {ft.positions.empty}
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full font-mondwest normal-case text-sm">
-                <thead>
-                  <tr className="border-b border-border text-muted-foreground text-xs">
-                    <th className="text-left py-2 pr-4 font-medium">
-                      {ft.positions.symbol}
-                    </th>
-                    <th className="text-right py-2 px-4 font-medium">
-                      {ft.positions.qty}
-                    </th>
-                    <th className="text-right py-2 px-4 font-medium">
-                      {ft.positions.avgPx}
-                    </th>
-                    <th className="text-right py-2 px-4 font-medium">
-                      {ft.positions.mktPx}
-                    </th>
-                    <th className="text-right py-2 px-4 font-medium">
-                      {ft.positions.upnl}
-                    </th>
-                    <th className="text-left py-2 pl-4 font-medium">
-                      {ft.positions.pool}
-                    </th>
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{ft.positions.title}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {view === null ? (
+          <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
+            {ft.positions.loopOnly}
+          </p>
+        ) : view.positions.length === 0 ? (
+          <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
+            {ft.positions.empty}
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full font-mondwest normal-case text-sm">
+              <thead>
+                <tr className="border-b border-border text-muted-foreground text-xs">
+                  <th className="text-left py-2 pr-4 font-medium">
+                    {ft.positions.symbol}
+                  </th>
+                  <th className="text-right py-2 px-4 font-medium">
+                    {ft.positions.qty}
+                  </th>
+                  <th className="text-right py-2 px-4 font-medium">
+                    {ft.positions.avgPx}
+                  </th>
+                  <th className="text-right py-2 px-4 font-medium">
+                    {ft.positions.mktPx}
+                  </th>
+                  <th className="text-right py-2 px-4 font-medium">
+                    {ft.positions.upnl}
+                  </th>
+                  <th className="text-left py-2 pl-4 font-medium">
+                    {ft.positions.pool}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {view.positions.map((p) => (
+                  <tr
+                    key={p.symbol}
+                    className="border-b border-border/50 hover:bg-secondary/20 transition-colors"
+                  >
+                    <td className="py-2 pr-4">
+                      <span className="font-mono-ui text-xs">{p.symbol}</span>
+                    </td>
+                    <td className="text-right py-2 px-4">{fmtQty(p.qty)}</td>
+                    <td className="text-right py-2 px-4">{fmtMoney(p.avg_px)}</td>
+                    <td className="text-right py-2 px-4">{fmtMoney(p.mkt_px)}</td>
+                    <td className={cn("text-right py-2 px-4", pnlClass(p.upnl))}>
+                      {fmtSigned(p.upnl)}
+                    </td>
+                    <td className="py-2 pl-4">
+                      <Badge tone="secondary">{p.pool}</Badge>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {view.positions.map((p) => (
-                    <tr
-                      key={p.symbol}
-                      className="border-b border-border/50 hover:bg-secondary/20 transition-colors"
-                    >
-                      <td className="py-2 pr-4">
-                        <span className="font-mono-ui text-xs">{p.symbol}</span>
-                      </td>
-                      <td className="text-right py-2 px-4">{fmtQty(p.qty)}</td>
-                      <td className="text-right py-2 px-4">{fmtMoney(p.avg_px)}</td>
-                      <td className="text-right py-2 px-4">{fmtMoney(p.mkt_px)}</td>
-                      <td className={cn("text-right py-2 px-4", pnlClass(p.upnl))}>
-                        {fmtSigned(p.upnl)}
-                      </td>
-                      <td className="py-2 pl-4">
-                        <Badge tone="secondary">{p.pool}</Badge>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{ft.orders.title}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {view === null ? (
-            <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
-              {ft.orders.loopOnly}
-            </p>
-          ) : view.open_orders.length === 0 ? (
-            <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
-              {ft.orders.empty}
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full font-mondwest normal-case text-sm">
-                <thead>
-                  <tr className="border-b border-border text-muted-foreground text-xs">
-                    <th className="text-left py-2 pr-4 font-medium">
-                      {ft.orders.symbol}
-                    </th>
-                    <th className="text-left py-2 pr-4 font-medium">
-                      {ft.orders.side}
-                    </th>
-                    <th className="text-right py-2 px-4 font-medium">
-                      {ft.orders.qty}
-                    </th>
-                    <th className="text-left py-2 px-4 font-medium">
-                      {ft.orders.type}
-                    </th>
-                    <th className="text-right py-2 px-4 font-medium">
-                      {ft.orders.limit}
-                    </th>
-                    <th className="text-right py-2 px-4 font-medium">
-                      {ft.orders.stop}
-                    </th>
-                    <th className="text-left py-2 pl-4 font-medium">
-                      {ft.orders.status}
-                    </th>
+function OrdersCard({ view }: { view: FinanceAccountView | null }) {
+  const ft = useFinanceT();
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{ft.orders.title}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {view === null ? (
+          <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
+            {ft.orders.loopOnly}
+          </p>
+        ) : view.open_orders.length === 0 ? (
+          <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
+            {ft.orders.empty}
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full font-mondwest normal-case text-sm">
+              <thead>
+                <tr className="border-b border-border text-muted-foreground text-xs">
+                  <th className="text-left py-2 pr-4 font-medium">
+                    {ft.orders.symbol}
+                  </th>
+                  <th className="text-left py-2 pr-4 font-medium">
+                    {ft.orders.side}
+                  </th>
+                  <th className="text-right py-2 px-4 font-medium">
+                    {ft.orders.qty}
+                  </th>
+                  <th className="text-left py-2 px-4 font-medium">
+                    {ft.orders.type}
+                  </th>
+                  <th className="text-right py-2 px-4 font-medium">
+                    {ft.orders.limit}
+                  </th>
+                  <th className="text-right py-2 px-4 font-medium">
+                    {ft.orders.stop}
+                  </th>
+                  <th className="text-left py-2 pl-4 font-medium">
+                    {ft.orders.status}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {view.open_orders.map((o: FinanceOpenOrder, i) => (
+                  <tr
+                    key={`${o.symbol}-${o.side}-${i}`}
+                    className="border-b border-border/50 hover:bg-secondary/20 transition-colors"
+                  >
+                    <td className="py-2 pr-4">
+                      <span className="font-mono-ui text-xs">{o.symbol}</span>
+                    </td>
+                    <td className="py-2 pr-4">
+                      <Badge tone={sideTone(o.side)}>{o.side}</Badge>
+                    </td>
+                    <td className="text-right py-2 px-4">{fmtQty(o.qty)}</td>
+                    <td className="py-2 px-4 text-muted-foreground">
+                      {o.order_type}
+                    </td>
+                    <td className="text-right py-2 px-4">{fmtMoney(o.limit)}</td>
+                    <td className="text-right py-2 px-4">{fmtMoney(o.stop)}</td>
+                    <td className="py-2 pl-4">
+                      <Badge tone="outline">{o.status}</Badge>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {view.open_orders.map((o, i) => (
-                    <tr
-                      key={`${o.symbol}-${o.side}-${i}`}
-                      className="border-b border-border/50 hover:bg-secondary/20 transition-colors"
-                    >
-                      <td className="py-2 pr-4">
-                        <span className="font-mono-ui text-xs">{o.symbol}</span>
-                      </td>
-                      <td className="py-2 pr-4">
-                        <Badge tone={sideTone(o.side)}>{o.side}</Badge>
-                      </td>
-                      <td className="text-right py-2 px-4">{fmtQty(o.qty)}</td>
-                      <td className="py-2 px-4 text-muted-foreground">
-                        {o.order_type}
-                      </td>
-                      <td className="text-right py-2 px-4">{fmtMoney(o.limit)}</td>
-                      <td className="text-right py-2 px-4">{fmtMoney(o.stop)}</td>
-                      <td className="py-2 pl-4">
-                        <Badge tone="outline">{o.status}</Badge>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function PositionDetail({
+  position,
+  ft,
+}: {
+  position: FinancePosition | null;
+  ft: FinanceTranslations;
+}) {
+  if (position === null) {
+    return (
+      <Card>
+        <CardContent className="py-8">
+          <p className="font-mondwest normal-case text-sm text-muted-foreground">
+            {ft.layout.selectPositionHint}
+          </p>
         </CardContent>
       </Card>
-    </div>
+    );
+  }
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-center gap-2">
+          <CardTitle className="text-base font-mono-ui">
+            {position.symbol}
+          </CardTitle>
+          <Badge tone="secondary">{position.pool}</Badge>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <Stats
+          items={[
+            { label: ft.positions.qty, value: fmtQty(position.qty) },
+            { label: ft.positions.avgPx, value: fmtMoney(position.avg_px) },
+            { label: ft.positions.mktPx, value: fmtMoney(position.mkt_px) },
+            {
+              label: ft.positions.upnl,
+              value: {
+                key: "upnl",
+                node: (
+                  <span className={pnlClass(position.upnl)}>
+                    {fmtSigned(position.upnl)}
+                  </span>
+                ),
+              },
+            },
+          ]}
+        />
+      </CardContent>
+    </Card>
   );
 }
 
@@ -496,75 +585,301 @@ function OfflinePanel() {
   );
 }
 
-/**
- * Compact "actions requiring attention" strip (Loop.md §7 Phase 0.5: the
- * Queue is a badged action area, NOT the primary canvas). Hidden entirely
- * when nothing is pending; a collapsed summary (count + earliest expiry)
- * expands to the existing ApprovalQueue, which is still the ONLY execution
- * surface and only relays approve/edit/reject (Loop.md §3/§5.6).
- */
-function ActionsStrip({
-  pending,
-  onActed,
-  showToast,
+// ── Research master-detail ────────────────────────────────────────────
+
+function ResearchDetail({
+  desk,
+  briefs,
+  ft,
 }: {
-  pending: FinancePendingCandidate[];
-  onActed: () => void;
-  showToast: (message: string, type: "error" | "success") => void;
+  desk: FinanceDesk;
+  briefs: { us: FinanceResearchBriefData | null; cn: FinanceResearchBriefData | null };
+  ft: FinanceTranslations;
 }) {
-  const ft = useFinanceT();
-  const [open, setOpen] = useState(false);
-  if (pending.length === 0) return null;
-  // Earliest expiry among pending candidates (ISO strings sort correctly).
-  const earliest = pending
-    .map((p) => p.candidate.valid_until)
-    .filter((v): v is string => v !== null)
-    .sort()[0];
+  if (isWatchDesk(desk)) {
+    return <WatchModule moduleKey={desk} />;
+  }
+  if (desk === "us") {
+    return <ResearchBrief brief={briefs.us} market="us" />;
+  }
+  // China / HK both derive from the ONE CN brief, partitioned by symbol
+  // suffix. Regime/news/themes/freshness are shared. Research-only.
+  const region = desk === "hk" ? "hk" : "china";
+  const partitioned =
+    briefs.cn !== null ? partitionCnBrief(briefs.cn, region) : null;
   return (
-    <section className="flex flex-col gap-3">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        className="flex w-full flex-wrap items-center gap-2 border border-warning/60 bg-warning/10 px-4 py-2.5 text-left transition-colors hover:bg-warning/20"
-      >
-        <ListChecks className="h-4 w-4 shrink-0 text-warning" />
-        <span className="font-mondwest normal-case text-sm font-semibold text-foreground">
-          {ft.queue.title}
-        </span>
-        <Badge tone="warning">
-          {ft.queue.pendingCount.replace("{count}", String(pending.length))}
-        </Badge>
-        {earliest !== undefined && (
-          <span className="font-mondwest normal-case text-xs text-muted-foreground">
-            {ft.queue.earliestExpiry.replace("{time}", fmtTs(earliest))}
-          </span>
-        )}
-        <span className="ml-auto flex items-center gap-1 font-mondwest normal-case text-xs text-muted-foreground">
-          {open ? ft.queue.collapse : ft.queue.expand}
-          {open ? (
-            <ChevronDown className="h-3.5 w-3.5" />
-          ) : (
-            <ChevronRight className="h-3.5 w-3.5" />
-          )}
-        </span>
-      </button>
-      {open && (
-        <ApprovalQueue pending={pending} onActed={onActed} showToast={showToast} />
-      )}
-    </section>
+    <div className="flex flex-col gap-3">
+      <p className="border border-border/60 bg-secondary/20 px-3 py-2 font-mondwest normal-case text-xs text-muted-foreground">
+        {ft.layout.perRegionNote}
+      </p>
+      <ResearchBrief brief={partitioned} market="cn" />
+    </div>
   );
 }
 
+function ResearchView({
+  desk,
+  onDeskChange,
+  briefs,
+  ft,
+  footer,
+}: {
+  desk: FinanceDesk;
+  onDeskChange: (desk: FinanceDesk) => void;
+  briefs: { us: FinanceResearchBriefData | null; cn: FinanceResearchBriefData | null };
+  ft: FinanceTranslations;
+  footer: React.ReactNode;
+}) {
+  const sidebar = (
+    <>
+      <SidebarGroup label={ft.layout.marketsGroup}>
+        {ACTIVE_MARKETS.map((m) => (
+          <SidebarButton
+            key={m}
+            active={desk === m}
+            onClick={() => onDeskChange(m)}
+          >
+            {marketName(m, ft)}
+          </SidebarButton>
+        ))}
+        {PLACEHOLDER_MARKETS.map((m) => (
+          <SidebarButton
+            key={m}
+            active={false}
+            disabled
+            trailing={<Badge tone="outline">{ft.layout.comingSoon}</Badge>}
+          >
+            {marketName(m, ft)}
+          </SidebarButton>
+        ))}
+      </SidebarGroup>
+      <SidebarGroup label={ft.layout.watchGroup}>
+        {WATCH_MODULE_KEYS.map((k) => (
+          <SidebarButton
+            key={k}
+            active={desk === k}
+            onClick={() => onDeskChange(k)}
+          >
+            {watchModuleName(k, ft)}
+          </SidebarButton>
+        ))}
+      </SidebarGroup>
+    </>
+  );
+  return (
+    <MasterDetail sidebar={sidebar} footer={footer}>
+      <ResearchDetail desk={desk} briefs={briefs} ft={ft} />
+    </MasterDetail>
+  );
+}
+
+// ── Action-queue master-detail ────────────────────────────────────────
+
+function QueueView({
+  pending,
+  selectedId,
+  onSelect,
+  onActed,
+  showToast,
+  ft,
+  emptyForMode,
+  modeLabel,
+  footer,
+}: {
+  pending: FinancePendingCandidate[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  onActed: () => void;
+  showToast: (message: string, type: "error" | "success") => void;
+  ft: FinanceTranslations;
+  emptyForMode: boolean;
+  modeLabel: string;
+  footer: React.ReactNode;
+}) {
+  const selected = pending.find((p) => p.candidate.id === selectedId) ?? null;
+  const emptyNote = emptyForMode
+    ? ft.layout.queueNoneForMode.replace("{mode}", modeLabel)
+    : ft.queue.noPending;
+
+  const sidebar = (
+    <SidebarGroup label={ft.layout.queueSidebarTitle}>
+      {pending.length === 0 ? (
+        <p className="px-3 py-3 font-mondwest normal-case text-sm text-muted-foreground">
+          {emptyNote}
+        </p>
+      ) : (
+        pending.map((pc) => (
+          <SidebarButton
+            key={pc.candidate.id}
+            active={selectedId === pc.candidate.id}
+            onClick={() => onSelect(pc.candidate.id)}
+            trailing={
+              <Badge tone={sideTone(pc.candidate.side)}>
+                {pc.candidate.side}
+              </Badge>
+            }
+            subtitle={`${fmtQty(pc.candidate.qty)} · ${pc.candidate.status}`}
+          >
+            <span className="font-mono-ui">{pc.candidate.symbol}</span>
+          </SidebarButton>
+        ))
+      )}
+    </SidebarGroup>
+  );
+
+  return (
+    <MasterDetail sidebar={sidebar} footer={footer}>
+      {selected !== null ? (
+        <ApprovalQueue
+          pending={[selected]}
+          onActed={onActed}
+          showToast={showToast}
+        />
+      ) : (
+        <Card>
+          <CardContent className="py-8">
+            <p className="font-mondwest normal-case text-sm text-muted-foreground">
+              {pending.length === 0 ? emptyNote : ft.layout.queueSelectHint}
+            </p>
+          </CardContent>
+        </Card>
+      )}
+    </MasterDetail>
+  );
+}
+
+// ── Portfolio master-detail ───────────────────────────────────────────
+
+function PortfolioView({
+  selected,
+  onSelect,
+  numbers,
+  stats,
+  snapshots,
+  ledgerFallback,
+  liveView,
+  market,
+  watchlist,
+  reports,
+  candidates,
+  fills,
+  ft,
+  footer,
+}: {
+  selected: string;
+  onSelect: (view: string) => void;
+  numbers: AccountNumbers | null;
+  stats: FinanceStats | null;
+  snapshots: FinanceSnapshot[];
+  ledgerFallback: boolean;
+  liveView: FinanceAccountView | null;
+  market: FinanceMarketSnapshot | null;
+  watchlist: FinanceWatchlistItem[];
+  reports: FinanceReports;
+  candidates: FinanceCandidate[];
+  fills: FinanceFill[];
+  ft: FinanceTranslations;
+  footer: React.ReactNode;
+}) {
+  const positions = liveView?.positions ?? [];
+  const accountRows: { view: PortfolioView; label: string }[] = [
+    { view: "account", label: ft.layout.rowAccount },
+    { view: "orders", label: ft.layout.rowOrders },
+    { view: "history", label: ft.layout.rowHistory },
+    { view: "market", label: ft.layout.rowMarket },
+    { view: "reports", label: ft.layout.rowReports },
+  ];
+
+  const sidebar = (
+    <>
+      <SidebarGroup label={ft.layout.portfolioAccountGroup}>
+        {accountRows.map((row) => (
+          <SidebarButton
+            key={row.view}
+            active={selected === row.view}
+            onClick={() => onSelect(row.view)}
+          >
+            {row.label}
+          </SidebarButton>
+        ))}
+      </SidebarGroup>
+      <SidebarGroup label={ft.layout.portfolioPositionsGroup}>
+        {positions.length === 0 ? (
+          <p className="px-3 py-3 font-mondwest normal-case text-sm text-muted-foreground">
+            {ft.layout.positionsEmpty}
+          </p>
+        ) : (
+          positions.map((p) => (
+            <SidebarButton
+              key={p.symbol}
+              active={selected === `pos:${p.symbol}`}
+              onClick={() => onSelect(`pos:${p.symbol}`)}
+              trailing={
+                <span className={cn("text-xs", pnlClass(p.upnl))}>
+                  {fmtSigned(p.upnl)}
+                </span>
+              }
+            >
+              <span className="font-mono-ui">{p.symbol}</span>
+            </SidebarButton>
+          ))
+        )}
+      </SidebarGroup>
+    </>
+  );
+
+  let detail: React.ReactNode;
+  if (selected.startsWith("pos:")) {
+    const symbol = selected.slice(4);
+    const position = positions.find((p) => p.symbol === symbol) ?? null;
+    detail = <PositionDetail position={position} ft={ft} />;
+  } else {
+    switch (selected as PortfolioView) {
+      case "orders":
+        detail = <OrdersCard view={liveView} />;
+        break;
+      case "history":
+        detail = (
+          <HistorySection candidates={candidates} fills={fills} stats={stats} />
+        );
+        break;
+      case "market":
+        detail = <MarketStrip market={market} watchlist={watchlist} />;
+        break;
+      case "reports":
+        detail = <ReportsCard reports={reports} />;
+        break;
+      case "account":
+      default:
+        detail = (
+          <div className="flex flex-col gap-6">
+            <AccountSection
+              numbers={numbers}
+              stats={stats}
+              snapshots={snapshots}
+              ledgerFallback={ledgerFallback}
+            />
+            <PositionsCard view={liveView} />
+          </div>
+        );
+        break;
+    }
+  }
+
+  return (
+    <MasterDetail sidebar={sidebar} footer={footer}>
+      {detail}
+    </MasterDetail>
+  );
+}
+
+// ── Page ──────────────────────────────────────────────────────────────
+
 export default function FinancePage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [health, setHealth] = useState<FinanceHealth | null>(null);
   const [offline, setOffline] = useState(false);
   const [loading, setLoading] = useState(true);
-  // Selected research desk (US default, or the China/HK research-only desk).
-  // Briefs are cached per desk so toggling back is instant and never shows
-  // the other desk's numbers.
-  const [researchMarket, setResearchMarket] =
-    useState<FinanceResearchMarket>("us");
   const [briefs, setBriefs] = useState<{
     us: FinanceResearchBriefData | null;
     cn: FinanceResearchBriefData | null;
@@ -578,63 +893,110 @@ export default function FinancePage() {
   const [candidates, setCandidates] = useState<FinanceCandidate[]>([]);
   const [fills, setFills] = useState<FinanceFill[]>([]);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  // Paper/live override. `null` follows the service /health.mode.
+  const [modeOverride, setModeOverride] = useState<FinanceMode | null>(null);
+  // Local (non-URL) selections for the Queue and Portfolio views.
+  const [queueSel, setQueueSel] = useState<string | null>(null);
+  const [portfolioSel, setPortfolioSel] = useState<string>("account");
   const { toast, showToast } = useToast();
   const { setAfterTitle, setEnd } = usePageHeader();
   const ft = useFinanceT();
   const { t } = useI18n();
 
+  // ── URL-persisted top tab + research desk ──
+  const tabParam = searchParams.get("tab");
+  const activeTab: FinanceTab = TABS.includes(tabParam as FinanceTab)
+    ? (tabParam as FinanceTab)
+    : "research";
+  const deskParam = searchParams.get("desk");
+  const researchDesk: FinanceDesk =
+    DESKS.includes(deskParam as FinanceDesk) &&
+    // Disabled placeholders are never a valid selection.
+    (isActiveMarketDesk(deskParam as FinanceDesk) ||
+      isWatchDesk(deskParam as FinanceDesk))
+      ? (deskParam as FinanceDesk)
+      : "us";
+
+  const setParam = useCallback(
+    (key: string, value: string) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set(key, value);
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+  const setActiveTab = useCallback(
+    (tab: FinanceTab) => setParam("tab", tab),
+    [setParam],
+  );
+  const setResearchDesk = useCallback(
+    (desk: FinanceDesk) => setParam("desk", desk),
+    [setParam],
+  );
+
+  // The brief the Research desk needs: US, the shared CN brief, or none
+  // (watch modules). Threaded into the loader so switching desks refetches.
+  const briefMarket: "us" | "cn" | null =
+    researchDesk === "us"
+      ? "us"
+      : researchDesk === "china" || researchDesk === "hk"
+        ? "cn"
+        : null;
+  // Mode threaded into the mode-scoped read endpoints. `undefined` lets the
+  // service pick (follows /health.mode); an explicit override forces one.
+  const modeParam: FinanceMode | undefined = modeOverride ?? undefined;
+
   // No synchronous setState in load itself: `loading` starts true and the
   // manual refresh button flips it back on before invoking load(), so the
   // 30s background refresh never flashes the whole-page spinner.
   const load = useCallback(() => {
-    // Health first: it decides offline vs. data view. The section fetches
-    // use allSettled so one degraded endpoint (e.g. idle loop) never
-    // blanks the whole page.
     api
       .financeHealth()
       .then(async (h) => {
         setHealth(h);
         setOffline(false);
-        // Research brief for the selected desk, fetched on its own so a
-        // degraded brief never blanks the rest of the page.
         const [rb, rest] = await Promise.all([
-          api.financeResearchBrief(researchMarket).then(
-            (v) => ({ ok: true as const, v }),
-            () => ({ ok: false as const }),
-          ),
-          // US-account reference material (account/positions/orders/queue/
-          // history). The China/HK desk is research-only (no account), so
-          // skip these fetches entirely in CN mode.
-          researchMarket === "us"
-            ? Promise.allSettled([
-                api.financeAccount(),
-                api.financeSnapshots(SNAPSHOT_LIMIT),
-                api.financeMarket(),
-                api.financeWatchlist(),
-                api.financeLatestReports(),
-                api.financePendingCandidates(),
-                api.financeCandidates(),
-                api.financeFills(),
-              ])
-            : Promise.resolve(null),
+          briefMarket === null
+            ? Promise.resolve(null)
+            : api.financeResearchBrief(briefMarket).then(
+                (v) => ({ ok: true as const, market: briefMarket, v }),
+                () => ({ ok: false as const, market: briefMarket }),
+              ),
+          // Account / queue / portfolio material, mode-scoped. allSettled so
+          // one degraded endpoint never blanks the rest of the page.
+          Promise.allSettled([
+            api.financeAccount(modeParam),
+            api.financeSnapshots(SNAPSHOT_LIMIT, modeParam),
+            api.financeMarket(),
+            api.financeWatchlist(),
+            api.financeLatestReports(),
+            api.financePendingCandidates(),
+            api.financeCandidates(undefined, modeParam),
+            api.financeFills(modeParam),
+          ]),
         ]);
-        if (rb.ok) setBriefs((b) => ({ ...b, [researchMarket]: rb.v }));
-        if (rest !== null) {
-          const [acct, snaps, mkt, wl, rep, pend, cands, fl] = rest;
-          if (acct.status === "fulfilled") setAccount(acct.value);
-          if (snaps.status === "fulfilled") setSnapshots(snaps.value);
-          if (mkt.status === "fulfilled") setMarket(mkt.value);
-          if (wl.status === "fulfilled") setWatchlist(wl.value);
-          if (rep.status === "fulfilled") setReports(rep.value);
-          if (pend.status === "fulfilled") setPending(pend.value);
-          if (cands.status === "fulfilled") setCandidates(cands.value);
-          if (fl.status === "fulfilled") setFills(fl.value);
+        if (rb !== null && rb.ok) {
+          setBriefs((b) => ({ ...b, [rb.market]: rb.v }));
         }
+        const [acct, snaps, mkt, wl, rep, pend, cands, fl] = rest;
+        if (acct.status === "fulfilled") setAccount(acct.value);
+        if (snaps.status === "fulfilled") setSnapshots(snaps.value);
+        if (mkt.status === "fulfilled") setMarket(mkt.value);
+        if (wl.status === "fulfilled") setWatchlist(wl.value);
+        if (rep.status === "fulfilled") setReports(rep.value);
+        if (pend.status === "fulfilled") setPending(pend.value);
+        if (cands.status === "fulfilled") setCandidates(cands.value);
+        if (fl.status === "fulfilled") setFills(fl.value);
         setLastUpdated(new Date());
       })
       .catch(() => setOffline(true))
       .finally(() => setLoading(false));
-  }, [researchMarket]);
+  }, [briefMarket, modeParam]);
 
   useEffect(() => {
     load();
@@ -695,13 +1057,32 @@ export default function FinancePage() {
     };
   }, [health, offline, lastUpdated, loading, load, setAfterTitle, setEnd, ft, t]);
 
-  const brief = briefs[researchMarket];
-  const isUsDesk = researchMarket === "us";
   const ledgerFallback = account !== null && "source" in account;
   const liveView = account !== null && !("source" in account) ? account : null;
   const accountNumbers: AccountNumbers | null =
     account === null ? null : "source" in account ? account.snapshot : account;
   const stats = account?.stats ?? null;
+
+  // Effective mode (for the switcher + the queue filter) and the service
+  // mode it defaults to.
+  const serviceMode: FinanceMode | null = health?.mode ?? null;
+  const effectiveMode: FinanceMode = modeOverride ?? serviceMode ?? "paper";
+  const modeLabelText =
+    effectiveMode === "live" ? ft.layout.modeLive : ft.layout.modePaper;
+  // Pending candidates belong to the service's mode (they carry none of their
+  // own). The bottom switcher only filters/labels: viewing the other mode
+  // shows an empty queue, it never re-modes an action.
+  const modeMatchesService =
+    serviceMode === null || effectiveMode === serviceMode;
+  const queuePending = modeMatchesService ? pending : [];
+
+  const modeSwitcher = (
+    <ModeSwitcher
+      mode={effectiveMode}
+      serviceMode={serviceMode}
+      onChange={setModeOverride}
+    />
+  );
 
   if (loading && health === null && !offline) {
     return (
@@ -720,15 +1101,10 @@ export default function FinancePage() {
     );
   }
 
-  // Research-first layout (Loop.md §7 Phase 0.5): the brief is the primary
-  // canvas; the approval queue is a compact badged strip below it; account/
-  // positions/orders/history are reference material further down.
   return (
     <div className="flex flex-col gap-6">
-      {/* Account-risk / order surfaces belong to the US desk only — the
-          China/HK desk is research-only (Loop.md §3): no breaker banner,
-          no approval queue, no account/positions/orders/history. */}
-      {isUsDesk && health?.breaker === "TRIPPED" && (
+      {/* Account-risk breaker banner (Loop.md §3). */}
+      {health?.breaker === "TRIPPED" && (
         <div className="flex items-center gap-3 border border-destructive bg-destructive/10 px-4 py-3 text-destructive">
           <AlertTriangle className="h-5 w-5 shrink-0" />
           <div className="font-mondwest normal-case text-sm">
@@ -738,35 +1114,58 @@ export default function FinancePage() {
         </div>
       )}
 
-      <ResearchBrief
-        brief={brief}
-        market={researchMarket}
-        onMarketChange={setResearchMarket}
+      {/* Top-level tabs. */}
+      <Segmented<FinanceTab>
+        value={activeTab}
+        onChange={setActiveTab}
+        options={[
+          { value: "research", label: ft.layout.tabResearch },
+          { value: "queue", label: ft.layout.tabQueue },
+          { value: "portfolio", label: ft.layout.tabPortfolio },
+        ]}
       />
 
-      {isUsDesk && (
-        <>
-          <ActionsStrip
-            pending={pending}
-            onActed={load}
-            showToast={showToast}
-          />
+      {activeTab === "research" && (
+        <ResearchView
+          desk={researchDesk}
+          onDeskChange={setResearchDesk}
+          briefs={briefs}
+          ft={ft}
+          footer={modeSwitcher}
+        />
+      )}
 
-          <AccountSection
-            numbers={accountNumbers}
-            stats={stats}
-            snapshots={snapshots}
-            ledgerFallback={ledgerFallback}
-          />
+      {activeTab === "queue" && (
+        <QueueView
+          pending={queuePending}
+          selectedId={queueSel}
+          onSelect={setQueueSel}
+          onActed={load}
+          showToast={showToast}
+          ft={ft}
+          emptyForMode={!modeMatchesService}
+          modeLabel={modeLabelText}
+          footer={modeSwitcher}
+        />
+      )}
 
-          <PositionsAndOrders view={liveView} />
-
-          <MarketStrip market={market} watchlist={watchlist} />
-
-          <HistorySection candidates={candidates} fills={fills} stats={stats} />
-
-          <ReportsCard reports={reports} />
-        </>
+      {activeTab === "portfolio" && (
+        <PortfolioView
+          selected={portfolioSel}
+          onSelect={setPortfolioSel}
+          numbers={accountNumbers}
+          stats={stats}
+          snapshots={snapshots}
+          ledgerFallback={ledgerFallback}
+          liveView={liveView}
+          market={market}
+          watchlist={watchlist}
+          reports={reports}
+          candidates={candidates}
+          fills={fills}
+          ft={ft}
+          footer={modeSwitcher}
+        />
       )}
 
       <Toast toast={toast} />

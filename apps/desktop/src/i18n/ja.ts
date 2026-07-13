@@ -3,6 +3,90 @@ import { defineFieldCopy } from '@/app/settings/field-copy'
 import { defineLocale } from './define-locale'
 
 export const ja = defineLocale({
+  finance: {
+    modeBarAria: '取引モード',
+    modeFollowsService: 'サービスに追従',
+    modeOverridden: '手動指定',
+    queue: {
+      selectPrompt: '候補を選択して、承認・編集・却下を行います。',
+      rowMeta: (side, qty) => `${side} · ${qty}`
+    },
+    research: {
+      marketsGroup: 'マーケット',
+      watchGroup: 'ウォッチ',
+      marketChina: '中国',
+      marketHk: '香港',
+      marketUk: '英国',
+      marketKorea: '韓国',
+      marketJapan: '日本',
+      comingSoon: '近日公開',
+      phaseBadge: 'フェーズ 0.9',
+      regionNote:
+        '現在、中国と香港は 1 つの CN モーニングブリーフを共有し、上場市場（.SS/.SZ と .HK）で分割しています。レジーム・ニュース・テーマは共通で、地域別ブリーフはフェーズ 0.9 の改善項目です。'
+    },
+    watch: {
+      readOnlyNote: 'ウォッチ専用 — 読み取り専用のマーケットデータです。ここでは発注も承認も行いません（Loop.md §3）。',
+      delayNote: '価格と分析は遅延する場合があり、参考値であって約定気配ではありません。',
+      readOnlyTag: '読み取り専用',
+      modules: {
+        gold: '金',
+        oil: '原油',
+        rates: '金利・債券',
+        crypto: '暗号資産'
+      },
+      labels: {
+        'GC=F': 'COMEX 金',
+        GLD: '金 ETF（SPDR）',
+        '518880.SS': '上海金 ETF',
+        'CL=F': 'WTI 原油',
+        'BZ=F': 'ブレント原油',
+        USO: '原油 ETF',
+        '^TNX': '米国 10 年利回り',
+        TLT: '20 年国債 ETF',
+        'BTC-USD': 'ビットコイン',
+        'ETH-USD': 'イーサリアム'
+      },
+      last: '直近',
+      bid: '買気配',
+      ask: '売気配',
+      volume: '出来高',
+      quoteAsOf: ts => `${ts} 時点`,
+      quoteError: '気配を取得できません。',
+      noData: 'この銘柄のデータは現在ありません。',
+      chartTitle: '価格 · 直近 120 日',
+      chartAria: symbol => `${symbol} の価格チャート`,
+      chartEmpty: '価格履歴がありません。',
+      analyze: '分析',
+      hideAnalysis: '分析を隠す',
+      analyzing: '分析中…',
+      analyzeError: 'この銘柄の分析は利用できません。',
+      verdictTitle: '判定',
+      verdictLine: (direction, confidence) => `${direction} · 確信度 ${confidence}`,
+      signalsTitle: 'エージェントシグナル',
+      signalsEmpty: 'エージェントシグナルはありません。',
+      signalConfidence: pct => `確信度 ${pct}`,
+      newsTitle: 'ニュース',
+      researchTitle: 'リサーチ',
+      citationsEmpty: '引用元はありません。'
+    },
+    portfolio: {
+      groupOverview: '概要',
+      groupPositions: 'ポジション',
+      account: '口座',
+      orders: '未約定注文',
+      stats: '取引統計',
+      market: 'マーケット',
+      history: '履歴',
+      reports: 'レポート',
+      selectPrompt: 'ポジションまたは概要セクションを選択してください。',
+      positionQty: '数量',
+      positionAvgPx: '平均取得単価',
+      positionMktPx: '市場価格',
+      positionUpnl: '評価損益',
+      positionPool: 'プール',
+      positionsEmpty: '保有ポジションはありません。'
+    }
+  },
   common: {
     apply: '適用',
     back: '戻る',

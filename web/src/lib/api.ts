@@ -1283,6 +1283,29 @@ export const api = {
     fetchJSON<FinanceWatchlistItem[]>("/api/finance/v1/watchlist"),
   financeLatestReports: () =>
     fetchJSON<FinanceReports>("/api/finance/v1/reports/latest"),
+  // ── On-demand market data (Phase 0.75; READ/ANALYSIS-ONLY, Loop.md §3) ──
+  // Powers the read-only cross-asset watch modules. yfinance may 404 a
+  // symbol intermittently (GC=F/^TNX/518880.SS) — callers handle the throw
+  // per-symbol with an inline "no data" note and never crash the panel.
+  /** Latest (delayed) quote for one symbol — current price feedback. */
+  financeQuote: (symbol: string) =>
+    fetchJSON<FinanceQuote>(
+      `/api/finance/v1/quote${financeQuery({ symbol })}`,
+    ),
+  /** K-line / candlestick OHLCV bars for one symbol (inline-SVG charting). */
+  financeBars: (
+    symbol: string,
+    { timeframe = "1d", limit = 120 }: { timeframe?: string; limit?: number } = {},
+  ) =>
+    fetchJSON<FinanceBars>(
+      `/api/finance/v1/bars${financeQuery({ symbol, timeframe, limit })}`,
+    ),
+  /** One-shot multi-agent analysis of one symbol (verdict + per-agent
+   * signals + cited sources). READ-ONLY — forms a thesis, never an order. */
+  financeAnalyze: (symbol: string) =>
+    fetchJSON<FinanceAnalyze>(
+      `/api/finance/v1/analyze${financeQuery({ symbol })}`,
+    ),
   /**
    * Daily Investment Research brief (Loop.md §7 Phase 0.5). The endpoint
    * always answers while the service is up — a degraded brief carries
@@ -3002,6 +3025,77 @@ export interface FinanceResearchBrief {
   };
   uncertainty: string[];
   provenance: FinanceProvenanceLink[];
+}
+
+// ── On-demand market-data types (Phase 0.75; trader/swing_trader/api.py) ─
+
+/** Latest delayed quote from GET /quote. `note` is the honest data-delay
+ * disclaimer (`MARKET_DATA_NOTE`). */
+export interface FinanceQuote {
+  symbol: string;
+  last: number | null;
+  bid: number | null;
+  ask: number | null;
+  volume: number | null;
+  as_of: string;
+  note: string;
+}
+
+/** One OHLCV bar from GET /bars. */
+export interface FinanceBar {
+  ts: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+/** K-line series from GET /bars. */
+export interface FinanceBars {
+  symbol: string;
+  timeframe: string;
+  bars: FinanceBar[];
+  as_of: string;
+  note: string;
+}
+
+/** One sub-agent (or debate verdict) signal in a GET /analyze response. */
+export interface FinanceAnalyzeSignal {
+  source_agent: string;
+  direction: string;
+  confidence: number;
+  thesis: string;
+  features: Record<string, unknown>;
+}
+
+/** One scored headline in a GET /analyze response. */
+export interface FinanceAnalyzeNewsItem {
+  headline: string;
+  source: string;
+  url: string;
+  sentiment: number | null;
+}
+
+/** One cited research source in a GET /analyze response. */
+export interface FinanceAnalyzeResearchSource {
+  title: string | null;
+  url: string;
+  publisher: string | null;
+  trading_date: string | null;
+}
+
+/** Multi-agent analysis from GET /analyze. `verdict` is the bull/bear
+ * debate synthesis (null when no sub-agent produced a signal). READ-ONLY. */
+export interface FinanceAnalyze {
+  symbol: string;
+  last: number | null;
+  verdict: FinanceAnalyzeSignal | null;
+  signals: FinanceAnalyzeSignal[];
+  news: FinanceAnalyzeNewsItem[];
+  research: FinanceAnalyzeResearchSource[];
+  as_of: string;
+  note: string;
 }
 
 /** One hit from GET /knowledge/search (`search_knowledge`). */

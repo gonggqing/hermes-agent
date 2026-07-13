@@ -5,10 +5,10 @@ import { useState } from 'react'
 import { StatusDot, type StatusTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { SegmentedControl } from '@/components/ui/segmented-control'
 import {
   type FinanceBriefPendingCandidate,
   type FinanceFreshness,
+  type FinanceMode,
   type FinanceMover,
   type FinanceNewsDigestItem,
   type FinanceProvenanceLink,
@@ -25,6 +25,10 @@ import { ExternalLink } from '@/lib/external-link'
 import { AlertTriangle, Info, Search } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 
+import { useRouteEnumParam } from '../hooks/use-route-enum-param'
+import { DetailColumn, ListColumn, MasterDetail } from '../master-detail'
+
+import { FinanceComingSoonBadge, FinanceListGroup, FinanceModeBar, FinanceNavRow } from './chrome'
 import {
   enumLabel,
   financeKey,
@@ -40,6 +44,7 @@ import {
   REGIME_TONE
 } from './lib'
 import { FinanceCard, FinancePill, FinanceSectionLabel, QuerySection, StatTile } from './primitives'
+import { WATCH_MODULE_IDS, type WatchModuleId, WatchModulePanel } from './watch'
 
 // Investment Research — the DEFAULT Finance view (Loop.md §7 Phase 0.5):
 // research and risk awareness are primary; execution stays in the secondary
@@ -52,60 +57,152 @@ const BRIEF_POLL_MS = 60_000
 // Knowledge search results per query (server clamps k to 1..25).
 const SEARCH_K = 5
 
-// Research markets shown in the brief. 'us' is the default order-capable
-// session; 'cn' is the China/HK MORNING brief, which is research-only (no
-// account risk, no approval queue — Loop.md: that session never proposes
-// orders). Only 'cn' becomes the ?market= query param.
-type ResearchMarket = 'cn' | 'us'
+// Selectable sidebar items. The three ACTIVE markets (US, China, HK) plus the
+// read-only watch modules; disabled market placeholders (UK/Korea/Japan) are
+// NOT selectable so they stay out of the enum.
+const ACTIVE_MARKETS = ['us', 'china', 'hk'] as const
 
-export function FinanceResearchTab({ enabled, onOpenQueue }: { enabled: boolean; onOpenQueue: () => void }) {
+const RESEARCH_DESKS = [...ACTIVE_MARKETS, ...WATCH_MODULE_IDS] as const
+
+type ResearchDesk = (typeof RESEARCH_DESKS)[number]
+
+// Placeholder markets — badged "Phase 0.9", never selectable (Loop.md §7).
+const COMING_SOON_MARKETS = ['uk', 'korea', 'japan'] as const
+
+const isMarketDesk = (desk: ResearchDesk): desk is (typeof ACTIVE_MARKETS)[number] =>
+  (ACTIVE_MARKETS as readonly string[]).includes(desk)
+
+// China & Hong Kong derive from the ONE CN brief (research-only). China shows
+// mainland listings (.SS/.SZ); HK shows .HK. Regime/news/themes/freshness are
+// shared — per-region briefs are a Phase 0.9 refinement.
+function partitionCnBrief(brief: FinanceResearchBrief, region: 'china' | 'hk'): FinanceResearchBrief {
+  const match =
+    region === 'hk'
+      ? (symbol: string) => symbol.endsWith('.HK')
+      : (symbol: string) => symbol.endsWith('.SS') || symbol.endsWith('.SZ')
+
+  return {
+    ...brief,
+    movers: {
+      top: brief.movers.top.filter(mover => match(mover.symbol)),
+      bottom: brief.movers.bottom.filter(mover => match(mover.symbol))
+    },
+    signals_today: brief.signals_today.filter(signal => match(signal.symbol))
+  }
+}
+
+interface FinanceViewCommonProps {
+  enabled: boolean
+  mode: FinanceMode
+  modeOverride: FinanceMode | null
+  onModeChange: (mode: FinanceMode) => void
+}
+
+export function FinanceResearchView({
+  enabled,
+  mode,
+  modeOverride,
+  onModeChange,
+  onOpenQueue
+}: FinanceViewCommonProps & { onOpenQueue: () => void }) {
   const { t } = useI18n()
   const copy = t.finance.research
-  const [market, setMarket] = useState<ResearchMarket>('us')
-  const researchOnly = market === 'cn'
+  const [desk, setDesk] = useRouteEnumParam('desk', RESEARCH_DESKS, 'us')
+  const marketDesk = isMarketDesk(desk)
+  // China & HK share ONE fetch: keyed by 'cn' (not the desk) so switching
+  // between them never refetches. US sends no market param.
+  const isCn = desk === 'china' || desk === 'hk'
+  const marketKey = desk === 'us' ? 'us' : 'cn'
 
   const briefQuery = useQuery({
-    enabled,
-    // 'us' sends no param (default brief); only 'cn' scopes to ?market=cn.
-    queryFn: () => getFinanceResearchBrief(researchOnly ? 'cn' : undefined),
-    queryKey: financeKey('research', 'brief', market),
+    enabled: enabled && marketDesk,
+    queryFn: () => getFinanceResearchBrief(isCn ? 'cn' : undefined),
+    queryKey: financeKey('research', 'brief', marketKey),
     refetchInterval: BRIEF_POLL_MS,
     retry: 1
   })
 
-  const brief = briefQuery.data
+  const rawBrief = briefQuery.data
+
+  const brief =
+    rawBrief && isCn ? partitionCnBrief(rawBrief, desk === 'hk' ? 'hk' : 'china') : rawBrief
+
+  const marketLabel: Record<(typeof ACTIVE_MARKETS)[number], string> = {
+    us: copy.marketUs,
+    china: copy.marketChina,
+    hk: copy.marketHk
+  }
 
   return (
-    <div className="space-y-5">
-      {/* Switches WHICH brief is shown (US vs China/HK). It never turns Finance
-          into an order console: the CN brief is research-only — no account risk
-          and no approval queue (Loop.md §5.9). */}
-      <div aria-label={copy.marketAria} className="flex" role="group">
-        <SegmentedControl
-          onChange={setMarket}
-          options={[
-            { id: 'us', label: copy.marketUs },
-            { id: 'cn', label: copy.marketCn }
-          ]}
-          value={market}
-        />
-      </div>
+    <MasterDetail>
+      <ListColumn>
+        <FinanceListGroup label={copy.marketsGroup}>
+          {ACTIVE_MARKETS.map(id => (
+            <FinanceNavRow
+              active={desk === id}
+              key={id}
+              onSelect={() => setDesk(id)}
+              title={marketLabel[id]}
+            />
+          ))}
+          {COMING_SOON_MARKETS.map(id => (
+            <FinanceNavRow
+              active={false}
+              badge={<FinanceComingSoonBadge>{copy.phaseBadge}</FinanceComingSoonBadge>}
+              disabled
+              key={id}
+              onSelect={() => undefined}
+              title={id === 'uk' ? copy.marketUk : id === 'korea' ? copy.marketKorea : copy.marketJapan}
+            />
+          ))}
+        </FinanceListGroup>
 
-      <QuerySection
-        empty={copy.briefError}
-        error={briefQuery.isError ? briefQuery.error : undefined}
-        isEmpty={!brief}
-        loading={briefQuery.isPending}
-      >
-        {brief && <BriefBody brief={brief} onOpenQueue={onOpenQueue} researchOnly={researchOnly} />}
-      </QuerySection>
+        <FinanceListGroup label={copy.watchGroup}>
+          {WATCH_MODULE_IDS.map(id => (
+            <FinanceNavRow active={desk === id} key={id} onSelect={() => setDesk(id)} title={t.finance.watch.modules[id]} />
+          ))}
+        </FinanceListGroup>
+      </ListColumn>
 
-      <KnowledgeSearchSection enabled={enabled} />
+      <DetailColumn actionBar={<FinanceModeBar mode={mode} modeOverride={modeOverride} onModeChange={onModeChange} />}>
+        {marketDesk ? (
+          <div className="space-y-5">
+            {isCn && <RegionNote note={copy.regionNote} />}
+            <QuerySection
+              empty={copy.briefError}
+              error={briefQuery.isError ? briefQuery.error : undefined}
+              isEmpty={!brief}
+              loading={briefQuery.isPending}
+            >
+              {brief && <BriefBody brief={brief} onOpenQueue={onOpenQueue} researchOnly={isCn} />}
+            </QuerySection>
+            <KnowledgeSearchSection enabled={enabled} />
+          </div>
+        ) : (
+          <WatchModulePanel enabled={enabled} module={desk as WatchModuleId} />
+        )}
+      </DetailColumn>
+    </MasterDetail>
+  )
+}
+
+// Calm note above the China/HK brief explaining the shared-CN partition and its
+// Phase 0.9 status.
+function RegionNote({ note }: { note: string }) {
+  return (
+    <div
+      className={cn(
+        'flex items-start gap-2 rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary) px-3 py-2',
+        'text-[0.7rem] leading-5 text-(--ui-text-secondary)'
+      )}
+    >
+      <Info className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+      <div className="min-w-0">{note}</div>
     </div>
   )
 }
 
-function BriefBody({
+export function BriefBody({
   brief,
   onOpenQueue,
   researchOnly

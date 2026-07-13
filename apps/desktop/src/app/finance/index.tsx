@@ -6,7 +6,6 @@ import { PageLoader } from '@/components/page-loader'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/error-state'
-import { SegmentedControl } from '@/components/ui/segmented-control'
 import { type FinanceHealth, type FinanceMode, getFinanceHealth } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { AlertTriangle, RefreshCw } from '@/lib/icons'
@@ -17,33 +16,22 @@ import { useRouteEnumParam } from '../hooks/use-route-enum-param'
 import { PageSearchShell } from '../page-search-shell'
 import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
 
-import { FinanceAccountTab } from './account'
-import { FinanceHistoryTab } from './history'
 import { BREAKER_TONE, enumLabel, FINANCE_KEY, financeKey, fmtTs, parseFinanceError } from './lib'
-import { FinanceMarketTab } from './market'
+import { FinancePortfolioView } from './portfolio'
 import { FinancePill } from './primitives'
-import { FinanceQueue, usePendingCandidates } from './queue'
-import { FinanceReportsTab } from './reports'
-import { FinanceResearchTab } from './research'
+import { FinanceQueueView, usePendingCandidates } from './queue'
+import { FinanceResearchView } from './research'
 
 // Permanent Finance portal (Loop.md §5.9): a native, structured companion
-// surface over the swing-trader service. Phase 0.5 (Loop.md §7) makes the
-// Investment Research brief the DEFAULT canvas — research and risk awareness
-// are primary; the approval queue is a compact, badged SECONDARY action area
-// (approve/edit/reject only, Loop.md §5.6); account/market/history/reports
-// live under a third Portfolio tab.
+// surface over the swing-trader service. Each top tab (Research, Queue,
+// Portfolio) is its own MESSAGING-style master-detail — a grouped sidebar
+// list, a detail pane, and a bottom paper/live switcher — reusing the existing
+// brief/queue/account logic unchanged; this is a layout restructure, not a
+// rewrite of the data or approval flow (approve/edit/reject stay §5.6-exact).
 
 const TABS = ['research', 'queue', 'portfolio'] as const
 
 type FinanceTabId = (typeof TABS)[number]
-
-// Portfolio sub-sections (the Phase-0 tabs, demoted under one tab).
-const PORTFOLIO_SECTIONS = ['account', 'market', 'history', 'reports'] as const
-
-type PortfolioSectionId = (typeof PORTFOLIO_SECTIONS)[number]
-
-// Portfolio sections where the shared search field filters rows by symbol/theme.
-const SEARCHABLE_SECTIONS: ReadonlySet<PortfolioSectionId> = new Set(['account', 'history', 'market'])
 
 interface FinanceViewProps extends React.ComponentProps<'section'> {
   setStatusbarItemGroup?: SetStatusbarItemGroup
@@ -54,8 +42,6 @@ export function FinanceView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...
   const copy = t.finance
   const queryClient = useQueryClient()
   const [tab, setTab] = useRouteEnumParam('tab', TABS, 'research')
-  const [section, setSection] = useRouteEnumParam('view', PORTFOLIO_SECTIONS, 'account')
-  const [query, setQuery] = useState('')
   // null = follow the service's own mode from /health; set = explicit override.
   const [modeOverride, setModeOverride] = useState<FinanceMode | null>(null)
 
@@ -82,26 +68,20 @@ export function FinanceView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...
 
   useRefreshHotkey(refreshAll)
 
-  const searchable = tab === 'portfolio' && SEARCHABLE_SECTIONS.has(section) && online
+  const modeProps = { mode, modeOverride, onModeChange: setModeOverride }
 
   return (
     <PageSearchShell
       {...props}
       activeTab={tab}
       filters={
-        <FinanceHealthStrip
-          health={health}
-          mode={mode}
-          offline={offline}
-          onModeChange={setModeOverride}
-          onRefresh={refreshAll}
-        />
+        <FinanceHealthStrip health={health} offline={offline} onRefresh={refreshAll} />
       }
-      onSearchChange={setQuery}
+      onSearchChange={() => undefined}
       onTabChange={next => setTab(next as FinanceTabId)}
-      searchHidden={!searchable}
+      searchHidden
       searchPlaceholder={copy.searchPlaceholder}
-      searchValue={query}
+      searchValue=""
       tabs={TABS.map(id => ({
         id,
         label: copy.tabs[id],
@@ -110,80 +90,48 @@ export function FinanceView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...
         meta: id === 'queue' && online ? (pendingQuery.isPending ? null : pendingCount || undefined) : undefined
       }))}
     >
-      <div className="h-full min-h-0 overflow-y-auto px-4 pb-6">
-        <div className="mx-auto w-full max-w-4xl space-y-4 pt-2">
-          {health?.breaker === 'TRIPPED' && <BreakerBanner />}
-
-          {healthQuery.isPending ? (
-            <PageLoader label={copy.connecting} />
-          ) : offline ? (
+      {healthQuery.isPending ? (
+        <PageLoader label={copy.connecting} />
+      ) : offline ? (
+        <div className="h-full overflow-y-auto px-4 py-6">
+          <div className="mx-auto w-full max-w-2xl">
             <FinanceOfflinePanel
               error={healthQuery.error}
               onRetry={() => void healthQuery.refetch()}
               retrying={healthQuery.isFetching}
             />
-          ) : (
-            <>
-              {tab === 'research' && <FinanceResearchTab enabled={online} onOpenQueue={() => setTab('queue')} />}
-              {tab === 'queue' && <FinanceQueue enabled={online} />}
-              {tab === 'portfolio' && (
-                <PortfolioTab enabled={online} mode={mode} onSectionChange={setSection} query={query} section={section} />
-              )}
-            </>
-          )}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="flex h-full min-h-0 flex-col">
+          {health?.breaker === 'TRIPPED' && (
+            <div className="shrink-0 px-4 pt-3">
+              <BreakerBanner />
+            </div>
+          )}
+          <div className="min-h-0 flex-1">
+            {tab === 'research' && (
+              <FinanceResearchView {...modeProps} enabled={online} onOpenQueue={() => setTab('queue')} />
+            )}
+            {tab === 'queue' && <FinanceQueueView {...modeProps} enabled={online} />}
+            {tab === 'portfolio' && <FinancePortfolioView {...modeProps} enabled={online} />}
+          </div>
+        </div>
+      )}
     </PageSearchShell>
   )
 }
 
-// Account / market / history / reports under one secondary tab — kept intact
-// from Phase 0, just demoted below the research brief (Loop.md §7 Phase 0.5).
-function PortfolioTab({
-  enabled,
-  mode,
-  onSectionChange,
-  query,
-  section
-}: {
-  enabled: boolean
-  mode: FinanceMode
-  onSectionChange: (section: PortfolioSectionId) => void
-  query: string
-  section: PortfolioSectionId
-}) {
-  const { t } = useI18n()
-
-  return (
-    <div className="space-y-4">
-      <SegmentedControl
-        onChange={onSectionChange}
-        options={PORTFOLIO_SECTIONS.map(id => ({ id, label: t.finance.sections[id] }))}
-        value={section}
-      />
-
-      {section === 'account' && <FinanceAccountTab enabled={enabled} mode={mode} query={query} />}
-      {section === 'market' && <FinanceMarketTab enabled={enabled} query={query} />}
-      {section === 'history' && <FinanceHistoryTab enabled={enabled} mode={mode} query={query} />}
-      {section === 'reports' && <FinanceReportsTab enabled={enabled} />}
-    </div>
-  )
-}
-
-// Header strip under the tabs: service status, paper/live switch, breaker and
-// loop state — always visible so mode is never ambiguous (paper/live ledgers
-// are strictly separate, Loop.md §5.8).
+// Header strip under the tabs: service status, breaker and loop state, refresh
+// — always visible so connection state is never ambiguous. The paper/live
+// switch itself now lives at the BOTTOM of each master-detail view.
 function FinanceHealthStrip({
   health,
-  mode,
   offline,
-  onModeChange,
   onRefresh
 }: {
   health: FinanceHealth | undefined
-  mode: FinanceMode
   offline: boolean
-  onModeChange: (mode: FinanceMode) => void
   onRefresh: () => void
 }) {
   const { t } = useI18n()
@@ -195,15 +143,6 @@ function FinanceHealthStrip({
         <StatusDot tone={offline ? 'bad' : health ? 'good' : 'muted'} />
         {offline ? copy.serviceOffline : health ? copy.serviceOnline : copy.serviceConnecting}
       </span>
-
-      <SegmentedControl
-        onChange={onModeChange}
-        options={[
-          { id: 'paper' as const, label: copy.modePaper },
-          { id: 'live' as const, label: copy.modeLive }
-        ]}
-        value={mode}
-      />
 
       {health && (
         <>

@@ -237,6 +237,71 @@ export interface FinanceTranslations {
     title: string;
     empty: string;
   };
+  // Master-detail shell: top tabs, grouped sidebar, and the bottom
+  // paper/live mode switcher shared by all three views.
+  layout: {
+    tabResearch: string;
+    tabQueue: string;
+    tabPortfolio: string;
+    // Research sidebar sections + entries.
+    marketsGroup: string; // "Markets"
+    watchGroup: string; // "Watch"
+    marketUs: string;
+    marketChina: string;
+    marketHk: string;
+    marketUk: string;
+    marketKorea: string;
+    marketJapan: string;
+    comingSoon: string; // disabled placeholder badge, e.g. "Phase 0.9"
+    perRegionNote: string; // China/HK derived from one CN brief note
+    selectDesk: string; // aria-label for the narrow-screen desk select
+    // Bottom mode switcher.
+    modeLabel: string; // aria-label "Trading mode"
+    modePaper: string;
+    modeLive: string;
+    modeFollowsService: string; // "follows service ({mode})"
+    // Queue master-detail.
+    queueSidebarTitle: string;
+    queueRowStatus: string; // "{status}"
+    queueSelectHint: string; // right-pane hint when nothing selected
+    queueNoneForMode: string; // "No {mode} actions pending."
+    // Portfolio master-detail.
+    portfolioAccountGroup: string;
+    portfolioPositionsGroup: string;
+    rowAccount: string;
+    rowOrders: string;
+    rowHistory: string;
+    rowMarket: string;
+    rowReports: string;
+    positionsEmpty: string;
+    selectPositionHint: string; // right-pane hint when nothing selected
+  };
+  // Read-only cross-asset watch modules (Gold/Oil/Rates/Crypto).
+  watch: {
+    gold: string;
+    oil: string;
+    rates: string;
+    crypto: string;
+    readOnlyNote: string; // "Read-only watch module — no orders (Loop.md §3)"
+    price: string;
+    bid: string;
+    ask: string;
+    volume: string;
+    asOf: string; // "as of {time}"
+    noData: string; // per-symbol inline error
+    chartUnavailable: string;
+    analyze: string;
+    analyzing: string;
+    hideAnalysis: string;
+    verdict: string;
+    noVerdict: string;
+    signals: string;
+    sources: string;
+    direction: string;
+    confidence: string; // "confidence {pct}%"
+    dataDelay: string; // honest delay disclaimer (fallback if note absent)
+    loadingQuote: string;
+  };
 }
 
 export interface Translations {

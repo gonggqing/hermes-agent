@@ -3,6 +3,90 @@ import { defineFieldCopy } from '@/app/settings/field-copy'
 import { defineLocale } from './define-locale'
 
 export const zhHant = defineLocale({
+  finance: {
+    modeBarAria: '交易模式',
+    modeFollowsService: '跟隨服務',
+    modeOverridden: '手動覆寫',
+    queue: {
+      selectPrompt: '選擇一個候選單以查看並批准、編輯或拒絕。',
+      rowMeta: (side, qty) => `${side} · ${qty}`
+    },
+    research: {
+      marketsGroup: '市場',
+      watchGroup: '關注',
+      marketChina: '中國',
+      marketHk: '香港',
+      marketUk: '英國',
+      marketKorea: '南韓',
+      marketJapan: '日本',
+      comingSoon: '即將推出',
+      phaseBadge: '階段 0.9',
+      regionNote:
+        '目前中國與香港共用同一份 CN 晨間簡報，依上市地拆分（.SS/.SZ 與 .HK）。市場狀態、新聞與主題為共用；分區簡報是階段 0.9 的改進項。'
+    },
+    watch: {
+      readOnlyNote: '僅關注 — 唯讀市場資料。此處不下單也不審批（Loop.md §3）。',
+      delayNote: '價格與分析可能有延遲，僅供參考，並非可執行報價。',
+      readOnlyTag: '唯讀',
+      modules: {
+        gold: '黃金',
+        oil: '原油',
+        rates: '利率與債券',
+        crypto: '加密貨幣'
+      },
+      labels: {
+        'GC=F': 'COMEX 黃金',
+        GLD: '黃金 ETF（SPDR）',
+        '518880.SS': '上海金 ETF',
+        'CL=F': 'WTI 原油',
+        'BZ=F': '布蘭特原油',
+        USO: '原油 ETF',
+        '^TNX': '美國 10 年期殖利率',
+        TLT: '20 年期公債 ETF',
+        'BTC-USD': '比特幣',
+        'ETH-USD': '以太幣'
+      },
+      last: '最新',
+      bid: '買價',
+      ask: '賣價',
+      volume: '成交量',
+      quoteAsOf: ts => `截至 ${ts}`,
+      quoteError: '報價不可用。',
+      noData: '該標的暫無資料。',
+      chartTitle: '價格 · 近 120 天',
+      chartAria: symbol => `${symbol} 價格走勢圖`,
+      chartEmpty: '暫無價格歷史。',
+      analyze: '分析',
+      hideAnalysis: '隱藏分析',
+      analyzing: '分析中…',
+      analyzeError: '該標的分析不可用。',
+      verdictTitle: '結論',
+      verdictLine: (direction, confidence) => `${direction} · 信賴度 ${confidence}`,
+      signalsTitle: '智能體訊號',
+      signalsEmpty: '未返回智能體訊號。',
+      signalConfidence: pct => `信賴度 ${pct}`,
+      newsTitle: '新聞',
+      researchTitle: '研究',
+      citationsEmpty: '暫無引用來源。'
+    },
+    portfolio: {
+      groupOverview: '總覽',
+      groupPositions: '持倉',
+      account: '帳戶',
+      orders: '未成交訂單',
+      stats: '交易統計',
+      market: '市場',
+      history: '歷史',
+      reports: '報告',
+      selectPrompt: '選擇一個持倉或總覽分區。',
+      positionQty: '數量',
+      positionAvgPx: '均價',
+      positionMktPx: '市價',
+      positionUpnl: '浮動盈虧',
+      positionPool: '資金池',
+      positionsEmpty: '暫無持倉。'
+    }
+  },
   common: {
     apply: '套用',
     back: '返回',

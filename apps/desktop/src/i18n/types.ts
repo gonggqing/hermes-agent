@@ -1272,8 +1272,14 @@ export interface Translations {
     offlineHint: string
     offlineRetry: string
     offlineChecking: string
+    // Bottom paper/live switcher shared by every master-detail view.
+    modeBarAria: string
+    modeFollowsService: string
+    modeOverridden: string
     queue: {
       empty: string
+      selectPrompt: string
+      rowMeta: (side: string, qty: string) => string
       approve: string
       edit: string
       reject: string
@@ -1425,6 +1431,67 @@ export interface Translations {
       marketCn: string
       cnBadge: string
       cnResearchOnly: string
+      // Sidebar grouping + per-market rows (master-detail research view).
+      marketsGroup: string
+      watchGroup: string
+      marketChina: string
+      marketHk: string
+      marketUk: string
+      marketKorea: string
+      marketJapan: string
+      comingSoon: string
+      phaseBadge: string
+      regionNote: string
+    }
+    // Read-only cross-asset watch modules (Gold/Oil/Rates/Crypto, Loop.md §3).
+    watch: {
+      readOnlyNote: string
+      delayNote: string
+      readOnlyTag: string
+      modules: Record<'crypto' | 'gold' | 'oil' | 'rates', string>
+      // Ticker → display label (tickers themselves are never translated).
+      labels: Record<string, string>
+      last: string
+      bid: string
+      ask: string
+      volume: string
+      quoteAsOf: (ts: string) => string
+      quoteError: string
+      noData: string
+      chartTitle: string
+      chartAria: (symbol: string) => string
+      chartEmpty: string
+      analyze: string
+      hideAnalysis: string
+      analyzing: string
+      analyzeError: string
+      verdictTitle: string
+      verdictLine: (direction: string, confidence: string) => string
+      signalsTitle: string
+      signalsEmpty: string
+      signalConfidence: (pct: string) => string
+      newsTitle: string
+      researchTitle: string
+      citationsEmpty: string
+    }
+    // Portfolio master-detail: sidebar groups + per-position detail (folds the
+    // former account/market/history/reports sub-tabs into selectable rows).
+    portfolio: {
+      groupOverview: string
+      groupPositions: string
+      account: string
+      orders: string
+      stats: string
+      market: string
+      history: string
+      reports: string
+      selectPrompt: string
+      positionQty: string
+      positionAvgPx: string
+      positionMktPx: string
+      positionUpnl: string
+      positionPool: string
+      positionsEmpty: string
     }
     // Localized labels for the fixed backend enum vocabularies (Loop.md
     // schemas): looked up by the raw wire value, humanized fallback for any

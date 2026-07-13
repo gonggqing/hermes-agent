@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type * as React from 'react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
@@ -18,6 +18,7 @@ import {
   type FinanceActionPayload,
   type FinanceCandidate,
   type FinanceCandidateEdits,
+  type FinanceMode,
   type FinancePendingCandidate,
   getFinancePendingCandidates,
   postFinanceCandidateAction
@@ -25,6 +26,10 @@ import {
 import { useI18n } from '@/i18n'
 import { notify, notifyError } from '@/store/notifications'
 
+import { useRouteEnumParam } from '../hooks/use-route-enum-param'
+import { DetailColumn, ListColumn, MasterDetail } from '../master-detail'
+
+import { FinanceDetailPlaceholder, FinanceModeBar, FinanceNavRow } from './chrome'
 import {
   CANDIDATE_STATUS_TONE,
   enumLabel,
@@ -47,6 +52,10 @@ const PENDING_POLL_MS = 15_000
 
 export const PENDING_QUERY_KEY = financeKey('candidates', 'pending')
 
+// Stable empty reference so the candidate-id memo doesn't recompute every render
+// while the queue is empty (react-hooks/exhaustive-deps).
+const NO_PENDING: FinancePendingCandidate[] = []
+
 export function usePendingCandidates(enabled: boolean) {
   return useQuery({
     enabled,
@@ -64,7 +73,17 @@ interface ActionVars {
   version: number
 }
 
-export function FinanceQueue({ enabled }: { enabled: boolean }) {
+export function FinanceQueueView({
+  enabled,
+  mode,
+  modeOverride,
+  onModeChange
+}: {
+  enabled: boolean
+  mode: FinanceMode
+  modeOverride: FinanceMode | null
+  onModeChange: (mode: FinanceMode) => void
+}) {
   const { t } = useI18n()
   const copy = t.finance.queue
   const queryClient = useQueryClient()
@@ -118,31 +137,61 @@ export function FinanceQueue({ enabled }: { enabled: boolean }) {
     }
   })
 
-  const pending = pendingQuery.data ?? []
+  const pending = pendingQuery.data ?? NO_PENDING
+  const candidateIds = useMemo(() => pending.map(entry => entry.candidate.id), [pending])
+  const [selectedId, setSelectedId] = useRouteEnumParam('action', candidateIds, candidateIds[0] ?? '')
+  const selected = pending.find(entry => entry.candidate.id === selectedId) ?? pending[0] ?? null
+
+  const actionBar = <FinanceModeBar mode={mode} modeOverride={modeOverride} onModeChange={onModeChange} />
 
   return (
-    <div className="space-y-3">
-      <QuerySection
-        empty={copy.empty}
-        error={pendingQuery.isError ? pendingQuery.error : undefined}
-        isEmpty={pending.length === 0}
-        loading={pendingQuery.isPending}
-      >
-        {pending.map(entry => (
-          <PendingCandidateCard
-            busy={actionMutation.isPending}
-            entry={entry}
-            key={entry.candidate.id}
-            onApprove={() =>
-              actionMutation.mutate({ action: 'approve', candidate: entry.candidate, version: entry.version })
-            }
-            onEdit={() => setEditing(entry)}
-            onReject={() =>
-              actionMutation.mutate({ action: 'reject', candidate: entry.candidate, version: entry.version })
-            }
-          />
-        ))}
-      </QuerySection>
+    <>
+      <MasterDetail>
+        <ListColumn>
+          <QuerySection
+            empty={copy.empty}
+            error={pendingQuery.isError ? pendingQuery.error : undefined}
+            isEmpty={pending.length === 0}
+            loading={pendingQuery.isPending}
+          >
+            <div className="space-y-0.5">
+              {pending.map(entry => (
+                <FinanceNavRow
+                  active={selected?.candidate.id === entry.candidate.id}
+                  key={entry.candidate.id}
+                  leading={<StatusDot tone={CANDIDATE_STATUS_TONE[entry.candidate.status] ?? 'muted'} />}
+                  meta={
+                    <span className="text-[0.58rem] uppercase tracking-wide text-muted-foreground/70">
+                      {enumLabel(t.finance.enums.candidateStatus, entry.candidate.status)}
+                    </span>
+                  }
+                  onSelect={() => setSelectedId(entry.candidate.id)}
+                  subtitle={copy.rowMeta(enumLabel(t.finance.enums.side, entry.candidate.side), fmtQty(entry.candidate.qty))}
+                  title={entry.candidate.symbol}
+                />
+              ))}
+            </div>
+          </QuerySection>
+        </ListColumn>
+
+        <DetailColumn actionBar={actionBar}>
+          {selected ? (
+            <PendingCandidateCard
+              busy={actionMutation.isPending}
+              entry={selected}
+              onApprove={() =>
+                actionMutation.mutate({ action: 'approve', candidate: selected.candidate, version: selected.version })
+              }
+              onEdit={() => setEditing(selected)}
+              onReject={() =>
+                actionMutation.mutate({ action: 'reject', candidate: selected.candidate, version: selected.version })
+              }
+            />
+          ) : (
+            <FinanceDetailPlaceholder>{pendingQuery.isPending ? '' : copy.empty}</FinanceDetailPlaceholder>
+          )}
+        </DetailColumn>
+      </MasterDetail>
 
       <EditCandidateDialog
         entry={editing}
@@ -154,7 +203,7 @@ export function FinanceQueue({ enabled }: { enabled: boolean }) {
         }}
         submitting={actionMutation.isPending}
       />
-    </div>
+    </>
   )
 }
 
