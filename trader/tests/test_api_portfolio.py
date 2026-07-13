@@ -209,6 +209,48 @@ class TestAggregateReconcileImport:
         assert r.status_code == 422
 
 
+class TestSessionTrigger:
+    def _client(self, tmp_path, attach=True):
+        ledger = Ledger(url=f"sqlite:///{tmp_path/'sess.db'}")
+        runtime = FinanceRuntime(ledger=ledger, clock=lambda: NOW)
+        calls = {}
+        if attach:
+            runtime.run_session = lambda **kw: {"risk_approved": 2, "pushed": 2,
+                                                "cutoff_et": "16:00", **calls}
+            runtime.finalize_session = lambda: {"approved": 1, "expired": 1}
+        return TestClient(create_app(runtime))
+
+    def test_run_requires_human_surface(self, tmp_path):
+        client = self._client(tmp_path)
+        # system surface refused
+        r = client.post("/v1/session/run", json={"actor": "gongqing"},
+                        headers={"X-Finance-Surface": "system"})
+        assert r.status_code == 403
+        # LLM actor refused
+        r = client.post("/v1/session/run", json={"actor": "hermes"},
+                        headers={"X-Finance-Surface": "web"})
+        assert r.status_code == 403
+
+    def test_run_by_human_ok(self, tmp_path):
+        client = self._client(tmp_path)
+        r = client.post("/v1/session/run", json={"actor": "gongqing", "window_minutes": 90},
+                        headers={"X-Finance-Surface": "web"})
+        assert r.status_code == 200
+        assert r.json()["risk_approved"] == 2 and r.json()["actor"] == "gongqing"
+
+    def test_finalize_by_human_ok(self, tmp_path):
+        client = self._client(tmp_path)
+        r = client.post("/v1/session/finalize", json={"actor": "gongqing"},
+                        headers={"X-Finance-Surface": "web"})
+        assert r.status_code == 200 and r.json()["approved"] == 1
+
+    def test_503_when_loop_not_attached(self, tmp_path):
+        client = self._client(tmp_path, attach=False)
+        r = client.post("/v1/session/run", json={"actor": "gongqing"},
+                        headers={"X-Finance-Surface": "web"})
+        assert r.status_code == 503
+
+
 class TestUnavailable:
     def test_503_without_portfolio(self, tmp_path):
         client = TestClient(create_app(FinanceRuntime(ledger=Ledger(

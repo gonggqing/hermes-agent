@@ -228,6 +228,10 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         loop.execution.seed_synced_fills(rehydration.fill_ids)
         loop.execution.seed_protective_stops(broker.get_orders(active_only=True))
     runner = DailyLoopRunner(loop.callbacks(), clock=runtime.clock)
+    # Manual missed-session catch-up (Loop.md §4b): expose the trading session's
+    # run + finalize so /v1/session/* can trigger them on demand (human-gated).
+    runtime.run_session = loop.run_session_now
+    runtime.finalize_session = loop.finalize_session_now
 
     # CN MORNING research session (Loop.md two-session extension): a lighter,
     # technology-focused research brief on the China/HK market, on the CN

@@ -80,6 +80,9 @@ class FinanceRuntime:
     instrument_search: Any = None  # CachedInstrumentSearch | None
     portfolio: Any = None  # swing_trader.portfolio_journal.PortfolioJournal | None
     portfolio_drafts: Any = None  # swing_trader.portfolio_draft.PortfolioDraftService
+    # Phase 0.9 (missed-session catch-up): manual trading-session trigger.
+    run_session: Any = None  # Callable[[], dict] — loop.run_session_now
+    finalize_session: Any = None  # Callable[[], dict] — loop.finalize_session_now
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
 
 
@@ -180,6 +183,12 @@ class PortfolioMarkRequest(BaseModel):
     currency: str = Field(default="CNY", min_length=1, max_length=8)
     source: str = Field(default="manual", pattern="^(manual|csv|live)$")
     actor: str = Field(min_length=1, max_length=200)
+
+
+class SessionActionRequest(BaseModel):
+    actor: str = Field(min_length=1, max_length=200)
+    window_minutes: int = Field(default=60, ge=5, le=240)
+    surface: Optional[str] = None
 
 
 def create_app(runtime: FinanceRuntime):
@@ -927,5 +936,48 @@ def create_app(runtime: FinanceRuntime):
             except Exception:  # noqa: BLE001 — one bad symbol must not fail the batch
                 failed.append(sym)
         return {"refreshed": refreshed, "failed": failed, "skipped": skipped}
+
+    # ---- manual trading-session trigger (missed-session catch-up, P0.9) ----
+
+    def _human_session(surface_hdr, body_surface, actor: str) -> str:
+        """Resolve + require an authenticated HUMAN surface for a session action
+        (system/LLM may not trigger trading; §3). Returns the surface value."""
+        surface = _resolve_surface(surface_hdr, body_surface)
+        if surface == Surface.SYSTEM.value:
+            raise HTTPException(403, "system surface cannot run a trading session")
+        if actor.strip().lower() in {"system", "llm", "hermes", "agent", "bot"}:
+            raise HTTPException(403, "a trading session must be run by a human actor")
+        return surface
+
+    @app.post(f"/{API_VERSION}/session/run")
+    def session_run(
+        body: SessionActionRequest,
+        x_finance_surface: Optional[str] = Header(default=None),
+    ) -> dict:
+        """Manually run a full trading session now (monitor→decide→push) into a
+        fresh approval window. Does NOT place orders — you still approve each
+        candidate, then call /session/finalize (§3)."""
+        if runtime.run_session is None:
+            raise HTTPException(503, "trading loop not attached")
+        surface = _human_session(x_finance_surface, body.surface, body.actor)
+        summary = runtime.run_session(window_minutes=body.window_minutes)
+        summary["actor"] = body.actor
+        summary["surface"] = surface
+        return summary
+
+    @app.post(f"/{API_VERSION}/session/finalize")
+    def session_finalize(
+        body: SessionActionRequest,
+        x_finance_surface: Optional[str] = Header(default=None),
+    ) -> dict:
+        """Place the human-approved candidates from the current manual session
+        window and expire the rest (the off-schedule cutoff)."""
+        if runtime.finalize_session is None:
+            raise HTTPException(503, "trading loop not attached")
+        surface = _human_session(x_finance_surface, body.surface, body.actor)
+        summary = runtime.finalize_session()
+        summary["actor"] = body.actor
+        summary["surface"] = surface
+        return summary
 
     return app

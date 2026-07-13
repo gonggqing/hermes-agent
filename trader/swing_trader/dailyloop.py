@@ -431,6 +431,72 @@ class DailyLoop:
                    "expired": len(finalized.expired)},
         )
 
+    def run_session_now(self, now: datetime | None = None, *,
+                        window_minutes: int = 60) -> dict:
+        """Manually run a full trading session on demand (Loop.md §4b
+        missed-session catch-up): fresh monitors → decide (RiskEngine + the P0.8
+        dead-man's switch) → push the risk-approved candidates into a
+        confirmation window anchored to NOW, so they reach the approval queue
+        even off-schedule (the fixed daily window would otherwise refuse the
+        publish). Does NOT auto-execute — the human still approves each candidate
+        and :meth:`finalize_session_now` places only what was approved (§3)."""
+        now = now or self.clock()
+        self.on_monitor()  # fresh snapshots (also refreshes health/freshness)
+        self.on_decide()  # RiskEngine + dead-man's switch produce risk_approved
+
+        # Anchor the confirmation window to NOW; clamp so it never wraps past
+        # the ET midnight (the window is compared as a time-of-day).
+        et_now = now.astimezone(ZoneInfo("America/New_York"))
+        push_t = et_now.time()
+        end_of_day = et_now.replace(hour=23, minute=59, second=0, microsecond=0)
+        cutoff_dt = min(et_now + timedelta(minutes=max(5, window_minutes)), end_of_day)
+        cutoff_t = cutoff_dt.time()
+        if cutoff_t <= push_t:  # extreme late-night edge → minimal same-day window
+            cutoff_t = et_now.replace(hour=23, minute=59, second=59).time()
+
+        self._confirmation = ConfirmationService(
+            self.ledger, mode=self.mode, push_time_et=push_t, cutoff_et=cutoff_t,
+            market_tz="America/New_York", revalidate=self._revalidate_edit,
+        )
+        if self.runtime is not None:
+            self.runtime.confirmation = self._confirmation
+        self.on_push()  # publishes into the now-anchored window
+
+        halted = self._health is not None and not self._health.entries_allowed
+        summary = {
+            "ran_at": now.isoformat(),
+            "risk_approved": len(self._risk_approved),
+            "pushed": len(self._risk_approved),
+            "cutoff_et": cutoff_t.strftime("%H:%M"),
+            "entries_halted": halted,  # dead-man's switch state
+            "health_level": self._health.level.value if self._health else None,
+        }
+        logger.info("manual session run", extra=summary)
+        return summary
+
+    def finalize_session_now(self, now: datetime | None = None) -> dict:
+        """Manually finalize the current confirmation window (the off-schedule
+        equivalent of the 12:30 cutoff): place the human-APPROVED candidates and
+        expire the rest. Execution is still gated on human approval per candidate
+        (§3) — this only acts on what the human already confirmed."""
+        stamp = now or self.clock()
+        if self._confirmation is None:
+            return {"ran_at": stamp.isoformat(), "approved": 0, "expired": 0,
+                    "note": "no active session to finalize"}
+        placed_before = len(self.broker.get_orders(active_only=True))
+        self.on_cutoff()  # poll + expire + execute approved
+        placed_after = len(self.broker.get_orders(active_only=True))
+        fin = self._confirmation.finalized()
+        summary = {
+            "ran_at": stamp.isoformat(),
+            "approved": len(fin.human_approved),
+            "expired": len(fin.expired),
+            "orders_now_active": placed_after,
+            "orders_added": max(0, placed_after - placed_before),
+        }
+        logger.info("manual session finalize", extra=summary)
+        return summary
+
     def on_close(self, bars=None) -> None:
         """16:00 ET: feed today's daily bar so MOC/LOC + resting orders fill."""
         if bars is None:
