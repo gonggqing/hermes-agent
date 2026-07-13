@@ -84,6 +84,7 @@ class FinanceRuntime:
     run_session: Any = None  # Callable[[], dict] — loop.run_session_now
     finalize_session: Any = None  # Callable[[], dict] — loop.finalize_session_now
     nav_provider: Any = None  # swing_trader.fund_nav.NavProvider — 场外基金 NAV
+    gold_provider: Any = None  # swing_trader.sge_gold.GoldProvider — 国内金价 (SGE)
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
 
 
@@ -427,6 +428,21 @@ def create_app(runtime: FinanceRuntime):
         result["as_of"] = runtime.clock().isoformat()
         result["note"] = MARKET_DATA_NOTE
         return result
+
+    @app.get(f"/{API_VERSION}/gold/domestic")
+    def gold_domestic(symbol: str = Query(default="AU9999")) -> dict:
+        """Real SGE domestic gold spot (¥/gram) — 国内金价 (Loop.md P0.9 #41).
+        Returns available=False when no source is configured/reachable, so the
+        Finance chart falls back to its derived GC=F×CNY value."""
+        if runtime.gold_provider is None:
+            return {"symbol": symbol.upper(), "available": False,
+                    "note": "no domestic-gold source configured (chart uses derived AU9999)"}
+        q = runtime.gold_provider.get_spot(symbol)
+        if q is None:
+            return {"symbol": symbol.upper(), "available": False,
+                    "note": "domestic-gold source unreachable (chart uses derived AU9999)"}
+        return {"symbol": q.symbol, "available": True, "price": q.price,
+                "unit": "CNY/gram", "as_of": q.as_of.isoformat(), "source": q.source}
 
     @app.get(f"/{API_VERSION}/instruments/search")
     def instruments_search(

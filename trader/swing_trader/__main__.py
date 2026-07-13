@@ -118,6 +118,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     from swing_trader.fund_nav import CachedNavProvider, EastmoneyFundNav
 
     runtime.nav_provider = CachedNavProvider(EastmoneyFundNav())
+    # Real domestic gold (SGE Au99.99) so the chart's 国内金价 can use a real
+    # spot instead of the derived GC=F×CNY value (#41).
+    from swing_trader.sge_gold import CachedGoldProvider, SinaSgeGold
+
+    runtime.gold_provider = CachedGoldProvider(SinaSgeGold())
 
     telegram = None
     notify = None
