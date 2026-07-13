@@ -1420,6 +1420,25 @@ export interface Translations {
       searchEmpty: (q: string) => string
       searchScore: (score: string) => string
       searchError: string
+      marketAria: string
+      marketUs: string
+      marketCn: string
+      cnBadge: string
+      cnResearchOnly: string
+    }
+    // Localized labels for the fixed backend enum vocabularies (Loop.md
+    // schemas): looked up by the raw wire value, humanized fallback for any
+    // value not listed so a new backend code never renders blank.
+    enums: {
+      regime: Record<string, string>
+      side: Record<string, string>
+      direction: Record<string, string>
+      orderType: Record<string, string>
+      tif: Record<string, string>
+      orderStatus: Record<string, string>
+      breaker: Record<string, string>
+      candidateStatus: Record<string, string>
+      auditAction: Record<string, string>
     }
   }
 

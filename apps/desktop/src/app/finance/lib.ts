@@ -167,3 +167,9 @@ export const REGIME_TONE: Record<string, StatusTone> = {
 }
 
 export const statusLabel = (value: string): string => value.replace(/_/g, ' ')
+
+// Localized label for a backend enum value (side, order type, candidate status,
+// …). Looks the raw wire value up in the locale map and falls back to a
+// humanized form so an unseen backend code still renders legibly instead of
+// blank. The map keys are the exact wire values (Loop.md schemas).
+export const enumLabel = (map: Record<string, string>, value: string): string => map[value] ?? statusLabel(value)

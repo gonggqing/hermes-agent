@@ -50,18 +50,35 @@ class LLMSettings:
     timeout: float = 20.0
 
 
-def llm_settings_from_env(env: Optional[dict] = None) -> Optional[LLMSettings]:
-    """Build settings from env; provider chain deepseek → glm; None if no key."""
+def llm_settings_from_env(
+    env: Optional[dict] = None, *, role: str = "search"
+) -> Optional[LLMSettings]:
+    """Build settings from env; provider chain deepseek → glm; None if no key.
+
+    ``role`` selects the model tier (Loop.md two-session extension request:
+    "search/summary agent uses deepseek-v4-flash to save token fee"):
+
+    - ``"search"`` (default): the search/summary/analysis subagent. Pinned to
+      the CHEAP flash model — ``FINANCE_LLM_SEARCH_MODEL`` (default the
+      provider's flash: deepseek-v4-flash / glm5-turbo) — so it stays cheap
+      even if a pricier decision model is configured via ``FINANCE_LLM_MODEL``.
+    - anything else: the general/decision tier — ``FINANCE_LLM_MODEL`` (default
+      the provider's own default model).
+    """
     e = env if env is not None else os.environ
     provider = e.get("FINANCE_LLM_PROVIDER", "").strip().lower()
     order = [provider] if provider in _PROVIDER_DEFAULTS else list(_PROVIDER_DEFAULTS)
     for name in order:
-        base, model, key_var = _PROVIDER_DEFAULTS[name]
+        base, default_model, key_var = _PROVIDER_DEFAULTS[name]
         key = e.get(key_var, "").strip()
         if key:
+            if role == "search":
+                model = e.get("FINANCE_LLM_SEARCH_MODEL", default_model)
+            else:
+                model = e.get("FINANCE_LLM_MODEL", default_model)
             return LLMSettings(
                 base_url=e.get("FINANCE_LLM_BASE_URL", base).rstrip("/"),
-                model=e.get("FINANCE_LLM_MODEL", model),
+                model=model,
                 api_key=key,
             )
     return None

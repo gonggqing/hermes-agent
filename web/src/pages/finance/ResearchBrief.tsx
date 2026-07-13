@@ -19,6 +19,7 @@ import type {
   FinanceBriefRisk,
   FinanceKnowledgeHit,
   FinanceResearchBrief,
+  FinanceResearchMarket,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Badge } from "@nous-research/ui/ui/components/badge";
@@ -682,6 +683,52 @@ function KnowledgeSearch({ ft }: { ft: FinanceTranslations }) {
   );
 }
 
+// ── Market toggle (US vs China/HK research desk) ──────────────────────
+
+/**
+ * Segmented US / China·HK switch. Selects which research brief the view
+ * renders (Loop.md §7 Phase 0.5). It only swaps the read-only brief — it
+ * carries no execution authority; the China/HK desk is research-only.
+ */
+function MarketToggle({
+  market,
+  onMarketChange,
+  ft,
+}: {
+  market: FinanceResearchMarket;
+  onMarketChange: (m: FinanceResearchMarket) => void;
+  ft: FinanceTranslations;
+}) {
+  const options: { value: FinanceResearchMarket; label: string }[] = [
+    { value: "us", label: ft.brief.markets.us },
+    { value: "cn", label: ft.brief.markets.cn },
+  ];
+  return (
+    <div
+      role="group"
+      aria-label={ft.brief.markets.label}
+      className="ml-auto flex items-center border border-border"
+    >
+      {options.map((opt) => (
+        <button
+          key={opt.value}
+          type="button"
+          aria-pressed={market === opt.value}
+          onClick={() => onMarketChange(opt.value)}
+          className={cn(
+            "px-2.5 py-1 font-mondwest normal-case text-xs transition-colors",
+            market === opt.value
+              ? "bg-primary text-primary-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // ── The brief ─────────────────────────────────────────────────────────
 
 /**
@@ -690,21 +737,41 @@ function KnowledgeSearch({ ft }: { ft: FinanceTranslations }) {
  * regime, movers, themes, news, signals, an explicit unknowns box, a
  * provenance footer, and a knowledge search box. Read-only — no element
  * here carries any execution authority (Loop.md §3).
+ *
+ * When `onMarketChange` is supplied a US / China·HK toggle renders in the
+ * header. The China/HK desk is research-only: `risk` is null (no CN
+ * account) so the account-risk strip is hidden, and a "research only" badge
+ * makes the read-only nature explicit.
  */
 export function ResearchBrief({
   brief,
+  market = "us",
+  onMarketChange,
 }: {
   brief: FinanceResearchBrief | null;
+  market?: FinanceResearchMarket;
+  onMarketChange?: (m: FinanceResearchMarket) => void;
 }) {
   const ft = useFinanceT();
+  const researchOnly = market === "cn";
 
   if (brief === null) {
     return (
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Microscope className="h-5 w-5 text-muted-foreground" />
             <CardTitle className="text-base">{ft.brief.title}</CardTitle>
+            {researchOnly && (
+              <Badge tone="secondary">{ft.brief.markets.researchOnly}</Badge>
+            )}
+            {onMarketChange && (
+              <MarketToggle
+                market={market}
+                onMarketChange={onMarketChange}
+                ft={ft}
+              />
+            )}
           </div>
         </CardHeader>
         <CardContent>
@@ -721,7 +788,7 @@ export function ResearchBrief({
 
   return (
     <section className="flex flex-col gap-4" aria-label={ft.brief.title}>
-      {/* Header line: title · mode · trading date · as-of time. */}
+      {/* Header line: title · mode · trading date · as-of time · desk toggle. */}
       <div className="flex flex-wrap items-center gap-2">
         <Microscope className="h-5 w-5 text-muted-foreground" />
         <h2 className="font-mondwest text-display text-base tracking-wider text-foreground">
@@ -730,6 +797,9 @@ export function ResearchBrief({
         <Badge tone={brief.mode === "live" ? "destructive" : "secondary"}>
           {brief.mode === "live" ? ft.page.modeLive : ft.page.modePaper}
         </Badge>
+        {researchOnly && (
+          <Badge tone="secondary">{ft.brief.markets.researchOnly}</Badge>
+        )}
         <span
           className="font-mono-ui text-xs text-foreground"
           title={ft.brief.tradingDate}
@@ -739,6 +809,13 @@ export function ResearchBrief({
         <span className="font-mondwest normal-case text-xs text-text-tertiary">
           {ft.brief.asOf.replace("{time}", fmtTs(brief.as_of))}
         </span>
+        {onMarketChange && (
+          <MarketToggle
+            market={market}
+            onMarketChange={onMarketChange}
+            ft={ft}
+          />
+        )}
       </div>
 
       {/* Stale-data banner: any stale source or freshness warning. */}
@@ -763,7 +840,9 @@ export function ResearchBrief({
         </div>
       )}
 
-      <RiskStrip risk={brief.risk} ft={ft} />
+      {/* Account-risk strip is US-desk only — the China/HK desk is
+          research-only with no account (`risk` is null). */}
+      {!researchOnly && <RiskStrip risk={brief.risk} ft={ft} />}
       <RegimeChips regime={brief.regime} ft={ft} />
 
       <div className="grid gap-4 lg:grid-cols-2">

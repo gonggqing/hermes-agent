@@ -1287,9 +1287,16 @@ export const api = {
    * Daily Investment Research brief (Loop.md §7 Phase 0.5). The endpoint
    * always answers while the service is up — a degraded brief carries
    * freshness warnings and nulls instead of failing.
+   *
+   * `market` selects the desk: the default US brief, or the China/HK
+   * (Asia/Shanghai) morning brief (`?market=cn`), which is research-only
+   * (risk is null, no pending candidates) and returns a valid degraded
+   * brief before the CN session runs each day.
    */
-  financeResearchBrief: () =>
-    fetchJSON<FinanceResearchBrief>("/api/finance/v1/research/brief"),
+  financeResearchBrief: (market: FinanceResearchMarket = "us") =>
+    fetchJSON<FinanceResearchBrief>(
+      `/api/finance/v1/research/brief${market === "cn" ? "?market=cn" : ""}`,
+    ),
   /**
    * Source-linked semantic research search (Loop.md §5.10). The service
    * fails closed with 503 when the vector index is down; that case is
@@ -2644,6 +2651,11 @@ export interface PluginProvidersPutRequest {
 // ── Finance types (Loop.md §5.9; shapes from trader/swing_trader/api.py) ─
 
 export type FinanceMode = "paper" | "live";
+
+/** Research desk for the Investment Research brief: the default US desk or
+ * the China/HK (Asia/Shanghai) morning desk. The CN brief is research-only
+ * (risk null, no pending candidates). */
+export type FinanceResearchMarket = "us" | "cn";
 
 export type FinanceBreakerState = "NORMAL" | "TRIPPED";
 

@@ -30,6 +30,7 @@ Calendar notes:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from enum import Enum
 from time import sleep as _default_sleep
@@ -41,12 +42,17 @@ from swing_trader.log import get_logger
 logger = get_logger(__name__)
 
 __all__ = [
+    "CN_HK_HOLIDAYS_2026",
+    "CN_SCHEDULE",
     "ET",
     "EVENT_TIMES_ET",
+    "SHANGHAI",
+    "US_SCHEDULE",
     "DailyLoopRunner",
     "Event",
     "LoopPhase",
     "NYSE_FULL_DAY_HOLIDAYS_2026",
+    "SessionSchedule",
     "event_instant",
     "is_trading_day",
     "next_event",
@@ -54,6 +60,7 @@ __all__ = [
 ]
 
 ET = ZoneInfo("America/New_York")
+SHANGHAI = ZoneInfo("Asia/Shanghai")
 UTC = timezone.utc
 
 # --------------------------------------------------------------------- events
@@ -123,13 +130,99 @@ NYSE_FULL_DAY_HOLIDAYS_2026: frozenset[date] = frozenset(
 _MAX_SCAN_DAYS = 366  # next_event lookahead bound; > longest possible gap
 
 
-def is_trading_day(d: date) -> bool:
-    """True when the NYSE is open for a full or half session on ``d``.
+# ---------------------------------------------------------------- sessions
 
-    Mon–Fri minus full-day holidays. Half days count as trading days (see
-    module docstring).
+
+@dataclass(frozen=True)
+class SessionSchedule:
+    """A named market session: timezone + event wall-times + holiday table.
+
+    The daily loop is now MULTI-SESSION (Loop.md two-session extension): the
+    US evening trading session and the China morning research session run in
+    the same process, each with its own zone, calendar, and event offsets.
+    Every public scheduler function takes an optional ``schedule`` defaulting
+    to :data:`US_SCHEDULE`, so the original ET behaviour (and its tests) is
+    unchanged; the CN session passes :data:`CN_SCHEDULE`.
+
+    - ``event_times`` may hold a SUBSET of :class:`Event` (the CN research
+      session only uses MONITOR_START / DECIDE_START / PUSH_CANDIDATES —
+      it never executes orders, so it has no confirmation/close events).
+    - ``phase_at`` maps the full 6-event US confirmation-window state machine
+      and is only meaningful for a schedule that defines every event.
     """
-    return d.weekday() < 5 and d not in NYSE_FULL_DAY_HOLIDAYS_2026
+
+    market_id: str
+    tz: ZoneInfo
+    event_times: Mapping[Event, time]
+    holidays: frozenset[date]
+
+    def events_chronological(self) -> tuple[Event, ...]:
+        """Events defined for this session, ordered by wall-time."""
+        return tuple(sorted(self.event_times, key=lambda e: self.event_times[e]))
+
+
+#: US evening session (Loop.md §4): NYSE hours, ET, full six-event day.
+US_SCHEDULE = SessionSchedule(
+    market_id="US",
+    tz=ET,
+    event_times=EVENT_TIMES_ET,
+    holidays=NYSE_FULL_DAY_HOLIDAYS_2026,
+)
+
+#: CN morning RESEARCH session (Asia/Shanghai): monitors 09:30 -> build 11:00
+#: -> push a lighter research brief 11:30 (local). Report-only: NO confirmation
+#: window, NO cutoff, NO close/execution events (Loop.md two-session extension:
+#: "not place order in CN for now, but build the ability for future").
+CN_EVENT_TIMES_LOCAL: Mapping[Event, time] = {
+    Event.MONITOR_START: time(9, 30),
+    Event.DECIDE_START: time(11, 0),
+    Event.PUSH_CANDIDATES: time(11, 30),
+}
+
+# Approximate COMBINED mainland A-share (SSE/SZSE) + HKEX full-day closures
+# for 2026 (weekends already handled). Report-only, so an imperfect entry only
+# risks sending a brief over stale data (freshness-flagged) — never an order.
+# TODO(calendar): replace with an authoritative SSE/HKEX 2026 calendar (and
+# extend for 2027) before the CN session ever gains order authority.
+CN_HK_HOLIDAYS_2026: frozenset[date] = frozenset(
+    {
+        date(2026, 1, 1),  # New Year's Day (mainland + HK)
+        date(2026, 2, 16),  # Spring Festival eve / CNY week (mainland)
+        date(2026, 2, 17),  # Lunar New Year's Day
+        date(2026, 2, 18),  # CNY (mainland + HK)
+        date(2026, 2, 19),  # CNY (mainland + HK)
+        date(2026, 2, 20),  # CNY (mainland)
+        date(2026, 4, 3),  # Good Friday (HK)
+        date(2026, 4, 6),  # Qingming / Easter Monday (mainland + HK)
+        date(2026, 5, 1),  # Labour Day (mainland + HK)
+        date(2026, 5, 25),  # Buddha's Birthday (HK)
+        date(2026, 6, 19),  # Dragon Boat Festival (mainland + HK)
+        date(2026, 9, 25),  # Mid-Autumn Festival (mainland)
+        date(2026, 10, 1),  # National Day golden week (mainland)
+        date(2026, 10, 2),  # National Day (mainland)
+        date(2026, 10, 5),  # National Day (mainland)
+        date(2026, 10, 6),  # National Day (mainland) / day after Mid-Autumn (HK)
+        date(2026, 10, 7),  # National Day (mainland)
+        date(2026, 12, 25),  # Christmas (HK)
+    }
+)
+
+#: CN morning research session schedule.
+CN_SCHEDULE = SessionSchedule(
+    market_id="CN",
+    tz=SHANGHAI,
+    event_times=CN_EVENT_TIMES_LOCAL,
+    holidays=CN_HK_HOLIDAYS_2026,
+)
+
+
+def is_trading_day(d: date, schedule: SessionSchedule = US_SCHEDULE) -> bool:
+    """True when ``schedule``'s market is open on ``d``.
+
+    Mon–Fri minus that session's full-day holidays. (US half days count as
+    trading days — see module docstring.)
+    """
+    return d.weekday() < 5 and d not in schedule.holidays
 
 
 # --------------------------------------------------------------------- helpers
@@ -140,59 +233,72 @@ def _require_aware(dt: datetime, name: str) -> None:
         raise ValueError(f"{name} must be timezone-aware (UTC); got naive {dt!r}")
 
 
-def event_instant(d: date, event: Event) -> datetime:
-    """UTC instant at which ``event`` occurs on ET calendar day ``d``.
+def event_instant(
+    d: date, event: Event, schedule: SessionSchedule = US_SCHEDULE
+) -> datetime:
+    """UTC instant at which ``event`` occurs on ``schedule``'s calendar day ``d``.
 
     Pure wall-time -> UTC conversion; does NOT check ``is_trading_day``.
-    Event times (09:00–16:00 ET) are never ambiguous/nonexistent under DST
-    (transitions happen at 02:00 local), so no fold handling is needed.
+    US event times (09:00–16:00 ET) and CN event times (09:30–11:30 CST) are
+    never ambiguous/nonexistent under DST — the US transitions happen at 02:00
+    local and China observes no DST — so no fold handling is needed.
     """
-    return datetime.combine(d, EVENT_TIMES_ET[event], tzinfo=ET).astimezone(UTC)
+    return datetime.combine(
+        d, schedule.event_times[event], tzinfo=schedule.tz
+    ).astimezone(UTC)
 
 
 # ------------------------------------------------------------------ phase math
 
 
-def phase_at(now_utc: datetime) -> LoopPhase:
-    """Map a UTC instant onto the Loop.md §4 state machine.
+def phase_at(
+    now_utc: datetime, schedule: SessionSchedule = US_SCHEDULE
+) -> LoopPhase:
+    """Map a UTC instant onto the Loop.md §4 confirmation-window state machine.
 
     Boundaries are half-open ``[start, end)``: 09:30:00 ET is already
     MONITORING, 11:00:00 is DECIDING, and so on. Non-trading days (weekends
     and full-day holidays) are OFF_HOURS all day, as is 00:00–09:30 ET on a
-    trading day.
+    trading day. Only meaningful for a schedule that defines the full six-event
+    US day (the CN research session has no confirmation window).
     """
     _require_aware(now_utc, "now_utc")
-    local = now_utc.astimezone(ET)
-    if not is_trading_day(local.date()):
+    times = schedule.event_times
+    local = now_utc.astimezone(schedule.tz)
+    if not is_trading_day(local.date(), schedule):
         return LoopPhase.OFF_HOURS
     t = local.time()
-    if t < EVENT_TIMES_ET[Event.MONITOR_START]:
+    if t < times[Event.MONITOR_START]:
         return LoopPhase.OFF_HOURS
-    if t < EVENT_TIMES_ET[Event.DECIDE_START]:
+    if t < times[Event.DECIDE_START]:
         return LoopPhase.MONITORING
-    if t < EVENT_TIMES_ET[Event.PUSH_CANDIDATES]:
+    if t < times[Event.PUSH_CANDIDATES]:
         return LoopPhase.DECIDING
-    if t < EVENT_TIMES_ET[Event.CONFIRM_CUTOFF]:
+    if t < times[Event.CONFIRM_CUTOFF]:
         return LoopPhase.CONFIRM_WINDOW
-    if t < EVENT_TIMES_ET[Event.MARKET_CLOSE]:
+    if t < times[Event.MARKET_CLOSE]:
         return LoopPhase.SET_AND_FORGET
     return LoopPhase.AFTER_CLOSE
 
 
-def next_event(now_utc: datetime) -> tuple[Event, datetime]:
+def next_event(
+    now_utc: datetime, schedule: SessionSchedule = US_SCHEDULE
+) -> tuple[Event, datetime]:
     """The next upcoming ``(event, utc_instant)`` strictly after ``now_utc``.
 
     Non-trading days are skipped entirely — MORNING_REPORT also fires only on
     trading days (there is nothing to report into a closed market, and the
     previous session's report already ran). An event exactly at ``now_utc``
-    is considered fired/firing NOW, so the *following* one is returned.
+    is considered fired/firing NOW, so the *following* one is returned. Only
+    events defined by ``schedule`` are considered.
     """
     _require_aware(now_utc, "now_utc")
-    d = now_utc.astimezone(ET).date()
+    events = schedule.events_chronological()
+    d = now_utc.astimezone(schedule.tz).date()
     for _ in range(_MAX_SCAN_DAYS):
-        if is_trading_day(d):
-            for event in _EVENTS_CHRONOLOGICAL:
-                instant = event_instant(d, event)
+        if is_trading_day(d, schedule):
+            for event in events:
+                instant = event_instant(d, event, schedule)
                 if instant > now_utc:
                     return event, instant
         d += timedelta(days=1)
@@ -231,12 +337,14 @@ class DailyLoopRunner:
         self,
         callbacks: Mapping[Event, Callable[[], None]],
         clock: Callable[[], datetime],
+        schedule: SessionSchedule = US_SCHEDULE,
     ) -> None:
         for key in callbacks:
             if not isinstance(key, Event):
                 raise TypeError(f"callback key must be an Event, got {key!r}")
         self._callbacks: dict[Event, Callable[[], None]] = dict(callbacks)
         self._clock = clock
+        self._schedule = schedule
         start = clock()
         _require_aware(start, "clock()")
         self._watermark: datetime = start.astimezone(UTC)
@@ -257,10 +365,10 @@ class DailyLoopRunner:
         fired: list[tuple[Event, datetime]] = []
         cursor = self._watermark
         while True:
-            event, instant = next_event(cursor)
+            event, instant = next_event(cursor, self._schedule)
             if instant > now:
                 break
-            key = (event, instant.astimezone(ET).date())
+            key = (event, instant.astimezone(self._schedule.tz).date())
             if key not in self._fired:
                 self._fired.add(key)  # before the call: at-most-once even on raise
                 callback = self._callbacks.get(event)

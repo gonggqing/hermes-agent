@@ -1697,7 +1697,70 @@ export const en: Translations = {
       searchOffline: 'Research search is offline — the knowledge index is not available right now.',
       searchEmpty: q => `No research documents match “${q}”.`,
       searchScore: score => `score ${score}`,
-      searchError: 'Research search failed.'
+      searchError: 'Research search failed.',
+      marketAria: 'Research market',
+      marketUs: 'US',
+      marketCn: 'China · HK',
+      cnBadge: 'Research-only',
+      cnResearchOnly:
+        'China/HK morning research — research-only. There is no account, positions, or approval queue for this market; this session never proposes orders.'
+    },
+    enums: {
+      regime: {
+        risk_on: 'Risk-on',
+        risk_off: 'Risk-off',
+        neutral: 'Neutral'
+      },
+      side: {
+        BUY: 'Buy',
+        SELL: 'Sell'
+      },
+      direction: {
+        long: 'Long',
+        short: 'Short',
+        neutral: 'Neutral'
+      },
+      orderType: {
+        LMT: 'Limit',
+        STP: 'Stop',
+        MOC: 'MOC',
+        LOC: 'LOC',
+        BRACKET: 'Bracket'
+      },
+      tif: {
+        GTC: 'GTC',
+        DAY: 'Day'
+      },
+      orderStatus: {
+        NEW: 'New',
+        SUBMITTED: 'Submitted',
+        PARTIALLY_FILLED: 'Partially filled',
+        FILLED: 'Filled',
+        CANCELLED: 'Cancelled',
+        REJECTED: 'Rejected',
+        EXPIRED: 'Expired'
+      },
+      breaker: {
+        NORMAL: 'Normal',
+        TRIPPED: 'Tripped',
+        UNKNOWN: 'Unknown'
+      },
+      candidateStatus: {
+        proposed: 'Proposed',
+        risk_approved: 'Risk-approved',
+        risk_vetoed: 'Risk-vetoed',
+        pushed: 'Pushed',
+        approved: 'Approved',
+        edited: 'Edited',
+        rejected: 'Rejected',
+        expired: 'Expired',
+        placed: 'Placed'
+      },
+      auditAction: {
+        approve: 'Approve',
+        edit: 'Edit',
+        reject: 'Reject'
+      }
     }
   },
 
@@ -1705,6 +1768,7 @@ export const en: Translations = {
     nav: {
       'new-session': 'New session',
       skills: 'Capabilities',
+      finance: 'Finance',
       messaging: 'Messaging',
       artifacts: 'Artifacts'
     },

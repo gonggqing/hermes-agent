@@ -81,36 +81,48 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     notify = None
     import os
 
-    # A DEDICATED finance bot token enables interactive approvals; the
-    # shared gateway bot stays OUTBOUND-ONLY (a second getUpdates consumer
-    # 409-kicks the Hermes gateway offline). Loop.md Phase 0.5 backlog 6.
-    dedicated = os.environ.get("FINANCE_TELEGRAM_BOT_TOKEN", "").strip()
-    token = dedicated or (
+    from pydantic import SecretStr
+
+    # Two bots, DISTINCT roles in the shared group (Loop.md two-session
+    # extension). Both post to the same chat id.
+    #   REPORTER  = shared gateway bot (TELEGRAM_BOT_TOKEN), OUTBOUND-ONLY:
+    #               daily summaries + CN/US research briefs. Never long-polls
+    #               (a second getUpdates consumer 409-kicks the Hermes gateway).
+    #   GATEKEEPER = dedicated finance bot (FINANCE_TELEGRAM_BOT_TOKEN),
+    #               INTERACTIVE: only asks for approval; long-polls its OWN
+    #               token so it never conflicts with the gateway.
+    chat_id = settings.telegram_chat_id
+    shared_token = (
         settings.telegram_bot_token.get_secret_value()
         if settings.telegram_bot_token else ""
-    )
-    if token and settings.telegram_chat_id:
-        from pydantic import SecretStr
+    ).strip()
+    dedicated_token = (
+        settings.finance_telegram_bot_token.get_secret_value()
+        if settings.finance_telegram_bot_token
+        else os.environ.get("FINANCE_TELEGRAM_BOT_TOKEN", "")
+    ).strip()
+    allowed = {u.strip() for u in settings.telegram_allowed_users.split(",")
+               if u.strip()}
 
-        transport = HttpTransport(SecretStr(token))
-        interactive = bool(dedicated) or (
-            os.environ.get("FINANCE_TELEGRAM_POLL", "").lower() in ("1", "true")
-        )
-        allowed = {
-            u for u in os.environ.get("TELEGRAM_ALLOWED_USERS", "").split(",")
-            if u.strip()
-        }
-        telegram = TelegramSurfaceAdapter(
-            transport, settings.telegram_chat_id,
-            interactive=interactive, allowed_users=allowed,
-        )
-        notify = lambda text: transport.send_message(settings.telegram_chat_id, text)
-        logger.info("telegram surface attached",
-                    extra={"interactive": interactive,
-                           "dedicated_bot": bool(dedicated),
-                           "n_allowed_users": len(allowed)})
+    if chat_id and (shared_token or dedicated_token):
+        # Reporter prefers the shared gateway token; falls back to the finance
+        # token only if the gateway one is absent.
+        report_transport = HttpTransport(SecretStr(shared_token or dedicated_token))
+        notify = lambda text: report_transport.send_message(chat_id, text)
+        logger.info("reporter bot attached (outbound-only)",
+                    extra={"using_shared": bool(shared_token)})
     else:
-        logger.warning("telegram not configured; portal-only confirmations")
+        logger.warning("no reporter bot configured; reports go to logs only")
+
+    if chat_id and dedicated_token:
+        approval_transport = HttpTransport(SecretStr(dedicated_token))
+        telegram = TelegramSurfaceAdapter(
+            approval_transport, chat_id, interactive=True, allowed_users=allowed,
+        )
+        logger.info("finance gatekeeper bot attached (interactive approvals)",
+                    extra={"n_allowed_users": len(allowed)})
+    else:
+        logger.warning("no dedicated finance bot; approvals via portal only")
 
     # Knowledge store (Loop.md §5.10 / Phase 0.5): embedded Qdrant under
     # trader/data/knowledge by default; FINANCE_QDRANT_URL switches to the
@@ -147,6 +159,46 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         loop.execution.seed_protective_stops(broker.get_orders(active_only=True))
     runner = DailyLoopRunner(loop.callbacks(), clock=runtime.clock)
 
+    # CN MORNING research session (Loop.md two-session extension): a lighter,
+    # technology-focused research brief on the China/HK market, on the CN
+    # calendar/clock. Report-only — NO orders — so it never touches the broker,
+    # confirmation service, or ledger; it just publishes a brief the REPORTER
+    # bot sends and the Finance tab shows (?market=cn).
+    cn_runner = None
+    cn_session = None
+    if settings.cn_session_enabled:
+        from zoneinfo import ZoneInfo
+
+        from swing_trader.cn_watchlist import CN_INDEX_SYMBOLS, build_cn_watchlist
+        from swing_trader.research_session import ResearchSession
+        from swing_trader.scheduler import CN_SCHEDULE
+
+        cn_wl = build_cn_watchlist(settings.cn_symbols)
+        cn_session = ResearchSession(
+            market_id="CN",
+            market_label="China / HK",
+            feed=YFinanceFeed(),
+            ledger=ledger,  # never read (research-only); satisfies brief signature
+            symbols=cn_wl.symbols,
+            watchlist_lookup=cn_wl.lookup,
+            trading_tz=ZoneInfo(settings.cn_market_tz),
+            index_symbols=list(CN_INDEX_SYMBOLS),
+            mode=settings.mode,
+            runtime=runtime,
+            notify=notify,  # REPORTER bot (outbound-only)
+            llm_analyst=LLMAnalyst(llm_settings) if llm_settings else None,
+            knowledge=knowledge,
+            knowledge_index=knowledge_index,
+            focus_note="聚焦科技: 半导体 / 电子 / AI (其他板块仅作参考)",
+            lang="zh",
+            clock=runtime.clock,
+        )
+        cn_runner = DailyLoopRunner(
+            cn_session.callbacks(), clock=runtime.clock, schedule=CN_SCHEDULE
+        )
+        logger.info("cn research session enabled",
+                    extra={"n_symbols": len(cn_wl.symbols)})
+
     app = create_app(runtime)
     server = uvicorn.Server(uvicorn.Config(
         app, host="127.0.0.1", port=args.port, log_level="warning"
@@ -166,6 +218,12 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         print("running one-time finance check (monitors + report)...", flush=True)
         loop.on_monitor()
         loop.on_morning_report()
+        if cn_session is not None:
+            # Populate the CN research brief (?market=cn) for the tab; the
+            # scheduled 11:30 CN send handles the group push, so this does not
+            # spam the chat.
+            cn_session.on_monitor()
+            cn_session.on_research()
         print("check done — report sent; Finance tab now has live data.", flush=True)
 
     def _poll_extra() -> None:
@@ -176,6 +234,8 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     try:
         while True:
             runner.run_pending()
+            if cn_runner is not None:
+                cn_runner.run_pending()
             _poll_extra()
             _time.sleep(30)
     except KeyboardInterrupt:

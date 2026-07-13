@@ -64,6 +64,24 @@ class Settings(BaseSettings):
     market_tz: str = "America/New_York"
     user_tz: str = "Asia/Shanghai"
 
+    # --- China morning RESEARCH session (Loop.md two-session extension) ---
+    # A second daily session that runs a lighter, tech-focused research brief on
+    # the China/HK market in the CN morning. Report-only for now (NO orders),
+    # but wired so it can gain order authority later. ``cn_symbols`` overrides
+    # the default CN/HK universe (comma-separated; empty = built-in default).
+    cn_session_enabled: bool = True
+    cn_market_tz: str = "Asia/Shanghai"
+    cn_symbols: str = ""
+
+    # --- Telegram bots: distinct roles in the shared group (Loop.md P0.5) ---
+    # The shared gateway bot (``telegram_bot_token``) is the OUTBOUND-ONLY
+    # REPORTER (daily summaries / research briefs). A dedicated finance bot
+    # (``finance_telegram_bot_token``) is the interactive GATEKEEPER that only
+    # asks for approval; it long-polls its OWN token so it never 409-conflicts
+    # with the gateway. ``telegram_allowed_users`` is the approval allowlist.
+    finance_telegram_bot_token: Optional[SecretStr] = None
+    telegram_allowed_users: str = ""
+
     # --- Storage / logging ---
     db_path: Path = Path("trader.db")
     log_level: str = "INFO"

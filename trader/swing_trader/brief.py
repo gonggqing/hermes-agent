@@ -294,9 +294,19 @@ def _coerce_now(now: Optional[datetime]) -> datetime:
     return now
 
 
-def _et_date(ts: datetime) -> str:
-    """ET calendar date (YYYY-MM-DD) of a tz-aware timestamp."""
-    return ts.astimezone(ET_ZONE).date().isoformat()
+def _local_date(ts: datetime, tz: ZoneInfo = ET_ZONE) -> str:
+    """Calendar date (YYYY-MM-DD) of a tz-aware timestamp in ``tz``.
+
+    Defaults to ET (the US session); the CN research session passes
+    Asia/Shanghai so "today's" signals are filtered on the CN trading date,
+    not the ET date (which would be the previous day for a CN-morning run).
+    """
+    return ts.astimezone(tz).date().isoformat()
+
+
+def _default_lookup(symbol: str):
+    """Default watchlist metadata lookup (the US universe)."""
+    return watchlist.get(symbol)
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -468,7 +478,9 @@ def _risk_view(
     )
 
 
-def _build_movers(watch: dict[str, WatchState]) -> tuple[MoversView, list[Mover]]:
+def _build_movers(
+    watch: dict[str, WatchState], lookup: Callable
+) -> tuple[MoversView, list[Mover]]:
     movers: list[Mover] = []
     for symbol in sorted(watch):
         state = watch[symbol]
@@ -476,7 +488,7 @@ def _build_movers(watch: dict[str, WatchState]) -> tuple[MoversView, list[Mover]
         if dist20 is None:
             logger.debug("brief: no SMA20, excluded from movers", extra={"symbol": symbol})
             continue
-        item = watchlist.get(symbol)
+        item = lookup(symbol)
         movers.append(
             Mover(
                 symbol=symbol,
@@ -495,14 +507,16 @@ def _build_movers(watch: dict[str, WatchState]) -> tuple[MoversView, list[Mover]
     return MoversView(top=top, bottom=bottom), movers
 
 
-def _build_themes(watch: dict[str, WatchState]) -> list[ThemeView]:
+def _build_themes(
+    watch: dict[str, WatchState], lookup: Callable
+) -> list[ThemeView]:
     grouped: dict[str, list[tuple[str, float]]] = {}
     for symbol in sorted(watch):
         state = watch[symbol]
         dist50 = _dist_pct(state.last, state.sma50)
         if dist50 is None:
             continue
-        item = watchlist.get(symbol)
+        item = lookup(symbol)
         theme = item.theme if item is not None else "unknown"
         grouped.setdefault(theme, []).append((symbol, dist50))
     views: list[ThemeView] = []
@@ -564,9 +578,11 @@ def _build_provenance(items: list[NewsDigestItem]) -> list[ProvenanceLink]:
     return links
 
 
-def _signal_views(signals: list[Signal], trading_date: str) -> list[SignalView]:
-    """Today's (ET) signals, debate verdicts first, then by confidence."""
-    todays = [s for s in signals if _et_date(s.ts) == trading_date]
+def _signal_views(
+    signals: list[Signal], trading_date: str, tz: ZoneInfo
+) -> list[SignalView]:
+    """Today's (session-tz) signals, debate verdicts first, then confidence."""
+    todays = [s for s in signals if _local_date(s.ts, tz) == trading_date]
     todays.sort(
         key=lambda s: (
             0 if s.source_agent == DEBATE_AGENT else 1,
@@ -587,9 +603,9 @@ def _signal_views(signals: list[Signal], trading_date: str) -> list[SignalView]:
 
 
 def _candidates_today(
-    candidates: list[CandidateOrder], trading_date: str
+    candidates: list[CandidateOrder], trading_date: str, tz: ZoneInfo
 ) -> CandidatesToday:
-    todays = [c for c in candidates if _et_date(c.ts) == trading_date]
+    todays = [c for c in candidates if _local_date(c.ts, tz) == trading_date]
     counts: dict[str, int] = {}
     for cand in todays:
         counts[cand.status.value] = counts.get(cand.status.value, 0) + 1
@@ -620,53 +636,75 @@ def build_research_brief(
     risk_status: Optional[RiskStatus] = None,
     llm_enabled: bool = False,
     now: Optional[datetime] = None,
+    signals: Optional[list[Signal]] = None,
+    candidates: Optional[list[CandidateOrder]] = None,
+    watchlist_lookup: Optional[Callable] = None,
+    trading_tz: Optional[ZoneInfo] = None,
+    include_account: bool = True,
+    extra_uncertainty: Optional[list[str]] = None,
 ) -> ResearchBrief:
     """Build the daily Investment Research brief (Loop.md §7 Phase 0.5).
 
     ``market``/``portfolio``/``news``/``risk_status`` are the monitor
     snapshot objects; any may be None when the loop has not run, producing a
     DEGRADED brief whose freshness warnings say which sources are missing —
-    this function never raises for missing/broken inputs. Signals and
-    candidates come from the ledger filtered to the current ET trading date
-    (computed from ``now``, zoneinfo ``America/New_York``). Deterministic
-    given its inputs; ``now`` is injectable for tests.
+    this function never raises for missing/broken inputs. Deterministic given
+    its inputs; ``now`` is injectable for tests.
+
+    US session (defaults): signals and candidates come from the ledger,
+    filtered to the current ET trading date, with account risk/stats included
+    and the US ``watchlist`` for theme tagging.
+
+    CN research session (Loop.md two-session extension): pass ``signals``
+    (in-memory, keeps CN research out of the trading ledger), ``candidates=[]``
+    (report-only — no orders), ``include_account=False`` (no CN account),
+    ``watchlist_lookup`` = the CN universe lookup, and ``trading_tz`` =
+    Asia/Shanghai so "today" is the CN trading date. ``extra_uncertainty``
+    prepends session-specific caveats (e.g. "CN session is research-only").
     """
     now = _coerce_now(now)
     mode = Mode(mode)
-    trading_date = now.astimezone(ET_ZONE).date().isoformat()
-    unknowns: list[str] = []
+    tz = trading_tz or ET_ZONE
+    lookup = watchlist_lookup or _default_lookup
+    trading_date = now.astimezone(tz).date().isoformat()
+    unknowns: list[str] = list(extra_uncertainty or [])
 
     freshness = _freshness(market, news, portfolio, now)
     regime = _regime_view(market)
 
-    stats = _safe(
-        "ledger trade statistics",
-        lambda: _stats_dict(ledger.stats(mode)),
-        {},
-        unknowns,
-    )
-    risk = _risk_view(risk_status, ledger, mode, stats, unknowns)
+    if include_account:
+        stats = _safe(
+            "ledger trade statistics",
+            lambda: _stats_dict(ledger.stats(mode)),
+            {},
+            unknowns,
+        )
+        risk = _risk_view(risk_status, ledger, mode, stats, unknowns)
+    else:
+        risk = None  # research-only session: no account/positions to report
 
     watch = portfolio.watch if portfolio is not None else {}
-    movers, all_movers = _build_movers(watch)
-    themes = _build_themes(watch)
+    movers, all_movers = _build_movers(watch, lookup)
+    themes = _build_themes(watch, lookup)
     news_section = _build_news(news)
 
-    signals = _safe(
-        "ledger signals",
-        lambda: ledger.get_signals(mode=mode),
-        [],
-        unknowns,
-    )
-    signal_views = _signal_views(signals, trading_date)
+    if signals is None:
+        signals = _safe(
+            "ledger signals",
+            lambda: ledger.get_signals(mode=mode),
+            [],
+            unknowns,
+        )
+    signal_views = _signal_views(signals, trading_date, tz)
 
-    candidates = _safe(
-        "ledger candidates",
-        lambda: ledger.get_candidates(mode=mode),
-        [],
-        unknowns,
-    )
-    candidates_view = _candidates_today(candidates, trading_date)
+    if candidates is None:
+        candidates = _safe(
+            "ledger candidates",
+            lambda: ledger.get_candidates(mode=mode),
+            [],
+            unknowns,
+        )
+    candidates_view = _candidates_today(candidates, trading_date, tz)
 
     events = EventsView(earnings=[], notes=[EARNINGS_NOT_WIRED_NOTE])
 

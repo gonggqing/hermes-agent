@@ -55,8 +55,10 @@ class FinanceRuntime:
     broker: Optional[BrokerInterface] = None
     confirmation: Optional[ConfirmationService] = None
     market: dict = field(default_factory=dict)  # latest MarketSnapshot dump
+    market_cn: dict = field(default_factory=dict)  # latest CN MarketSnapshot dump
     latest_reports: dict = field(default_factory=dict)  # kind -> text
-    latest_brief: dict = field(default_factory=dict)  # ResearchBrief dump
+    latest_brief: dict = field(default_factory=dict)  # US ResearchBrief dump
+    latest_brief_cn: dict = field(default_factory=dict)  # CN ResearchBrief dump
     knowledge: Any = None  # FinanceKnowledge (Phase 0.5)
     knowledge_index: Any = None  # KnowledgeIndex | None (fail-closed)
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
@@ -189,14 +191,31 @@ def create_app(runtime: FinanceRuntime):
         return runtime.latest_reports
 
     @app.get(f"/{API_VERSION}/research/brief")
-    def research_brief() -> dict:
-        """Investment Research brief (Loop.md Phase 0.5). Falls back to an
-        on-demand DEGRADED brief (ledger-only, explicit freshness warnings)
-        when the daily loop has not produced one yet."""
-        if runtime.latest_brief:
-            return runtime.latest_brief
+    def research_brief(market: Optional[str] = Query(default=None)) -> dict:
+        """Investment Research brief (Loop.md Phase 0.5). ``market=cn`` returns
+        the China morning research brief; anything else returns the US brief.
+        Falls back to an on-demand DEGRADED brief (explicit freshness warnings)
+        when the relevant session has not produced one yet."""
         from swing_trader.brief import build_research_brief
 
+        if market == "cn":
+            if runtime.latest_brief_cn:
+                return runtime.latest_brief_cn
+            from zoneinfo import ZoneInfo
+
+            brief = build_research_brief(
+                runtime.ledger, runtime.mode, now=runtime.clock(),
+                signals=[], candidates=[], include_account=False,
+                trading_tz=ZoneInfo("Asia/Shanghai"),
+                extra_uncertainty=[
+                    "China research session has not run yet today — "
+                    "showing an empty degraded brief"
+                ],
+            )
+            return brief.model_dump(mode="json")
+
+        if runtime.latest_brief:
+            return runtime.latest_brief
         brief = build_research_brief(
             runtime.ledger, runtime.mode, now=runtime.clock()
         )

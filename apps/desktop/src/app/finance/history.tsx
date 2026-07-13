@@ -13,7 +13,7 @@ import {
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 
-import { CANDIDATE_STATUS_TONE, financeKey, fmtPct, fmtPrice, fmtQty, fmtTs, statusLabel } from './lib'
+import { CANDIDATE_STATUS_TONE, enumLabel, financeKey, fmtPct, fmtPrice, fmtQty, fmtTs } from './lib'
 import { FinanceSectionLabel, QuerySection } from './primitives'
 
 // Coarse status filter: terminal human verdicts + the in-flight set.
@@ -108,8 +108,10 @@ function CandidateHistoryRow({
         <span className="font-medium text-foreground">{candidate.symbol}</span>
         <span className="text-muted-foreground">
           {' '}
-          {candidate.side} {fmtQty(candidate.qty)} · {candidate.order_type}
-          {candidate.limit !== null && ` @ ${fmtPrice(candidate.limit)}`} · {statusLabel(candidate.status)} ·{' '}
+          {enumLabel(t.finance.enums.side, candidate.side)} {fmtQty(candidate.qty)} ·{' '}
+          {enumLabel(t.finance.enums.orderType, candidate.order_type)}
+          {candidate.limit !== null && ` @ ${fmtPrice(candidate.limit)}`} ·{' '}
+          {enumLabel(t.finance.enums.candidateStatus, candidate.status)} ·{' '}
           {copy.rowConfidence(fmtPct(candidate.confidence * 100, 0))}
         </span>
       </span>
@@ -146,12 +148,12 @@ function AuditTrail({ candidate, enabled }: { candidate: FinanceCandidate; enabl
             <li className="text-xs leading-5" key={`${event.ts}-${index}`}>
               <span className="tabular-nums text-muted-foreground/70">{fmtTs(event.ts)}</span>{' '}
               <span className={cn('font-medium', event.applied ? 'text-foreground' : 'text-destructive')}>
-                {event.action}
+                {enumLabel(t.finance.enums.auditAction, event.action)}
               </span>{' '}
               <span className="text-muted-foreground">
                 {copy.auditEvent(event.actor, event.surface, event.version)} —{' '}
                 {event.prev_status && event.new_status
-                  ? `${statusLabel(event.prev_status)} → ${statusLabel(event.new_status)}`
+                  ? `${enumLabel(t.finance.enums.candidateStatus, event.prev_status)} → ${enumLabel(t.finance.enums.candidateStatus, event.new_status)}`
                   : event.applied
                     ? copy.applied
                     : copy.notApplied}

@@ -145,7 +145,7 @@ const SIDEBAR_NAV: SidebarNavItem[] = [
   },
   {
     id: 'finance',
-    label: 'Finance',
+    label: '',
     icon: props => <Codicon name="graph-line" {...props} />,
     route: FINANCE_ROUTE
   },

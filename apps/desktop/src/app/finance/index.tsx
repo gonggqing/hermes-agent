@@ -19,7 +19,7 @@ import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
 
 import { FinanceAccountTab } from './account'
 import { FinanceHistoryTab } from './history'
-import { BREAKER_TONE, FINANCE_KEY, financeKey, fmtTs, parseFinanceError } from './lib'
+import { BREAKER_TONE, enumLabel, FINANCE_KEY, financeKey, fmtTs, parseFinanceError } from './lib'
 import { FinanceMarketTab } from './market'
 import { FinancePill } from './primitives'
 import { FinanceQueue, usePendingCandidates } from './queue'
@@ -209,7 +209,7 @@ function FinanceHealthStrip({
         <>
           <FinancePill variant={health.breaker === 'TRIPPED' ? 'destructive' : 'muted'}>
             <StatusDot tone={BREAKER_TONE[health.breaker] ?? 'muted'} />
-            {copy.breakerPill(health.breaker)}
+            {copy.breakerPill(enumLabel(t.finance.enums.breaker, health.breaker))}
           </FinancePill>
           <FinancePill variant={health.loop_attached ? 'default' : 'muted'}>
             {health.loop_attached ? copy.loopAttached : copy.loopIdle}

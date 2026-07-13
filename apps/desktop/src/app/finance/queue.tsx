@@ -27,6 +27,7 @@ import { notify, notifyError } from '@/store/notifications'
 
 import {
   CANDIDATE_STATUS_TONE,
+  enumLabel,
   FINANCE_ACTOR,
   FINANCE_KEY,
   financeKey,
@@ -36,8 +37,7 @@ import {
   fmtTs,
   idempotencyKeyFor,
   parseFinanceError,
-  settleIdempotencyKey,
-  statusLabel
+  settleIdempotencyKey
 } from './lib'
 import { FinanceCard, FinancePill, QuerySection } from './primitives'
 
@@ -183,7 +183,7 @@ function CandidatePriceRow({ candidate }: { candidate: FinanceCandidate }) {
           </span>
         ))}
       <span>
-        {copy.tif} <span className="font-medium text-foreground">{candidate.tif}</span>
+        {copy.tif} <span className="font-medium text-foreground">{enumLabel(t.finance.enums.tif, candidate.tif)}</span>
       </span>
     </div>
   )
@@ -212,11 +212,13 @@ function PendingCandidateCard({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <span className="text-sm font-semibold tracking-tight text-foreground">{candidate.symbol}</span>
-          <FinancePill variant={candidate.side === 'BUY' ? 'default' : 'warn'}>{candidate.side}</FinancePill>
-          <FinancePill variant="outline">{candidate.order_type}</FinancePill>
+          <FinancePill variant={candidate.side === 'BUY' ? 'default' : 'warn'}>
+            {enumLabel(t.finance.enums.side, candidate.side)}
+          </FinancePill>
+          <FinancePill variant="outline">{enumLabel(t.finance.enums.orderType, candidate.order_type)}</FinancePill>
           <span className="inline-flex items-center gap-1 text-[0.65rem] text-muted-foreground">
             <StatusDot tone={CANDIDATE_STATUS_TONE[candidate.status] ?? 'muted'} />
-            {statusLabel(candidate.status)}
+            {enumLabel(t.finance.enums.candidateStatus, candidate.status)}
           </span>
           <span className="text-[0.65rem] tabular-nums text-muted-foreground">
             {copy.confidenceVersion(fmtPct(candidate.confidence * 100, 0), version)}

@@ -1871,7 +1871,69 @@ export const zh: Translations = {
       searchOffline: '研究检索离线 — 知识索引当前不可用。',
       searchEmpty: q => `没有匹配“${q}”的研究文档。`,
       searchScore: score => `相关度 ${score}`,
-      searchError: '研究检索失败。'
+      searchError: '研究检索失败。',
+      marketAria: '研究市场',
+      marketUs: '美股',
+      marketCn: '中国 · 港股',
+      cnBadge: '仅研究',
+      cnResearchOnly: '中国/港股晨间研究 — 仅供研究。该市场没有账户、持仓或审批队列；此时段不会提议任何订单。'
+    },
+    enums: {
+      regime: {
+        risk_on: '偏好风险',
+        risk_off: '规避风险',
+        neutral: '中性'
+      },
+      side: {
+        BUY: '买入',
+        SELL: '卖出'
+      },
+      direction: {
+        long: '看多',
+        short: '看空',
+        neutral: '中性'
+      },
+      orderType: {
+        LMT: '限价单',
+        STP: '止损单',
+        MOC: '尾盘市价',
+        LOC: '尾盘限价',
+        BRACKET: '括号单'
+      },
+      tif: {
+        GTC: '撤销前有效',
+        DAY: '当日有效'
+      },
+      orderStatus: {
+        NEW: '新建',
+        SUBMITTED: '已提交',
+        PARTIALLY_FILLED: '部分成交',
+        FILLED: '已成交',
+        CANCELLED: '已取消',
+        REJECTED: '已拒绝',
+        EXPIRED: '已过期'
+      },
+      breaker: {
+        NORMAL: '正常',
+        TRIPPED: '已触发',
+        UNKNOWN: '未知'
+      },
+      candidateStatus: {
+        proposed: '已提议',
+        risk_approved: '风控通过',
+        risk_vetoed: '风控否决',
+        pushed: '已推送',
+        approved: '已批准',
+        edited: '已编辑',
+        rejected: '已拒绝',
+        expired: '已过期',
+        placed: '已下单'
+      },
+      auditAction: {
+        approve: '批准',
+        edit: '编辑',
+        reject: '拒绝'
+      }
     }
   },
 
@@ -1879,6 +1941,7 @@ export const zh: Translations = {
     nav: {
       'new-session': '新建会话',
       skills: '技能与工具',
+      finance: '金融',
       messaging: '消息平台',
       artifacts: '产物'
     },

@@ -12,14 +12,9 @@ import { Button } from "@nous-research/ui/ui/components/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@nous-research/ui/ui/components/card";
 import { Input } from "@nous-research/ui/ui/components/input";
 import { Spinner } from "@nous-research/ui/ui/components/spinner";
-import {
-  FINANCE_ACTOR,
-  fmtMoney,
-  fmtQty,
-  fmtTs,
-  sideTone,
-  WINDOW_CLOSED_HINT,
-} from "./format";
+import type { FinanceTranslations } from "@/i18n/types";
+import { useFinanceT } from "./i18n";
+import { FINANCE_ACTOR, fmtMoney, fmtQty, fmtTs, sideTone } from "./format";
 
 /** Editable candidate fields (Loop.md §5.6: edits limited to these). */
 const EDIT_FIELDS = ["qty", "limit", "stop", "tp", "sl"] as const;
@@ -36,19 +31,22 @@ function draftFrom(c: FinanceCandidate): EditDraft {
   };
 }
 
-/** Parse the draft into an edits payload; returns an error string on bad input. */
-function parseDraft(draft: EditDraft): FinanceCandidateEdits | string {
+/** Parse the draft into an edits payload; returns a localized error on bad input. */
+function parseDraft(
+  draft: EditDraft,
+  ft: FinanceTranslations,
+): FinanceCandidateEdits | string {
   const edits: FinanceCandidateEdits = {};
   for (const field of EDIT_FIELDS) {
     const raw = draft[field].trim();
     if (raw === "") continue; // untouched/cleared optional price — omit
     const n = Number(raw);
     if (!Number.isFinite(n) || n <= 0) {
-      return `${field} must be a positive number`;
+      return ft.queue.errPositive.replace("{field}", ft.queue.fields[field]);
     }
     edits[field] = n;
   }
-  if (edits.qty === undefined) return "qty is required";
+  if (edits.qty === undefined) return ft.queue.errQtyRequired;
   return edits;
 }
 
@@ -67,6 +65,7 @@ function CandidateCard({
   pending,
   busy,
   onAct,
+  ft,
 }: {
   pending: FinancePendingCandidate;
   busy: boolean;
@@ -75,6 +74,7 @@ function CandidateCard({
     action: "approve" | "reject" | "edit",
     edits?: FinanceCandidateEdits,
   ) => void;
+  ft: FinanceTranslations;
 }) {
   const c = pending.candidate;
   const windowOpen = pending.window_open;
@@ -82,10 +82,11 @@ function CandidateCard({
   const [draft, setDraft] = useState<EditDraft>(() => draftFrom(c));
   const [draftError, setDraftError] = useState<string | null>(null);
   const disabled = busy || !windowOpen;
-  const disabledHint = !windowOpen ? WINDOW_CLOSED_HINT : undefined;
+  const windowClosedHint = ft.queue.windowClosedHint;
+  const disabledHint = !windowOpen ? windowClosedHint : undefined;
 
   const saveAndApprove = () => {
-    const edits = parseDraft(draft);
+    const edits = parseDraft(draft, ft);
     if (typeof edits === "string") {
       setDraftError(edits);
       return;
@@ -104,9 +105,11 @@ function CandidateCard({
           <Badge tone={sideTone(c.side)}>{c.side}</Badge>
           <Badge tone="outline">{c.order_type}</Badge>
           <Badge tone="secondary">{c.pool}</Badge>
-          {!windowOpen && <Badge tone="warning">window closed</Badge>}
+          {!windowOpen && <Badge tone="warning">{ft.queue.windowClosed}</Badge>}
           <span className="ml-auto font-mondwest normal-case text-xs text-muted-foreground">
-            confidence {(c.confidence * 100).toFixed(0)}% · v{pending.version}
+            {ft.queue.confidenceVersion
+              .replace("{pct}", (c.confidence * 100).toFixed(0))
+              .replace("{version}", String(pending.version))}
           </span>
         </div>
 
@@ -114,7 +117,9 @@ function CandidateCard({
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
             {EDIT_FIELDS.map((field) => (
               <label key={field} className="flex flex-col gap-1">
-                <span className="text-xs text-text-tertiary">{field}</span>
+                <span className="text-xs text-text-tertiary">
+                  {ft.queue.fields[field]}
+                </span>
                 <Input
                   type="number"
                   step="0.01"
@@ -129,11 +134,11 @@ function CandidateCard({
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-            <PriceCell label="qty" value={fmtQty(c.qty)} />
-            <PriceCell label="limit" value={fmtMoney(c.limit)} />
-            <PriceCell label="stop" value={fmtMoney(c.stop)} />
-            <PriceCell label="tp" value={fmtMoney(c.tp)} />
-            <PriceCell label="sl" value={fmtMoney(c.sl)} />
+            <PriceCell label={ft.queue.fields.qty} value={fmtQty(c.qty)} />
+            <PriceCell label={ft.queue.fields.limit} value={fmtMoney(c.limit)} />
+            <PriceCell label={ft.queue.fields.stop} value={fmtMoney(c.stop)} />
+            <PriceCell label={ft.queue.fields.tp} value={fmtMoney(c.tp)} />
+            <PriceCell label={ft.queue.fields.sl} value={fmtMoney(c.sl)} />
           </div>
         )}
         {draftError && (
@@ -141,16 +146,18 @@ function CandidateCard({
         )}
 
         <p className="font-mondwest normal-case text-sm text-muted-foreground">
-          {c.rationale || "No rationale provided."}
+          {c.rationale || ft.queue.noRationale}
         </p>
         {c.risk_note && (
           <p className="font-mondwest normal-case text-xs text-warning">
-            Risk: {c.risk_note}
+            {ft.queue.riskNote.replace("{note}", c.risk_note)}
           </p>
         )}
         <p className="font-mondwest normal-case text-xs text-text-tertiary">
-          ref {fmtMoney(c.ref_px)} · valid until {fmtTs(c.valid_until)} · proposed{" "}
-          {fmtTs(c.ts)}
+          {ft.queue.metaLine
+            .replace("{ref}", fmtMoney(c.ref_px))
+            .replace("{valid}", fmtTs(c.valid_until))
+            .replace("{proposed}", fmtTs(c.ts))}
         </p>
 
         <div className="flex flex-wrap items-center gap-2" title={disabledHint}>
@@ -163,7 +170,7 @@ function CandidateCard({
                 onClick={saveAndApprove}
                 prefix={busy ? <Spinner /> : <Check />}
               >
-                Save & approve
+                {ft.queue.saveApprove}
               </Button>
               <Button
                 type="button"
@@ -177,7 +184,7 @@ function CandidateCard({
                 }}
                 prefix={<X />}
               >
-                Cancel
+                {ft.queue.cancel}
               </Button>
             </>
           ) : (
@@ -189,7 +196,7 @@ function CandidateCard({
                 onClick={() => onAct(pending, "approve")}
                 prefix={busy ? <Spinner /> : <Check />}
               >
-                Approve
+                {ft.queue.approve}
               </Button>
               <Button
                 type="button"
@@ -200,7 +207,7 @@ function CandidateCard({
                 onClick={() => onAct(pending, "reject")}
                 prefix={<X />}
               >
-                Reject
+                {ft.queue.reject}
               </Button>
               <Button
                 type="button"
@@ -210,13 +217,13 @@ function CandidateCard({
                 onClick={() => setEditing(true)}
                 prefix={<Pencil />}
               >
-                Edit
+                {ft.queue.edit}
               </Button>
             </>
           )}
           {!windowOpen && (
             <span className="font-mondwest normal-case text-xs text-muted-foreground">
-              {WINDOW_CLOSED_HINT}
+              {windowClosedHint}
             </span>
           )}
         </div>
@@ -240,6 +247,7 @@ export function ApprovalQueue({
   onActed: () => void;
   showToast: (message: string, type: "error" | "success") => void;
 }) {
+  const ft = useFinanceT();
   const [busyKey, setBusyKey] = useState<string | null>(null);
   // One idempotency key per user action (candidate+action), created on the
   // first click and reused on retry after a network failure; dropped as
@@ -273,7 +281,9 @@ export function ApprovalQueue({
     } catch (err) {
       // Network/proxy failure — keep the key so a retry replays safely.
       showToast(
-        `${c.symbol}: request failed (${String(err)}) — retry to resend`,
+        ft.queue.outcome.requestFailed
+          .replace("{symbol}", c.symbol)
+          .replace("{error}", String(err)),
         "error",
       );
     } finally {
@@ -286,59 +296,78 @@ export function ApprovalQueue({
     action: "approve" | "reject" | "edit",
     outcome: FinanceActionOutcome,
   ) => {
+    const o = ft.queue.outcome;
     const verb =
       action === "approve"
-        ? "approved"
+        ? ft.queue.verbApproved
         : action === "reject"
-          ? "rejected"
-          : "edited & approved";
+          ? ft.queue.verbRejected
+          : ft.queue.verbEdited;
     switch (outcome.code) {
       case "applied":
-        showToast(`${c.symbol} ${verb}`, "success");
-        onActed();
-        break;
-      case "replayed":
         showToast(
-          `${c.symbol}: already processed — previous result replayed`,
+          o.applied.replace("{symbol}", c.symbol).replace("{verb}", verb),
           "success",
         );
         onActed();
         break;
-      case "window_closed":
-        showToast(`${c.symbol}: ${WINDOW_CLOSED_HINT}`, "error");
+      case "replayed":
+        showToast(o.replayed.replace("{symbol}", c.symbol), "success");
         onActed();
         break;
-      case "version_conflict":
+      case "window_closed":
         showToast(
-          `${c.symbol}: candidate changed on the server — refreshing`,
+          o.windowClosed
+            .replace("{symbol}", c.symbol)
+            .replace("{hint}", ft.queue.windowClosedHint),
           "error",
         );
         onActed();
         break;
+      case "version_conflict":
+        showToast(o.versionConflict.replace("{symbol}", c.symbol), "error");
+        onActed();
+        break;
       case "terminal":
         showToast(
-          `${c.symbol}: candidate already finalized (${outcome.message || "terminal state"})`,
+          o.terminal
+            .replace("{symbol}", c.symbol)
+            .replace("{message}", outcome.message || o.terminalState),
           "error",
         );
         onActed();
         break;
       case "unknown_candidate":
-        showToast(`${c.symbol}: unknown candidate — refreshing`, "error");
+        showToast(o.unknownCandidate.replace("{symbol}", c.symbol), "error");
         onActed();
         break;
       case "invalid_edit":
       case "invalid_action":
-        showToast(`${c.symbol}: ${outcome.message || "invalid request"}`, "error");
+        showToast(
+          o.invalid
+            .replace("{symbol}", c.symbol)
+            .replace("{message}", outcome.message || o.invalidFallback),
+          "error",
+        );
         break;
       case "service_unavailable":
         showToast(
-          `Finance confirmation service is not active (${outcome.message})`,
+          o.serviceUnavailable.replace("{message}", outcome.message ?? ""),
           "error",
         );
         break;
       default:
         showToast(
-          `${c.symbol}: ${outcome.message || `unexpected response (HTTP ${outcome.status})`}`,
+          o.unexpected
+            .replace("{symbol}", c.symbol)
+            .replace(
+              "{message}",
+              outcome.message ||
+                o.unexpectedFallback.replace(
+                  "{status}",
+                  String(outcome.status),
+                ),
+            ),
           "error",
         );
         break;
@@ -350,14 +379,13 @@ export function ApprovalQueue({
       <CardHeader>
         <div className="flex items-center gap-2">
           <ListChecks className="h-5 w-5 text-muted-foreground" />
-          <CardTitle className="text-base">Approval queue</CardTitle>
+          <CardTitle className="text-base">{ft.queue.approvalTitle}</CardTitle>
         </div>
       </CardHeader>
       <CardContent>
         {pending.length === 0 ? (
           <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
-            No candidates awaiting confirmation. Risk-approved candidates are
-            published at 11:30 ET and expire at 12:30 ET.
+            {ft.queue.noPending}
           </p>
         ) : (
           <div className="flex flex-col gap-3">
@@ -367,6 +395,7 @@ export function ApprovalQueue({
                 pending={pc}
                 busy={busyKey !== null && busyKey.startsWith(`${pc.candidate.id}:`)}
                 onAct={(p, action, edits) => void act(p, action, edits)}
+                ft={ft}
               />
             ))}
           </div>

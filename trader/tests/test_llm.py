@@ -60,10 +60,27 @@ def test_settings_from_env_provider_chain():
         "DEEPSEEK_API_KEY": "d",
     })
     assert s.model == "glm5-turbo"  # explicit provider wins
+
+
+def test_search_role_pins_cheap_model():
+    # Default role="search" (the search/summary subagent) stays on the CHEAP
+    # flash model to save token cost — it IGNORES FINANCE_LLM_MODEL so a pricier
+    # decision model configured for another role does not raise its bill.
     s = llm_settings_from_env({
         "DEEPSEEK_API_KEY": "d", "FINANCE_LLM_MODEL": "deepseek-v4",
     })
-    assert s.model == "deepseek-v4"  # model override
+    assert s.model == "deepseek-v4-flash"  # search role: FINANCE_LLM_MODEL ignored
+    # FINANCE_LLM_SEARCH_MODEL overrides the search-tier model explicitly.
+    s = llm_settings_from_env({
+        "DEEPSEEK_API_KEY": "d", "FINANCE_LLM_SEARCH_MODEL": "deepseek-lite",
+    })
+    assert s.model == "deepseek-lite"
+    # A non-search role uses FINANCE_LLM_MODEL (the decision/general tier).
+    s = llm_settings_from_env(
+        {"DEEPSEEK_API_KEY": "d", "FINANCE_LLM_MODEL": "deepseek-v4"},
+        role="decision",
+    )
+    assert s.model == "deepseek-v4"
 
 
 def test_key_never_in_signal():

@@ -105,6 +105,13 @@ export interface FinanceTranslations {
       offline: string;
       noResults: string;
     };
+    // Market toggle on the Investment Research view (US vs China/HK).
+    markets: {
+      label: string;
+      us: string;
+      cn: string;
+      researchOnly: string; // "Research only — no orders"
+    };
   };
   queue: {
     title: string;
@@ -112,6 +119,76 @@ export interface FinanceTranslations {
     earliestExpiry: string; // "earliest expiry {time}"
     expand: string;
     collapse: string;
+    // Approval queue (Loop.md §5.6) — the only execution surface.
+    approvalTitle: string;
+    noPending: string;
+    windowClosed: string; // badge
+    windowClosedHint: string;
+    confidenceVersion: string; // "confidence {pct}% · v{version}"
+    noRationale: string;
+    riskNote: string; // "Risk: {note}"
+    metaLine: string; // "ref {ref} · valid until {valid} · proposed {proposed}"
+    approve: string;
+    reject: string;
+    edit: string;
+    saveApprove: string;
+    cancel: string;
+    fields: {
+      qty: string;
+      limit: string;
+      stop: string;
+      tp: string;
+      sl: string;
+    };
+    errPositive: string; // "{field} must be a positive number"
+    errQtyRequired: string;
+    verbApproved: string;
+    verbRejected: string;
+    verbEdited: string;
+    outcome: {
+      requestFailed: string; // "{symbol}: request failed ({error}) — retry to resend"
+      applied: string; // "{symbol} {verb}"
+      replayed: string; // "{symbol}: already processed — previous result replayed"
+      windowClosed: string; // "{symbol}: {hint}"
+      versionConflict: string; // "{symbol}: candidate changed on the server — refreshing"
+      terminal: string; // "{symbol}: candidate already finalized ({message})"
+      terminalState: string; // fallback message for `terminal`
+      unknownCandidate: string; // "{symbol}: unknown candidate — refreshing"
+      invalid: string; // "{symbol}: {message}"
+      invalidFallback: string; // "invalid request"
+      serviceUnavailable: string; // "Finance confirmation service is not active ({message})"
+      unexpected: string; // "{symbol}: {message}"
+      unexpectedFallback: string; // "unexpected response (HTTP {status})"
+    };
+  };
+  history: {
+    title: string;
+    empty: string;
+    expand: string; // aria-label on the expand column
+    auditLoading: string;
+    auditError: string;
+    auditEmpty: string;
+    auditBy: string; // "by {actor} via {surface} (v{version})"
+    refused: string;
+    colTime: string;
+    colSymbol: string;
+    colSide: string;
+    colQty: string;
+    colType: string;
+    colConf: string;
+    colStatus: string;
+    fillsTitle: string;
+    fillsEmpty: string;
+    colPrice: string;
+    colComm: string;
+    statsTitle: string;
+    statsEmpty: string;
+    winRate: string;
+    expectancy: string;
+    payoff: string;
+    maxDd: string;
+    summary: string; // "{closed} closed trades · {wins} wins · total"
+    avgHold: string; // " · avg hold {days}d"
   };
   account: {
     title: string;

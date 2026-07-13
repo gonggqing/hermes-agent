@@ -28,6 +28,7 @@ import type {
   FinancePendingCandidate,
   FinanceReports,
   FinanceResearchBrief as FinanceResearchBriefData,
+  FinanceResearchMarket,
   FinanceSnapshot,
   FinanceStats,
   FinanceWatchlistItem,
@@ -559,7 +560,15 @@ export default function FinancePage() {
   const [health, setHealth] = useState<FinanceHealth | null>(null);
   const [offline, setOffline] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [brief, setBrief] = useState<FinanceResearchBriefData | null>(null);
+  // Selected research desk (US default, or the China/HK research-only desk).
+  // Briefs are cached per desk so toggling back is instant and never shows
+  // the other desk's numbers.
+  const [researchMarket, setResearchMarket] =
+    useState<FinanceResearchMarket>("us");
+  const [briefs, setBriefs] = useState<{
+    us: FinanceResearchBriefData | null;
+    cn: FinanceResearchBriefData | null;
+  }>({ us: null, cn: null });
   const [account, setAccount] = useState<FinanceAccountResponse | null>(null);
   const [snapshots, setSnapshots] = useState<FinanceSnapshot[]>([]);
   const [market, setMarket] = useState<FinanceMarketSnapshot | null>(null);
@@ -586,32 +595,46 @@ export default function FinancePage() {
       .then(async (h) => {
         setHealth(h);
         setOffline(false);
-        const [rb, acct, snaps, mkt, wl, rep, pend, cands, fl] =
-          await Promise.allSettled([
-            api.financeResearchBrief(),
-            api.financeAccount(),
-            api.financeSnapshots(SNAPSHOT_LIMIT),
-            api.financeMarket(),
-            api.financeWatchlist(),
-            api.financeLatestReports(),
-            api.financePendingCandidates(),
-            api.financeCandidates(),
-            api.financeFills(),
-          ]);
-        if (rb.status === "fulfilled") setBrief(rb.value);
-        if (acct.status === "fulfilled") setAccount(acct.value);
-        if (snaps.status === "fulfilled") setSnapshots(snaps.value);
-        if (mkt.status === "fulfilled") setMarket(mkt.value);
-        if (wl.status === "fulfilled") setWatchlist(wl.value);
-        if (rep.status === "fulfilled") setReports(rep.value);
-        if (pend.status === "fulfilled") setPending(pend.value);
-        if (cands.status === "fulfilled") setCandidates(cands.value);
-        if (fl.status === "fulfilled") setFills(fl.value);
+        // Research brief for the selected desk, fetched on its own so a
+        // degraded brief never blanks the rest of the page.
+        const [rb, rest] = await Promise.all([
+          api.financeResearchBrief(researchMarket).then(
+            (v) => ({ ok: true as const, v }),
+            () => ({ ok: false as const }),
+          ),
+          // US-account reference material (account/positions/orders/queue/
+          // history). The China/HK desk is research-only (no account), so
+          // skip these fetches entirely in CN mode.
+          researchMarket === "us"
+            ? Promise.allSettled([
+                api.financeAccount(),
+                api.financeSnapshots(SNAPSHOT_LIMIT),
+                api.financeMarket(),
+                api.financeWatchlist(),
+                api.financeLatestReports(),
+                api.financePendingCandidates(),
+                api.financeCandidates(),
+                api.financeFills(),
+              ])
+            : Promise.resolve(null),
+        ]);
+        if (rb.ok) setBriefs((b) => ({ ...b, [researchMarket]: rb.v }));
+        if (rest !== null) {
+          const [acct, snaps, mkt, wl, rep, pend, cands, fl] = rest;
+          if (acct.status === "fulfilled") setAccount(acct.value);
+          if (snaps.status === "fulfilled") setSnapshots(snaps.value);
+          if (mkt.status === "fulfilled") setMarket(mkt.value);
+          if (wl.status === "fulfilled") setWatchlist(wl.value);
+          if (rep.status === "fulfilled") setReports(rep.value);
+          if (pend.status === "fulfilled") setPending(pend.value);
+          if (cands.status === "fulfilled") setCandidates(cands.value);
+          if (fl.status === "fulfilled") setFills(fl.value);
+        }
         setLastUpdated(new Date());
       })
       .catch(() => setOffline(true))
       .finally(() => setLoading(false));
-  }, []);
+  }, [researchMarket]);
 
   useEffect(() => {
     load();
@@ -672,6 +695,8 @@ export default function FinancePage() {
     };
   }, [health, offline, lastUpdated, loading, load, setAfterTitle, setEnd, ft, t]);
 
+  const brief = briefs[researchMarket];
+  const isUsDesk = researchMarket === "us";
   const ledgerFallback = account !== null && "source" in account;
   const liveView = account !== null && !("source" in account) ? account : null;
   const accountNumbers: AccountNumbers | null =
@@ -700,7 +725,10 @@ export default function FinancePage() {
   // positions/orders/history are reference material further down.
   return (
     <div className="flex flex-col gap-6">
-      {health?.breaker === "TRIPPED" && (
+      {/* Account-risk / order surfaces belong to the US desk only — the
+          China/HK desk is research-only (Loop.md §3): no breaker banner,
+          no approval queue, no account/positions/orders/history. */}
+      {isUsDesk && health?.breaker === "TRIPPED" && (
         <div className="flex items-center gap-3 border border-destructive bg-destructive/10 px-4 py-3 text-destructive">
           <AlertTriangle className="h-5 w-5 shrink-0" />
           <div className="font-mondwest normal-case text-sm">
@@ -710,24 +738,36 @@ export default function FinancePage() {
         </div>
       )}
 
-      <ResearchBrief brief={brief} />
-
-      <ActionsStrip pending={pending} onActed={load} showToast={showToast} />
-
-      <AccountSection
-        numbers={accountNumbers}
-        stats={stats}
-        snapshots={snapshots}
-        ledgerFallback={ledgerFallback}
+      <ResearchBrief
+        brief={brief}
+        market={researchMarket}
+        onMarketChange={setResearchMarket}
       />
 
-      <PositionsAndOrders view={liveView} />
+      {isUsDesk && (
+        <>
+          <ActionsStrip
+            pending={pending}
+            onActed={load}
+            showToast={showToast}
+          />
 
-      <MarketStrip market={market} watchlist={watchlist} />
+          <AccountSection
+            numbers={accountNumbers}
+            stats={stats}
+            snapshots={snapshots}
+            ledgerFallback={ledgerFallback}
+          />
 
-      <HistorySection candidates={candidates} fills={fills} stats={stats} />
+          <PositionsAndOrders view={liveView} />
 
-      <ReportsCard reports={reports} />
+          <MarketStrip market={market} watchlist={watchlist} />
+
+          <HistorySection candidates={candidates} fills={fills} stats={stats} />
+
+          <ReportsCard reports={reports} />
+        </>
+      )}
 
       <Toast toast={toast} />
     </div>

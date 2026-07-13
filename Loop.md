@@ -71,6 +71,23 @@ Build a system that, each US trading day:
 
 Order-type policy for approvals: **entries** = GTC limit or MOC/LOC; **protection** = GTC stop-loss (attach on entry fill via bracket/OCA); never leave a position without a resting stop.
 
+### 4b. Two daily sessions — CN morning research + US evening trading (human decision, 2026-07-13)
+
+The user checks the system **twice a day**. Both sessions share the same `monitors → build → 11:30 push` shape but run on their own market clock/calendar:
+
+| Session | Clock | Focus | Orders | Output |
+|---|---|---|---|---|
+| **CN morning** | Asia/Shanghai 09:30 → 11:00 → **11:30** | China/HK market, **technology-first** (semiconductors, electronics, AI; other sectors informative-not-focus) | **NONE** — report-only; build the ability/function for the future | a lighter **Investment Research brief** pushed to the group |
+| **US evening** | ET 09:00–16:00 (§4 table) | US market (watchlist §11) | Paper (Phase 0), the full confirm→execute flow | brief + risk-checked candidate approval cards |
+
+CN is **research-only**: it runs monitors + analysis sub-agents + the research brief but has NO decision core, NO RiskEngine execution, NO ConfirmationService, NO broker — so it structurally cannot place an order. Upgrading it to order-capable later means adding those components behind the SAME §3 authority boundaries; the mainland A-share + HK universe is config-editable and degrades to HK-only when mainland data is unreachable.
+
+**Dual-bot roles (both bots live in the same group chat):**
+- **Reporter** = the shared gateway bot (`TELEGRAM_BOT_TOKEN`), **OUTBOUND-ONLY**: sends the daily summaries / research briefs (CN morning + US evening context). It never long-polls (a second `getUpdates` consumer 409-kicks the Hermes gateway).
+- **Gatekeeper** = the dedicated finance bot (`FINANCE_TELEGRAM_BOT_TOKEN`), **INTERACTIVE**: it ONLY asks for permission (approval cards + approve/reject) and long-polls its OWN token, so it never conflicts with the gateway. Allowlist-gated (`TELEGRAM_ALLOWED_USERS`).
+
+**Cost note:** the search/summary LLM subagent is pinned to the cheap flash model (`deepseek-v4-flash`, via `FINANCE_LLM_SEARCH_MODEL`) independent of any pricier decision model, to save token fees.
+
 ---
 
 ## 5. Architecture (ports & adapters; keep the core broker-agnostic)
@@ -214,8 +231,17 @@ Python 3.11 · `ib_async` (later) · `alpaca-py` (optional) · `yfinance` · `pa
 - [x] Desktop: make `Investment Research` the default Finance tab; move Queue to a secondary badged action tab
 - [x] Web: make the research/risk brief the top Finance section; render Queue as compact `Actions requiring attention`, expanded only for pending/expiring/problem states
 - [x] Knowledge ingestion and semantic search: daily research/news/earnings → facts/documents/vector index; source-linked research search in Desktop/Web
-- [ ] Dedicated Finance Telegram bot + authenticated interactive approval adapter (existing Hermes bot remains gateway-only) — **adapter/auth code DONE; blocked on human creating the bot (FINANCE_TELEGRAM_BOT_TOKEN)**
+- [x] Dedicated Finance Telegram bot + authenticated interactive approval adapter (existing Hermes bot remains gateway-only) — **DONE: human created the bot; FINANCE_TELEGRAM_BOT_TOKEN is set; interactive allowlist-gated approvals live**
 - [x] Configure official `upstream` remote and complete a reviewed, tested Hermes `main` sync dry run before Phase 1; establish weekly weekend sync reports/integration branches (dry run 2026-07-13: 67 commits behind, ZERO conflicts — report in docs/upstream-sync/; real merge = weekend reviewed task)
+
+### Phase 0.5+ backlog — two-session (CN morning) & dual-bot roles (2026-07-13)
+
+- [x] Distinct dual-bot roles in the shared group: reporter (shared gateway bot, outbound-only summaries/briefs) vs gatekeeper (dedicated finance bot, interactive approval-only). Split transports; `on_push` sends preamble via reporter and cards via gatekeeper.
+- [x] `SessionSchedule` scheduler generalization (US + CN) preserving all US behaviour/tests; CN calendar (Asia/Shanghai, combined mainland+HKEX 2026 holidays, TODO authoritative source).
+- [x] CN morning **research-only** session: `research_session.ResearchSession` (monitors + technical/sentiment/debate + optional LLM → lighter research brief; NO orders/decision-core/risk-exec/confirmation/broker). `cn_watchlist` (mainland A-share + HK, tech-focused, config-editable via `FINANCE_CN_SYMBOLS`, graceful HK-only degrade).
+- [x] `build_research_brief` params (`watchlist_lookup`, `trading_tz`, in-memory `signals`/`candidates`, `include_account`) so CN research never touches the US trading ledger; CN brief served at `/v1/research/brief?market=cn`; Telegram brief renderer (`brief_telegram`, zh/en).
+- [x] Search/summary LLM pinned to `deepseek-v4-flash` (`FINANCE_LLM_SEARCH_MODEL`, role-based) to save token fees, independent of any decision-tier model.
+- [x] Complete Finance i18n across all Web + Desktop surfaces (en+zh) and add a US / China·HK market toggle to the Investment Research view (`?market=cn`). — DONE: Web migrated ~63 hard-coded strings (ApprovalQueue/HistorySection were 100% English) + CN toggle (RiskStrip/queue/account hidden in CN research-only mode); Desktop migrated ~38 (sidebar nav label + a `finance.enums` catalog localizing all backend enum vocabularies) + CN toggle. Web typecheck/lint/build green; Desktop typecheck/lint green.
 
 ---
 
@@ -267,6 +293,7 @@ Each symbol is tagged `{theme, ai_phase(infra|memory|network|power|application|c
 
 ## 13. Progress log (building agent appends; newest first)
 
+- 2026-07-13 — **Two-session extension (CN morning research + US evening) & dual-bot roles started** (human directive; §4b added as standing contract). Backend DONE + 700 trader tests green (RiskEngine still 100% branch cov): (1) dual-bot split — reporter = shared gateway bot outbound-only (daily summaries/briefs), gatekeeper = dedicated finance bot interactive approval-only (own token, allowlist); `dailyloop.on_push` sends preamble via reporter + cards via gatekeeper; `__main__` builds two transports. (2) `scheduler.SessionSchedule` generalizes US+CN (Asia/Shanghai, mainland+HKEX 2026 holidays) with ZERO change to US behaviour (77 US scheduler tests untouched). (3) `research_session.ResearchSession` = CN morning research-ONLY loop (monitors+technical/sentiment/debate+optional LLM → lighter brief; NO decision core/risk-exec/confirmation/broker → structurally cannot order); `cn_watchlist` mainland A-share+HK tech-focused, config-editable (`FINANCE_CN_SYMBOLS`), graceful HK-only degrade. (4) `build_research_brief` gained `watchlist_lookup`/`trading_tz`/`signals`/`candidates`/`include_account` so CN research never pollutes the US ledger; CN brief at `/v1/research/brief?market=cn`; `brief_telegram` renderer (zh default/en). (5) search/summary LLM pinned to `deepseek-v4-flash` (`FINANCE_LLM_SEARCH_MODEL`, role-based) to save token fees. 12 new tests (`test_cn_session.py`). UI pass DONE (parallel agents): Web migrated ~63 hard-coded finance strings (ApprovalQueue.tsx + HistorySection.tsx were 100% un-i18n'd English) to en+zh + added the US/China·HK market toggle (research brief stays primary/default US; CN mode hides RiskStrip/approval-queue/account/orders since risk is null + report-only, shows a research-only badge); Desktop migrated ~38 (hard-coded sidebar Finance nav label + a `finance.enums` catalog localizing all backend enum vocabularies in pills/tables) to en+zh + the same toggle. Web typecheck/lint/build + Desktop typecheck/lint all green; trader suite 700.
 - 2026-07-12 — UI/UX rule reinforced by human decision: Finance must inherit Hermes Desktop/Web's existing shell, components, tokens, and interaction patterns rather than becoming a separate dashboard. `Investment Research` is permanently the default Finance tab/route; Queue is secondary and badged. This is a standing contract for all subsequent Finance work.
 - 2026-07-13 — Maintenance decision: all Finance/future-module user-facing strings must follow Hermes i18n catalog conventions and ship translations with their feature changes. This fork will also review official Hermes `upstream/main` weekly on weekends through a dated, tested integration branch/report; no automatic overwrite/merge. At least one reviewed sync is a Phase-1 prerequisite.
 - 2026-07-12 — Operator UX decision for Phase 0.5: Finance is an **Investment Research** product before it is an order console. Current Desktop defaults to `Queue` and current Web renders `ApprovalQueue` first; both must be inverted after Phase-0 review. New landing order: dated market/risk pulse → daily investment research brief with sources/uncertainty → compact actions requiring attention. Queue stays reachable/badged but is not the default surface. Added explicit Phase-0.5 roadmap/backlog and acceptance criteria; no order authority changes.

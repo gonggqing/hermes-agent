@@ -5,7 +5,7 @@ import { getFinanceMarket, getFinanceWatchlist } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 
-import { financeKey, fmtPct, fmtPrice, fmtSignedPct, fmtTs, REGIME_TONE, statusLabel } from './lib'
+import { enumLabel, financeKey, fmtPct, fmtPrice, fmtSignedPct, fmtTs, REGIME_TONE } from './lib'
 import { FinanceCard, FinancePill, FinanceSectionLabel, QuerySection, StatTile } from './primitives'
 
 export function FinanceMarketTab({ enabled, query }: { enabled: boolean; query: string }) {
@@ -75,7 +75,9 @@ export function FinanceMarketTab({ enabled, query }: { enabled: boolean; query: 
               <StatusDot tone={REGIME_TONE[regime] ?? 'muted'} />
               <div className="min-w-0">
                 <div className="text-[0.65rem] font-medium text-(--ui-text-tertiary)">{copy.regime}</div>
-                <div className="truncate text-sm font-semibold text-foreground">{statusLabel(regime)}</div>
+                <div className="truncate text-sm font-semibold text-foreground">
+                  {enumLabel(t.finance.enums.regime, regime)}
+                </div>
               </div>
             </FinanceCard>
             <StatTile label={copy.vix} value={fmtPrice(market?.vix)} />

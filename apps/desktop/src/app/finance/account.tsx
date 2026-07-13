@@ -13,7 +13,7 @@ import {
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 
-import { BREAKER_TONE, financeKey, fmtMoney, fmtPct, fmtPrice, fmtQty, fmtSignedMoney, fmtTs, pnlClass } from './lib'
+import { BREAKER_TONE, enumLabel, financeKey, fmtMoney, fmtPct, fmtPrice, fmtQty, fmtSignedMoney, fmtTs, pnlClass } from './lib'
 import { FinanceSectionLabel, FinanceTable, QuerySection, StatTile } from './primitives'
 
 function accountTiles(account: FinanceAccount) {
@@ -88,7 +88,7 @@ export function FinanceAccountTab({ enabled, mode, query }: { enabled: boolean; 
                   hint={account?.source === 'ledger' ? copy.sourceLedger(fmtTs(snap.ts)) : copy.sourceLive(fmtTs(snap.ts))}
                   label={copy.breaker}
                   tone={snap.breaker_state === 'TRIPPED' ? 'text-destructive' : undefined}
-                  value={snap.breaker_state}
+                  value={enumLabel(t.finance.enums.breaker, snap.breaker_state)}
                 />
               </div>
               <EquitySparkline snapshots={snapshotsQuery.data ?? []} />
@@ -165,14 +165,14 @@ export function FinanceAccountTab({ enabled, mode, query }: { enabled: boolean; 
                   {order.symbol}
                 </span>,
                 <span className={order.side === 'BUY' ? 'text-primary' : 'text-amber-600 dark:text-amber-300'} key="d">
-                  {order.side}
+                  {enumLabel(t.finance.enums.side, order.side)}
                 </span>,
                 fmtQty(order.qty),
-                order.order_type,
+                enumLabel(t.finance.enums.orderType, order.order_type),
                 fmtPrice(order.limit),
                 fmtPrice(order.stop),
-                order.tif,
-                order.status,
+                enumLabel(t.finance.enums.tif, order.tif),
+                enumLabel(t.finance.enums.orderStatus, order.status),
                 fmtTs(order.ts)
               ],
               key: order.id

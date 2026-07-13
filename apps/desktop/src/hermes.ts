@@ -1673,12 +1673,21 @@ export function postFinanceCandidateAction(id: string, payload: FinanceActionPay
   })
 }
 
+// One extra market beyond the default US brief: the China/HK MORNING research
+// brief (?market=cn). Same ResearchBrief shape, but research-only — risk is
+// null and candidates_today.pending is empty (that session never proposes
+// orders). Omit for the US brief (no query param).
+export type FinanceResearchMarket = 'cn'
+
 // The daily Investment Research brief (Loop.md §7 Phase 0.5). Always answers
 // while the service is up: when the loop has not published a brief yet the
 // service builds a DEGRADED one on demand (ledger-only, explicit freshness
-// warnings, null regime/risk) instead of erroring.
-export function getFinanceResearchBrief(): Promise<FinanceResearchBrief> {
-  return window.hermesDesktop.api<FinanceResearchBrief>({ path: '/api/finance/v1/research/brief' })
+// warnings, null regime/risk) instead of erroring. The CN brief is likewise
+// DEGRADED (freshness warnings) before that session runs, never an error.
+export function getFinanceResearchBrief(market?: FinanceResearchMarket): Promise<FinanceResearchBrief> {
+  return window.hermesDesktop.api<FinanceResearchBrief>({
+    path: `/api/finance/v1/research/brief${financeQuery({ market })}`
+  })
 }
 
 // Source-linked semantic research search. Answers 503 `{detail}` when no

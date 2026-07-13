@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { StatusDot, type StatusTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import {
   type FinanceBriefPendingCandidate,
   type FinanceFreshness,
@@ -21,10 +22,11 @@ import {
 } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { ExternalLink } from '@/lib/external-link'
-import { AlertTriangle, Search } from '@/lib/icons'
+import { AlertTriangle, Info, Search } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 
 import {
+  enumLabel,
   financeKey,
   fmtMoney,
   fmtPct,
@@ -35,8 +37,7 @@ import {
   fmtTs,
   parseFinanceError,
   pnlClass,
-  REGIME_TONE,
-  statusLabel
+  REGIME_TONE
 } from './lib'
 import { FinanceCard, FinancePill, FinanceSectionLabel, QuerySection, StatTile } from './primitives'
 
@@ -51,14 +52,23 @@ const BRIEF_POLL_MS = 60_000
 // Knowledge search results per query (server clamps k to 1..25).
 const SEARCH_K = 5
 
+// Research markets shown in the brief. 'us' is the default order-capable
+// session; 'cn' is the China/HK MORNING brief, which is research-only (no
+// account risk, no approval queue — Loop.md: that session never proposes
+// orders). Only 'cn' becomes the ?market= query param.
+type ResearchMarket = 'cn' | 'us'
+
 export function FinanceResearchTab({ enabled, onOpenQueue }: { enabled: boolean; onOpenQueue: () => void }) {
   const { t } = useI18n()
   const copy = t.finance.research
+  const [market, setMarket] = useState<ResearchMarket>('us')
+  const researchOnly = market === 'cn'
 
   const briefQuery = useQuery({
     enabled,
-    queryFn: getFinanceResearchBrief,
-    queryKey: financeKey('research', 'brief'),
+    // 'us' sends no param (default brief); only 'cn' scopes to ?market=cn.
+    queryFn: () => getFinanceResearchBrief(researchOnly ? 'cn' : undefined),
+    queryKey: financeKey('research', 'brief', market),
     refetchInterval: BRIEF_POLL_MS,
     retry: 1
   })
@@ -67,13 +77,27 @@ export function FinanceResearchTab({ enabled, onOpenQueue }: { enabled: boolean;
 
   return (
     <div className="space-y-5">
+      {/* Switches WHICH brief is shown (US vs China/HK). It never turns Finance
+          into an order console: the CN brief is research-only — no account risk
+          and no approval queue (Loop.md §5.9). */}
+      <div aria-label={copy.marketAria} className="flex" role="group">
+        <SegmentedControl
+          onChange={setMarket}
+          options={[
+            { id: 'us', label: copy.marketUs },
+            { id: 'cn', label: copy.marketCn }
+          ]}
+          value={market}
+        />
+      </div>
+
       <QuerySection
         empty={copy.briefError}
         error={briefQuery.isError ? briefQuery.error : undefined}
         isEmpty={!brief}
         loading={briefQuery.isPending}
       >
-        {brief && <BriefBody brief={brief} onOpenQueue={onOpenQueue} />}
+        {brief && <BriefBody brief={brief} onOpenQueue={onOpenQueue} researchOnly={researchOnly} />}
       </QuerySection>
 
       <KnowledgeSearchSection enabled={enabled} />
@@ -81,27 +105,56 @@ export function FinanceResearchTab({ enabled, onOpenQueue }: { enabled: boolean;
   )
 }
 
-function BriefBody({ brief, onOpenQueue }: { brief: FinanceResearchBrief; onOpenQueue: () => void }) {
+function BriefBody({
+  brief,
+  onOpenQueue,
+  researchOnly
+}: {
+  brief: FinanceResearchBrief
+  onOpenQueue: () => void
+  researchOnly: boolean
+}) {
   return (
     <div className="space-y-5">
-      <BriefHeader brief={brief} />
+      <BriefHeader brief={brief} researchOnly={researchOnly} />
       <FreshnessBanner freshness={brief.freshness} />
-      <RiskSection risk={brief.risk} />
+      {/* Research-only markets carry no account/positions (risk===null), so the
+          account-risk strip and the order-approval hand-off are hidden and a
+          research-only note takes their place. */}
+      {researchOnly ? <ResearchOnlyNote /> : <RiskSection risk={brief.risk} />}
       <RegimeSection regime={brief.regime} />
       <MoversSection bottom={brief.movers.bottom} top={brief.movers.top} />
       <ThemesSection themes={brief.themes} />
       <NewsSection news={brief.news} />
       <SignalsSection signals={brief.signals_today} />
-      <CandidatesSection candidates={brief.candidates_today} onOpenQueue={onOpenQueue} />
+      {!researchOnly && <CandidatesSection candidates={brief.candidates_today} onOpenQueue={onOpenQueue} />}
       <UncertaintySection items={brief.uncertainty} />
       <ProvenanceFooter links={brief.provenance} />
     </div>
   )
 }
 
+// Calm, informational note (not a warning) explaining the CN session is
+// research-only — no account, positions, or approval queue for this market.
+function ResearchOnlyNote() {
+  const { t } = useI18n()
+
+  return (
+    <div
+      className={cn(
+        'flex items-start gap-2 rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary) px-3 py-2.5',
+        'text-xs leading-5 text-(--ui-text-secondary)'
+      )}
+    >
+      <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+      <div className="min-w-0">{t.finance.research.cnResearchOnly}</div>
+    </div>
+  )
+}
+
 // ── Header: trading day, PAPER/LIVE, as-of, per-source freshness ─────────────
 
-function BriefHeader({ brief }: { brief: FinanceResearchBrief }) {
+function BriefHeader({ brief, researchOnly }: { brief: FinanceResearchBrief; researchOnly: boolean }) {
   const { t } = useI18n()
   const copy = t.finance.research
   const { freshness } = brief
@@ -111,9 +164,13 @@ function BriefHeader({ brief }: { brief: FinanceResearchBrief }) {
       <span className="text-sm font-semibold tracking-tight text-foreground">
         {copy.tradingDay(brief.trading_date)}
       </span>
-      <FinancePill variant={brief.mode === 'live' ? 'warn' : 'outline'}>
-        {brief.mode === 'live' ? copy.modeLive : copy.modePaper}
-      </FinancePill>
+      {researchOnly ? (
+        <FinancePill variant="muted">{copy.cnBadge}</FinancePill>
+      ) : (
+        <FinancePill variant={brief.mode === 'live' ? 'warn' : 'outline'}>
+          {brief.mode === 'live' ? copy.modeLive : copy.modePaper}
+        </FinancePill>
+      )}
       <span className="text-[0.62rem] tabular-nums text-muted-foreground/70">{copy.briefAsOf(fmtTs(brief.as_of))}</span>
 
       <span className="flex flex-wrap items-center gap-1">
@@ -216,7 +273,7 @@ function RiskSection({ risk }: { risk: FinanceRiskView | null }) {
             <StatTile
               label={account.breaker}
               tone={risk.breaker_state === 'TRIPPED' ? 'text-destructive' : undefined}
-              value={risk.breaker_state}
+              value={enumLabel(t.finance.enums.breaker, risk.breaker_state)}
             />
           </div>
 
@@ -283,7 +340,9 @@ function RegimeSection({ regime }: { regime: FinanceRegimeView | null }) {
               <StatusDot tone={REGIME_TONE[regime.risk_on_off] ?? 'muted'} />
               <div className="min-w-0">
                 <div className="text-[0.65rem] font-medium text-(--ui-text-tertiary)">{market.regime}</div>
-                <div className="truncate text-sm font-semibold text-foreground">{statusLabel(regime.risk_on_off)}</div>
+                <div className="truncate text-sm font-semibold text-foreground">
+                  {enumLabel(t.finance.enums.regime, regime.risk_on_off)}
+                </div>
               </div>
             </FinanceCard>
             <StatTile label={market.vix} value={fmtPrice(regime.vix)} />
@@ -473,7 +532,7 @@ function SignalsSection({ signals }: { signals: FinanceSignalView[] }) {
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-semibold text-foreground">{signal.symbol}</span>
                 <FinancePill variant={signal.direction.toLowerCase().includes('long') ? 'default' : 'warn'}>
-                  {statusLabel(signal.direction)}
+                  {enumLabel(t.finance.enums.direction, signal.direction)}
                 </FinancePill>
                 <FinancePill variant="outline">{signal.source_agent}</FinancePill>
                 <span className="text-[0.62rem] tabular-nums text-muted-foreground">
@@ -524,7 +583,7 @@ function CandidatesSection({
             <div className="flex flex-wrap gap-1.5">
               {counts.map(([status, count]) => (
                 <FinancePill key={status} variant="outline">
-                  {statusLabel(status)} · {count}
+                  {enumLabel(t.finance.enums.candidateStatus, status)} · {count}
                 </FinancePill>
               ))}
             </div>
@@ -547,9 +606,13 @@ function PendingRow({ pending }: { pending: FinanceBriefPendingCandidate }) {
     <div className="flex flex-wrap items-center gap-2 text-xs">
       <span className="font-medium text-foreground">{pending.symbol}</span>
       <span className="tabular-nums text-muted-foreground">
-        {copy.pendingRow(pending.side, fmtQty(pending.qty), fmtPct(pending.confidence * 100, 0))}
+        {copy.pendingRow(
+          enumLabel(t.finance.enums.side, pending.side),
+          fmtQty(pending.qty),
+          fmtPct(pending.confidence * 100, 0)
+        )}
       </span>
-      <FinancePill variant="muted">{statusLabel(pending.status)}</FinancePill>
+      <FinancePill variant="muted">{enumLabel(t.finance.enums.candidateStatus, pending.status)}</FinancePill>
     </div>
   )
 }

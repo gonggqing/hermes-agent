@@ -11,6 +11,8 @@ import { Badge } from "@nous-research/ui/ui/components/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@nous-research/ui/ui/components/card";
 import { Spinner } from "@nous-research/ui/ui/components/spinner";
 import { Stats } from "@nous-research/ui/ui/components/stats";
+import type { FinanceTranslations } from "@/i18n/types";
+import { useFinanceT } from "./i18n";
 import {
   candidateStatusTone,
   fmtMoney,
@@ -27,25 +29,29 @@ const MAX_FILL_ROWS = 25;
 
 type AuditState = FinanceAuditEvent[] | "loading" | "error";
 
-function AuditTimeline({ state }: { state: AuditState }) {
+function AuditTimeline({
+  state,
+  ft,
+}: {
+  state: AuditState;
+  ft: FinanceTranslations;
+}) {
   if (state === "loading") {
     return (
       <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
-        <Spinner /> Loading audit trail…
+        <Spinner /> {ft.history.auditLoading}
       </div>
     );
   }
   if (state === "error") {
     return (
-      <p className="py-3 text-sm text-destructive">
-        Failed to load the audit trail.
-      </p>
+      <p className="py-3 text-sm text-destructive">{ft.history.auditError}</p>
     );
   }
   if (state.length === 0) {
     return (
       <p className="py-3 text-sm text-muted-foreground">
-        No audit events recorded for this candidate.
+        {ft.history.auditEmpty}
       </p>
     );
   }
@@ -57,9 +63,12 @@ function AuditTimeline({ state }: { state: AuditState }) {
             <span className="text-text-tertiary">{fmtTs(e.ts)}</span>
             <span className="font-medium text-foreground">{e.action}</span>
             <span className="text-muted-foreground">
-              by {e.actor} via {e.surface} (v{e.version})
+              {ft.history.auditBy
+                .replace("{actor}", e.actor)
+                .replace("{surface}", e.surface)
+                .replace("{version}", String(e.version))}
             </span>
-            {!e.applied && <Badge tone="destructive">refused</Badge>}
+            {!e.applied && <Badge tone="destructive">{ft.history.refused}</Badge>}
           </div>
           {(e.prev_status || e.new_status) && (
             <div className="text-muted-foreground">
@@ -86,6 +95,7 @@ export function HistorySection({
   fills: FinanceFill[];
   stats: FinanceStats | null;
 }) {
+  const ft = useFinanceT();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [audit, setAudit] = useState<Record<string, AuditState>>({});
 
@@ -117,27 +127,41 @@ export function HistorySection({
         <CardHeader>
           <div className="flex items-center gap-2">
             <History className="h-5 w-5 text-muted-foreground" />
-            <CardTitle className="text-base">Candidate history</CardTitle>
+            <CardTitle className="text-base">{ft.history.title}</CardTitle>
           </div>
         </CardHeader>
         <CardContent>
           {recent.length === 0 ? (
             <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
-              No candidates recorded yet.
+              {ft.history.empty}
             </p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full font-mondwest normal-case text-sm">
                 <thead>
                   <tr className="border-b border-border text-muted-foreground text-xs">
-                    <th className="w-6 py-2 pr-2" aria-label="Expand" />
-                    <th className="text-left py-2 pr-4 font-medium">Time</th>
-                    <th className="text-left py-2 pr-4 font-medium">Symbol</th>
-                    <th className="text-left py-2 pr-4 font-medium">Side</th>
-                    <th className="text-right py-2 px-4 font-medium">Qty</th>
-                    <th className="text-left py-2 px-4 font-medium">Type</th>
-                    <th className="text-right py-2 px-4 font-medium">Conf.</th>
-                    <th className="text-left py-2 pl-4 font-medium">Status</th>
+                    <th className="w-6 py-2 pr-2" aria-label={ft.history.expand} />
+                    <th className="text-left py-2 pr-4 font-medium">
+                      {ft.history.colTime}
+                    </th>
+                    <th className="text-left py-2 pr-4 font-medium">
+                      {ft.history.colSymbol}
+                    </th>
+                    <th className="text-left py-2 pr-4 font-medium">
+                      {ft.history.colSide}
+                    </th>
+                    <th className="text-right py-2 px-4 font-medium">
+                      {ft.history.colQty}
+                    </th>
+                    <th className="text-left py-2 px-4 font-medium">
+                      {ft.history.colType}
+                    </th>
+                    <th className="text-right py-2 px-4 font-medium">
+                      {ft.history.colConf}
+                    </th>
+                    <th className="text-left py-2 pl-4 font-medium">
+                      {ft.history.colStatus}
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -179,7 +203,10 @@ export function HistorySection({
                       {expandedId === c.id && (
                         <tr className="border-b border-border/50">
                           <td colSpan={8} className="pl-8">
-                            <AuditTimeline state={audit[c.id] ?? "loading"} />
+                            <AuditTimeline
+                              state={audit[c.id] ?? "loading"}
+                              ft={ft}
+                            />
                           </td>
                         </tr>
                       )}
@@ -197,25 +224,37 @@ export function HistorySection({
           <CardHeader>
             <div className="flex items-center gap-2">
               <Receipt className="h-5 w-5 text-muted-foreground" />
-              <CardTitle className="text-base">Fills</CardTitle>
+              <CardTitle className="text-base">{ft.history.fillsTitle}</CardTitle>
             </div>
           </CardHeader>
           <CardContent>
             {recentFills.length === 0 ? (
               <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
-                No fills recorded yet.
+                {ft.history.fillsEmpty}
               </p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full font-mondwest normal-case text-sm">
                   <thead>
                     <tr className="border-b border-border text-muted-foreground text-xs">
-                      <th className="text-left py-2 pr-4 font-medium">Time</th>
-                      <th className="text-left py-2 pr-4 font-medium">Symbol</th>
-                      <th className="text-left py-2 pr-4 font-medium">Side</th>
-                      <th className="text-right py-2 px-4 font-medium">Qty</th>
-                      <th className="text-right py-2 px-4 font-medium">Price</th>
-                      <th className="text-right py-2 pl-4 font-medium">Comm.</th>
+                      <th className="text-left py-2 pr-4 font-medium">
+                        {ft.history.colTime}
+                      </th>
+                      <th className="text-left py-2 pr-4 font-medium">
+                        {ft.history.colSymbol}
+                      </th>
+                      <th className="text-left py-2 pr-4 font-medium">
+                        {ft.history.colSide}
+                      </th>
+                      <th className="text-right py-2 px-4 font-medium">
+                        {ft.history.colQty}
+                      </th>
+                      <th className="text-right py-2 px-4 font-medium">
+                        {ft.history.colPrice}
+                      </th>
+                      <th className="text-right py-2 pl-4 font-medium">
+                        {ft.history.colComm}
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -251,46 +290,51 @@ export function HistorySection({
           <CardHeader>
             <div className="flex items-center gap-2">
               <Sigma className="h-5 w-5 text-muted-foreground" />
-              <CardTitle className="text-base">Ledger stats</CardTitle>
+              <CardTitle className="text-base">{ft.history.statsTitle}</CardTitle>
             </div>
           </CardHeader>
           <CardContent>
             {stats === null ? (
               <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
-                No stats available yet.
+                {ft.history.statsEmpty}
               </p>
             ) : (
               <div className="flex flex-col gap-4">
                 <Stats
                   items={[
                     {
-                      label: "Win rate",
+                      label: ft.history.winRate,
                       value: fmtPct(stats.win_rate * 100, 0),
                     },
                     {
-                      label: "Expectancy",
+                      label: ft.history.expectancy,
                       value: fmtSigned(stats.expectancy),
                     },
                     {
-                      label: "Payoff",
+                      label: ft.history.payoff,
                       value:
                         stats.payoff_ratio === null
                           ? "—"
                           : stats.payoff_ratio.toFixed(2),
                     },
                     {
-                      label: "Max DD",
+                      label: ft.history.maxDd,
                       value: fmtPct(stats.max_drawdown_pct),
                     },
                   ]}
                 />
                 <div className="font-mondwest normal-case text-xs text-muted-foreground">
-                  {stats.n_closed} closed trades · {stats.n_wins} wins · total{" "}
+                  {ft.history.summary
+                    .replace("{closed}", String(stats.n_closed))
+                    .replace("{wins}", String(stats.n_wins))}{" "}
                   <span className={pnlClass(stats.total_pnl)}>
                     {fmtSigned(stats.total_pnl)}
                   </span>
                   {stats.avg_hold_days !== null &&
-                    ` · avg hold ${stats.avg_hold_days.toFixed(1)}d`}
+                    ft.history.avgHold.replace(
+                      "{days}",
+                      stats.avg_hold_days.toFixed(1),
+                    )}
                 </div>
               </div>
             )}

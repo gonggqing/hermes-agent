@@ -123,6 +123,3 @@ export function sentimentBorderClass(v: number | null | undefined): string {
 /** Actor identity attached to every human action relayed by this surface. */
 // TODO: wire real dashboard identity (e.g. /api/auth/me) once available.
 export const FINANCE_ACTOR = "hermes-user";
-
-export const WINDOW_CLOSED_HINT =
-  "Actions are only allowed during the 11:30–12:30 ET confirmation window";

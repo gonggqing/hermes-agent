@@ -290,11 +290,19 @@ class DailyLoop:
         preamble = push_window_preamble(
             self._market.model_dump(mode="json") if self._market else {}
         )
+        # Distinct bot roles (Loop.md two-session extension): the REPORTER bot
+        # (``notify`` — shared gateway token, outbound-only) announces the push
+        # context to the group; the GATEKEEPER bot (``self.telegram`` —
+        # dedicated finance token) sends the interactive approval cards and ONLY
+        # asks for permission. Both live in the same chat.
+        self.notify(preamble)
         if self.telegram is not None:
-            self.telegram.push_cards(published, preamble)
+            self.telegram.push_cards(published)
         else:
-            self.notify(preamble + f"\n{len(published)} candidate(s) await review "
-                        "in the Finance portal")
+            self.notify(
+                f"{len(published)} candidate(s) await review in the Finance "
+                "portal (no interactive Telegram bot configured)"
+            )
 
     def on_confirm_poll(self) -> None:
         """Call repeatedly inside the window (Telegram long-poll surface)."""
