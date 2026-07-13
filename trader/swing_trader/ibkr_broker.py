@@ -141,6 +141,8 @@ class IBKRBroker(BrokerInterface):
     :class:`IBClient`) in tests; production defaults to a lazily-connected
     ib_async client."""
 
+    # Instance-overridden in __init__ from the paper flag; class default keeps
+    # BrokerInterface's contract satisfied if ever read before construction.
     mode = Mode.LIVE
 
     def __init__(
@@ -162,6 +164,12 @@ class IBKRBroker(BrokerInterface):
         self.port = port
         self.client_id = client_id
         self.paper = paper
+        # Ledger tag (Loop.md §6: "where fills come from"). An IBKR *paper*
+        # account is a real broker connection but NOT real money — tag it
+        # Mode.PAPER so testing the full pipeline against IBKR paper (the
+        # mandatory pre-live step) never pollutes the live-money ledger. Only a
+        # live account (paper=False) tags Mode.LIVE.
+        self.mode = Mode.LIVE if not paper else Mode.PAPER
         self._client_factory = client_factory
         self._role_for = role_for_symbol or (lambda _s: Role.ROTATION)
         self._client: Optional[IBClient] = None
@@ -212,7 +220,7 @@ class IBKRBroker(BrokerInterface):
         if self._day_open_equity and self._day_open_equity > 0:
             dd = min(0.0, (equity - self._day_open_equity) / self._day_open_equity * 100.0)
         # Breaker is OURS (AccountRiskMonitor trips it), not IBKR's — report NORMAL.
-        return AccountSnapshot(mode=Mode.LIVE, equity=equity, cash=cash, upnl=upnl,
+        return AccountSnapshot(mode=self.mode, equity=equity, cash=cash, upnl=upnl,
                                day_pnl=day_pnl, drawdown_pct=dd,
                                breaker_state=BreakerState.NORMAL)
 
@@ -265,7 +273,7 @@ class IBKRBroker(BrokerInterface):
 
     def _child_order(self, parent: Order, spec: IbOrderSpec, broker_ref: str) -> Order:
         return Order(
-            id=spec.order_ref, mode=Mode.LIVE, symbol=parent.symbol,
+            id=spec.order_ref, mode=self.mode, symbol=parent.symbol,
             side=Side(spec.action), qty=spec.qty,
             order_type=OrderType.STP if spec.order_type == "STP" else OrderType.LMT,
             limit=spec.lmt, stop=spec.aux, tif=TimeInForce(spec.tif),
@@ -277,7 +285,7 @@ class IBKRBroker(BrokerInterface):
         # Never mutate the caller's order (it is also sent to PaperBroker when
         # mirroring — status must stay NEW there). Work on a deep copy.
         submitted = order.model_copy(deep=True)
-        submitted.mode = Mode.LIVE
+        submitted.mode = self.mode
 
         # Idempotency: a known order_ref means we already placed it — reconcile,
         # do not double-submit (Loop.md §7 client-order-id idempotency).
@@ -350,7 +358,7 @@ class IBKRBroker(BrokerInterface):
         for e in self._ib().fills():
             out.append(Fill(id=e.exec_id, order_id=e.order_ref, symbol=e.symbol,
                             side=Side(e.side), qty=e.qty, px=e.px,
-                            commission=e.commission, mode=Mode.LIVE))
+                            commission=e.commission, mode=self.mode))
         out.sort(key=lambda f: f.ts)
         return out
 

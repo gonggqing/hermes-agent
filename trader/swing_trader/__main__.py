@@ -54,7 +54,6 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     from swing_trader.datafeed import RetryingFeed, YFinanceFeed
     from swing_trader.ledger import Ledger
     from swing_trader.llm import LLMAnalyst, llm_settings_from_env
-    from swing_trader.paper_broker import PaperBroker
     from swing_trader.scheduler import DailyLoopRunner
     from swing_trader.telegram_gateway import HttpTransport
 
@@ -64,15 +63,27 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     # values take precedence over any optional local trader/.env overrides.
     load_dotenv(Path.home() / ".hermes" / ".env", override=False)
     settings = load_settings()
-    if settings.broker.value != "paper":
-        # Phase 0 hard stop (Loop.md §7): only the PaperBroker exists.
-        raise SystemExit("Phase 0 supports BROKER=paper only")
 
+    from swing_trader.broker_factory import build_broker
     from swing_trader.rehydrate import rehydrate_from_ledger
 
     db_url = f"sqlite:///{args.db or settings.db_path}"
     ledger = Ledger(url=db_url)
-    broker = PaperBroker(starting_cash=args.starting_cash)
+    # Broker selection (Loop.md §5.1): paper by default; ibkr once the account
+    # arrives. The factory derives the paper/live ACCOUNT flag from the triple
+    # gate (HUMAN_CONFIRM && BROKER!=paper && !DRY_RUN) and refuses a live IBKR
+    # port under an un-gated config — so a partial config fails closed here, not
+    # at order time. Live *orders* stay separately gated in the ExecutionEngine.
+    try:
+        broker = build_broker(settings, starting_cash=args.starting_cash)
+    except ImportError as exc:  # ib_async not installed (pip install '.[ibkr]')
+        raise SystemExit(
+            f"BROKER=ibkr but ib_async is not installed: {exc}. "
+            "Install it with: pip install 'swing-trader[ibkr]'"
+        ) from exc
+    print(f"broker: {settings.broker.value} "
+          f"(live orders {'ALLOWED' if settings.live_orders_allowed else 'blocked'})",
+          flush=True)
     rehydration = rehydrate_from_ledger(broker, ledger, settings.mode)
     print(rehydration.summary(), flush=True)
     # Phase 0.8 (resilience): wrap the live feed in RetryingFeed so transient
@@ -228,6 +239,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         telegram.set_text_responder(_finance_responder)
     loop = DailyLoop(
         feed, broker, ledger, mode=settings.mode,
+        live_orders_allowed=settings.live_orders_allowed,
         runtime=runtime, telegram=telegram, notify=notify,
         fundamentals=fundamentals,  # real fundamentals for the scheduled loop
         earnings_provider=earnings_provider,  # earnings calendar (Phase 0.75)

@@ -54,6 +54,15 @@ class Settings(BaseSettings):
     broker: BrokerBackend = BrokerBackend.PAPER
     human_confirm: bool = False
 
+    # --- Interactive Brokers connection (Loop.md §5.1 / Phase 1) ---
+    # Only used when broker=ibkr. TWS: 7497=paper, 7496=live. IB Gateway:
+    # 4002=paper, 4001=live. The broker factory derives the paper/live account
+    # flag from the triple gate (``live_orders_allowed``), NOT from the port, so
+    # a live port under an un-gated config is refused at construction.
+    ibkr_host: str = "127.0.0.1"
+    ibkr_port: int = 7497
+    ibkr_client_id: int = 1
+
     # --- Risk parameters (config may tighten hard caps, never loosen) ---
     per_trade_risk_pct: float = Field(default=1.0, gt=0)
     daily_drawdown_breaker_pct: float = DAILY_DRAWDOWN_BREAKER_PCT

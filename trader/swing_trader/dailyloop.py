@@ -234,6 +234,7 @@ class DailyLoop:
         broker: BrokerInterface,
         ledger: Ledger,
         mode: Mode = Mode.PAPER,
+        live_orders_allowed: bool = False,
         risk_params: RiskParams | None = None,
         symbols: list[str] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
@@ -260,7 +261,13 @@ class DailyLoop:
 
         self.risk_engine = RiskEngine(self.risk_params)
         self.decision = decision_core or RuleBasedDecisionCore(risk_params=self.risk_params)
-        self.execution = ExecutionEngine(broker, ledger, mode=mode)
+        # live_orders_allowed defaults False (fail-closed): even in Mode.LIVE the
+        # ExecutionEngine refuses to place unless the caller explicitly threads
+        # the triple gate through (Loop.md §3). __main__ passes
+        # settings.live_orders_allowed here.
+        self.execution = ExecutionEngine(
+            broker, ledger, mode=mode, live_orders_allowed=live_orders_allowed
+        )
         # Stamp snapshots with the loop's clock so Phase 0.8 health-freshness is
         # consistent with ``self.clock()`` under the simulator/backtester too.
         self.market_monitor = MarketMonitor(feed, breadth_symbols=self.symbols,

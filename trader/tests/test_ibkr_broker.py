@@ -97,9 +97,9 @@ class FakeIBClient:
         self._trades[order_ref].status = "Inactive"
 
 
-def _broker(**kw):
+def _broker(*, paper=True, **kw):
     fake = FakeIBClient(**kw)
-    return IBKRBroker(client_factory=lambda: fake), fake
+    return IBKRBroker(client_factory=lambda: fake, paper=paper), fake
 
 
 def _order(**over) -> Order:
@@ -165,8 +165,14 @@ class TestPlaceOrder:
         o = _order()
         r = b.place_order(o)
         assert r.accepted and r.order.status is OrderStatus.SUBMITTED
-        assert r.order.broker_ref == "ib-1" and r.order.mode is Mode.LIVE
+        # paper account (default) → PAPER tag; broker_ref stamped from IBKR.
+        assert r.order.broker_ref == "ib-1" and r.order.mode is Mode.PAPER
         assert len(fake.placed) == 1 and fake.placed[0].order_type == "LMT"
+
+    def test_live_account_tags_mode_live(self):
+        b, fake = _broker(paper=False)
+        r = b.place_order(_order())
+        assert r.accepted and r.order.mode is Mode.LIVE  # real account → LIVE tag
 
     def test_input_order_not_mutated(self):
         b, _ = _broker()
@@ -234,7 +240,7 @@ class TestLifecycle:
         fake.fill(o.id, 6, 100.0)
         assert b.get_orders()[0].status is OrderStatus.FILLED
         fills = b.get_fills()
-        assert len(fills) == 2 and all(f.mode is Mode.LIVE for f in fills)
+        assert len(fills) == 2 and all(f.mode is Mode.PAPER for f in fills)
         assert {f.id for f in fills} == {"exec-1", "exec-2"}  # execId -> Fill.id
         assert all(f.order_id == o.id for f in fills)
 
@@ -288,7 +294,7 @@ class TestAccountPositions:
                                 "AvailableFunds": "9000", "UnrealizedPnL": "150"})
         acct = b.get_account()
         assert acct.equity == 12000 and acct.cash == 3000  # SETTLED, not AvailableFunds
-        assert acct.upnl == 150 and acct.mode is Mode.LIVE
+        assert acct.upnl == 150 and acct.mode is Mode.PAPER  # paper account (default)
         assert acct.breaker_state.value == "NORMAL"
 
     def test_positions_mapped(self):
