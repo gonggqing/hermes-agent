@@ -160,6 +160,17 @@ class ResearchSession:
         brief = self._publish_brief()
         if brief is None:
             return
+        # Do not push a contentless brief. This happens when the service is
+        # (re)started mid-day AFTER the CN monitor/research events already
+        # passed: the runner won't back-fire past events, so on_send fires with
+        # no market/portfolio gathered. Still expose the degraded brief to the
+        # API (?market=cn), but don't spam the group with an empty push.
+        if self._market is None and self._portfolio is None:
+            logger.info(
+                "cn research: monitors did not run this session; "
+                "skipping empty brief push (API brief still refreshed)"
+            )
+            return
         text = render_research_brief(
             brief,
             market_label=self.market_label,

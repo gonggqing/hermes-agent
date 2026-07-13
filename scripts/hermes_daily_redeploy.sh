@@ -68,7 +68,10 @@ dirty_count="$(git status --porcelain | wc -l | tr -d ' ')"
 sync_review_workspace
 
 dashboard_healthy() {
-  docker compose exec -T dashboard \
+  # The dashboard is served by the single consolidated `gateway` container
+  # (HERMES_DASHBOARD=1, network_mode:host). There is no separate `dashboard`
+  # service anymore.
+  docker compose exec -T gateway \
     curl --fail --silent --show-error --max-time 10 http://127.0.0.1:9119/ >/dev/null
 }
 
@@ -94,7 +97,7 @@ if [[ "$dry_run" == true ]]; then
 fi
 
 echo "[$(timestamp)] deploy: $reason_text; target=${current_commit:0:12}; uncommitted paths=$dirty_count"
-docker compose up --build -d gateway dashboard
+docker compose up --build -d gateway
 
 for _ in $(seq 1 24); do
   if dashboard_healthy; then

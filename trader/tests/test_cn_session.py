@@ -249,6 +249,20 @@ def test_research_session_publishes_brief_and_sends():
     assert len(sent) == 1 and "China / HK" in sent[0]
 
 
+def test_research_session_skips_empty_push_on_mid_day_restart():
+    # If on_monitor/on_research never ran (service restarted AFTER the CN
+    # events already passed), on_send must NOT push a contentless brief to the
+    # group — but it still refreshes the (degraded) API brief.
+    from swing_trader.api import FinanceRuntime
+
+    runtime = FinanceRuntime(ledger=Ledger(url="sqlite:///:memory:"), mode=Mode.PAPER)
+    sent: list[str] = []
+    session = _make_session(make_cn_feed(), runtime=runtime, sent=sent)
+    session.on_send()  # no monitors ran first
+    assert sent == []  # nothing pushed to the group
+    assert runtime.latest_brief_cn  # but the API brief is still refreshed
+
+
 def test_research_session_never_touches_trading_ledger():
     # Report-only: the session must not record signals/candidates/orders into
     # the (shared) trading ledger — CN research stays out of it entirely.
