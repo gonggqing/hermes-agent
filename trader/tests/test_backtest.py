@@ -160,6 +160,15 @@ class TestWalkForward:
             ts = {t for t, _ in fold.test_equity_curve}
             assert not (ts & seen)
             seen |= ts
+            # Phase 0.95: folds carry their OOS window + closed trades so the
+            # regime analyzer can bucket them.
+            lo, hi = fold.test_window
+            assert hi - lo == 20  # test_days
+            assert all(not t.is_open for t in fold.test_trades)
+            assert len(fold.test_trades) == fold.test_stats.n_closed
+        # windows advance monotonically and don't overlap
+        windows = [f.test_window for f in result.folds]
+        assert windows == sorted(windows)
 
     def test_param_selection_prefers_trading_params(self, uptrend, tmp_path):
         counter = {"n": 0}

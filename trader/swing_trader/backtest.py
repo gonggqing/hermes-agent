@@ -334,6 +334,11 @@ class WalkForwardFold:
     train_stats: TradeStats
     test_stats: TradeStats
     test_equity_curve: list[tuple[datetime, float]]
+    #: OOS test window as [lo, hi) bar indices into the replay data — lets a
+    #: regime classifier locate the benchmark bars for this fold (Phase 0.95).
+    test_window: tuple[int, int] = (0, 0)
+    #: The CLOSED OOS trades from this fold (for per-regime re-aggregation).
+    test_trades: list[TradeRecord] = field(default_factory=list)
 
 
 @dataclass
@@ -371,7 +376,6 @@ class WalkForwardBacktester:
         usable = min(len(b) for b in data.values()) - 1  # last bar only fills
         folds: list[WalkForwardFold] = []
         all_test_trades: list[TradeRecord] = []
-        equity_last: float = cfg.starting_cash
         combined_curve: list[tuple[datetime, float]] = []
 
         fold_start = cfg.min_warmup_bars
@@ -410,18 +414,18 @@ class WalkForwardBacktester:
             ))
             test_ledger = ledger_factory()
             test_result = chosen.run(data, train_hi, test_hi, test_ledger)
+            fold_closed = [t for t in test_result.trades if not t.is_open]
             folds.append(WalkForwardFold(
                 fold_index=fold_index,
                 chosen_params_index=best_idx,
                 train_stats=best_train_stats,
                 test_stats=test_result.stats,
                 test_equity_curve=test_result.equity_curve,
+                test_window=(train_hi, test_hi),
+                test_trades=fold_closed,
             ))
-            all_test_trades.extend(
-                t for t in test_result.trades if not t.is_open
-            )
+            all_test_trades.extend(fold_closed)
             combined_curve.extend(test_result.equity_curve)
-            equity_last = test_result.final_equity
             logger.info(
                 "walk-forward fold complete",
                 extra={"fold": fold_index, "chosen_params": best_idx,
