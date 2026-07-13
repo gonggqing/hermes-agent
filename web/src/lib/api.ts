@@ -3451,6 +3451,8 @@ export interface FinancePortfolioAccount {
 
 export interface FinancePortfolioHolding {
   symbol: string;
+  /** Instrument display name (e.g. "华夏全球科技先锋混合(QDII)A"); null when unknown. */
+  display_name?: string | null;
   market: string;
   currency: string;
   qty: number;
@@ -3526,6 +3528,8 @@ export type FinancePortfolioPriceSource = "live" | "csv" | "manual" | "none";
 
 export interface FinancePortfolioValuationHolding {
   symbol: string;
+  /** Instrument display name (e.g. "华夏全球科技先锋混合(QDII)A"); null when unknown. */
+  display_name?: string | null;
   market: FinancePortfolioMarket | null;
   currency: string;
   qty: number;

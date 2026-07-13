@@ -1894,6 +1894,9 @@ export interface FinancePortfolioAccount {
 // each holding also carries the account ids it is held across.
 export interface FinanceHolding {
   symbol: string
+  // The instrument name (e.g. "华夏全球科技先锋混合(QDII)A" for code "005698").
+  // Null/absent when the instrument is unresolved — the UI falls back to the code.
+  display_name?: null | string
   market: string
   currency: string
   qty: number
@@ -1939,6 +1942,9 @@ export type FinancePriceSource = 'csv' | 'live' | 'manual' | 'none'
 // `accounts`/`account_names` are the accounts the holding is held across.
 export interface FinanceValuationHolding {
   symbol: string
+  // The instrument name (e.g. "华夏全球科技先锋混合(QDII)A" for code "005698").
+  // Null/absent when the instrument is unresolved — the UI falls back to the code.
+  display_name?: null | string
   market: FinancePortfolioMarket | null
   currency: string
   qty: number

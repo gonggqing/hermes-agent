@@ -346,9 +346,20 @@ function ValuationHoldingsTable({
       columns={columns}
       rows={holdings.map(holding => ({
         cells: [
-          <span className="font-medium text-foreground" key="s">
-            {holding.symbol}
-          </span>,
+          // Instrument NAME as the primary label with the bare CODE beneath it in
+          // a muted mono style; when the name is unknown we show just the code.
+          <div className="min-w-0 max-w-[15rem]" key="s">
+            {holding.display_name ? (
+              <>
+                <span className="block truncate font-medium text-foreground" title={holding.display_name}>
+                  {holding.display_name}
+                </span>
+                <span className="block font-mono text-[0.62rem] text-muted-foreground/70">{holding.symbol}</span>
+              </>
+            ) : (
+              <span className="font-medium text-foreground">{holding.symbol}</span>
+            )}
+          </div>,
           holding.market ? enumLabel(t.finance.enums.market, holding.market) : <UnknownCell key="m" />,
           fmtQty(holding.qty),
           // Never fabricate a cost when the basis is unknown — show a muted word.

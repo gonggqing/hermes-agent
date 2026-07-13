@@ -238,7 +238,18 @@ function ValuationTable({
                 className="border-b border-border/50 hover:bg-secondary/20 transition-colors"
               >
                 <td className="py-2 pr-4">
-                  <span className="font-mono-ui text-xs">{row.symbol}</span>
+                  {row.display_name ? (
+                    <div className="flex flex-col">
+                      <span className="text-foreground">
+                        {row.display_name}
+                      </span>
+                      <span className="font-mono-ui text-xs text-muted-foreground">
+                        {row.symbol}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="font-mono-ui text-xs">{row.symbol}</span>
+                  )}
                 </td>
                 <td className="py-2 px-4">
                   <Badge tone="outline">{marketLabel(row.market, ft)}</Badge>
