@@ -21,10 +21,11 @@ import pytest
 from swing_trader.datafeed import (
     MARKET_PROXY_SYMBOL,
     DataFeedError,
+    RetryingFeed,
     StubPaidFeed,
     YFinanceFeed,
 )
-from swing_trader.interfaces import Bar, NewsItem, Quote
+from swing_trader.interfaces import Bar, DataFeed, NewsItem, Quote
 
 UTC = timezone.utc
 
@@ -471,3 +472,86 @@ def test_stub_paid_feed_all_methods_raise() -> None:
         stub.get_bars("NVDA", timeframe="1d", limit=10)
     with pytest.raises(NotImplementedError, match=r"TODO\(Phase 1\+\)"):
         stub.get_news(None)
+
+
+# --------------------------------------------------- RetryingFeed (Phase 0.8)
+
+
+class FlakyFeed(DataFeed):
+    """Fails ``fail_times`` with DataFeedError, then returns a sentinel.
+    Records every call so tests can assert retry counts."""
+
+    def __init__(self, fail_times: int, *, exc=None) -> None:
+        self.fail_times = fail_times
+        self.calls = 0
+        self._exc = exc or DataFeedError("transient")
+
+    def _maybe_fail(self, ok):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise self._exc
+        return ok
+
+    def get_quote(self, symbol: str) -> Quote:
+        return self._maybe_fail(
+            Quote(symbol=symbol, last=100.0, ts=datetime(2026, 1, 1, tzinfo=UTC))
+        )
+
+    def get_bars(self, symbol: str, timeframe: str = "1d", limit: int = 100):
+        return self._maybe_fail([("bar", symbol, timeframe, limit)])
+
+    def get_news(self, symbol=None, limit: int = 20):
+        return self._maybe_fail([("news", symbol, limit)])
+
+
+def test_retrying_feed_succeeds_after_transient_errors() -> None:
+    waits: list[float] = []
+    inner = FlakyFeed(fail_times=2)
+    feed = RetryingFeed(inner, retries=2, backoff_s=0.5, sleep=waits.append)
+    q = feed.get_quote("NVDA")
+    assert q.last == 100.0
+    assert inner.calls == 3  # 2 failures + 1 success
+    assert waits == [0.5, 1.0]  # exponential: backoff * 2**attempt
+
+
+def test_retrying_feed_reraises_after_exhausting_retries() -> None:
+    waits: list[float] = []
+    inner = FlakyFeed(fail_times=5)
+    feed = RetryingFeed(inner, retries=2, backoff_s=0.5, sleep=waits.append)
+    with pytest.raises(DataFeedError):
+        feed.get_quote("NVDA")
+    assert inner.calls == 3  # initial + 2 retries
+    assert waits == [0.5, 1.0]  # only between attempts, not after the last
+
+
+def test_retrying_feed_passes_through_on_first_success() -> None:
+    waits: list[float] = []
+    inner = FlakyFeed(fail_times=0)
+    feed = RetryingFeed(inner, sleep=waits.append)
+    assert feed.get_bars("NVDA", "5m", 3) == [("bar", "NVDA", "5m", 3)]
+    assert inner.calls == 1
+    assert waits == []  # no retry, no sleep
+
+
+def test_retrying_feed_does_not_retry_valueerror() -> None:
+    """A bad timeframe (ValueError) is a programming error, not transient."""
+    inner = FlakyFeed(fail_times=1, exc=ValueError("bad timeframe"))
+    feed = RetryingFeed(inner, retries=3, sleep=lambda _s: None)
+    with pytest.raises(ValueError):
+        feed.get_bars("NVDA", "2h")
+    assert inner.calls == 1  # raised immediately, no retry
+
+
+def test_retrying_feed_get_news_retried_and_returned() -> None:
+    inner = FlakyFeed(fail_times=1)
+    feed = RetryingFeed(inner, retries=2, sleep=lambda _s: None)
+    assert feed.get_news("NVDA", 5) == [("news", "NVDA", 5)]
+    assert inner.calls == 2
+
+
+def test_retrying_feed_zero_retries_reraises_immediately() -> None:
+    inner = FlakyFeed(fail_times=1)
+    feed = RetryingFeed(inner, retries=0, sleep=lambda _s: None)
+    with pytest.raises(DataFeedError):
+        feed.get_quote("NVDA")
+    assert inner.calls == 1

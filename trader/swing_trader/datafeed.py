@@ -12,6 +12,7 @@ the network (Loop.md §3).
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
@@ -21,7 +22,7 @@ from swing_trader.schemas import utcnow
 
 logger = get_logger(__name__)
 
-__all__ = ["DataFeedError", "StubPaidFeed", "YFinanceFeed"]
+__all__ = ["DataFeedError", "RetryingFeed", "StubPaidFeed", "YFinanceFeed"]
 
 #: Ticker used for market-wide news when no symbol is given (Loop.md §11.A).
 MARKET_PROXY_SYMBOL = "SPY"
@@ -335,3 +336,53 @@ class StubPaidFeed(DataFeed):
 
     def get_news(self, symbol: Optional[str] = None, limit: int = 20) -> list[NewsItem]:
         raise NotImplementedError(self._TODO)
+
+
+class RetryingFeed(DataFeed):
+    """Wrap a :class:`DataFeed` with bounded retry + exponential backoff on
+    TRANSIENT :class:`DataFeedError` (Loop.md §5.1, Phase 0.8 resilience).
+
+    A flaky network / rate-limit blip no longer drops a whole monitor cycle:
+    the call is retried ``retries`` times with ``backoff_s * 2**attempt`` waits.
+    ``ValueError`` (a programming error like a bad timeframe) is NOT retried.
+    ``sleep`` is injectable so tests never actually wait. After the last attempt
+    the final :class:`DataFeedError` is re-raised so callers still degrade
+    exactly as before (fail closed) when the source is genuinely down.
+    """
+
+    def __init__(
+        self,
+        inner: DataFeed,
+        retries: int = 2,
+        backoff_s: float = 0.5,
+        sleep: Optional[Callable[[float], None]] = None,
+    ) -> None:
+        self._inner = inner
+        self._retries = max(0, retries)
+        self._backoff = max(0.0, backoff_s)
+        self._sleep = sleep or time.sleep
+
+    def _retry(self, what: str, fn: Callable, *args):
+        last: Optional[DataFeedError] = None
+        for attempt in range(self._retries + 1):
+            try:
+                return fn(*args)
+            except DataFeedError as exc:
+                last = exc
+                if attempt < self._retries:
+                    wait = self._backoff * (2 ** attempt)
+                    logger.warning("feed call failed, retrying",
+                                   extra={"call": what, "attempt": attempt + 1,
+                                          "wait_s": wait, "error": str(exc)[:160]})
+                    self._sleep(wait)
+        assert last is not None  # loop runs at least once
+        raise last
+
+    def get_quote(self, symbol: str) -> Quote:
+        return self._retry("get_quote", self._inner.get_quote, symbol)
+
+    def get_bars(self, symbol: str, timeframe: str = "1d", limit: int = 100) -> list[Bar]:
+        return self._retry("get_bars", self._inner.get_bars, symbol, timeframe, limit)
+
+    def get_news(self, symbol: Optional[str] = None, limit: int = 20) -> list[NewsItem]:
+        return self._retry("get_news", self._inner.get_news, symbol, limit)

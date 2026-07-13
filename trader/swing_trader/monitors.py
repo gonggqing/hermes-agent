@@ -30,7 +30,7 @@ import re
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Optional, Protocol, Sequence, runtime_checkable
+from typing import Callable, Literal, Optional, Protocol, Sequence, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -310,12 +310,24 @@ def _pool_exposure_pct(positions: Sequence[Position], equity: float) -> dict[Rol
 
 
 class _BaseMonitor:
-    """Shared sink plumbing: subclasses call :meth:`_persist` after polling."""
+    """Shared sink plumbing: subclasses call :meth:`_persist` after polling.
+
+    ``clock`` stamps every snapshot's ``ts``. It defaults to :func:`utcnow`
+    (real wall clock — unchanged in production) but is injectable so the
+    simulator/backtester stamps with its own clock; this keeps snapshot
+    freshness consistent with the loop's clock, which the Phase 0.8 health
+    model reads to decide whether new entries are still trustworthy.
+    """
 
     kind: str = "snapshot"
 
-    def __init__(self, sink: SnapshotSink | None = None) -> None:
+    def __init__(
+        self,
+        sink: SnapshotSink | None = None,
+        clock: Callable[[], datetime] = utcnow,
+    ) -> None:
         self._sink = sink
+        self._clock = clock
 
     def _persist(self, snapshot: _Snapshot) -> None:
         if self._sink is not None:
@@ -341,8 +353,9 @@ class MarketMonitor(_BaseMonitor):
         index_symbols: Sequence[str] = DEFAULT_INDEX_SYMBOLS,
         breadth_symbols: Sequence[str] | None = None,
         sink: SnapshotSink | None = None,
+        clock: Callable[[], datetime] = utcnow,
     ) -> None:
-        super().__init__(sink)
+        super().__init__(sink, clock)
         self._feed = feed
         self._index_symbols = list(index_symbols)
         self._breadth_symbols = (
@@ -352,7 +365,7 @@ class MarketMonitor(_BaseMonitor):
         )
 
     def poll(self) -> MarketSnapshot:
-        ts = utcnow()
+        ts = self._clock()
         indices: dict[str, dict[str, Optional[float]]] = {}
         spy_last: Optional[float] = None
         spy_sma50: Optional[float] = None
@@ -475,8 +488,9 @@ class PortfolioMonitor(_BaseMonitor):
         broker: BrokerInterface,
         symbols: Sequence[str] | None = None,
         sink: SnapshotSink | None = None,
+        clock: Callable[[], datetime] = utcnow,
     ) -> None:
-        super().__init__(sink)
+        super().__init__(sink, clock)
         self._feed = feed
         self._broker = broker
         self._symbols = (
@@ -485,7 +499,7 @@ class PortfolioMonitor(_BaseMonitor):
         self._last_watch: dict[str, WatchState] = {}
 
     def poll(self) -> PortfolioSnapshot:
-        ts = utcnow()
+        ts = self._clock()
         account = self._broker.get_account()
         positions = _retag_positions(self._broker.get_positions())
         exposure = _pool_exposure_pct(positions, account.equity)
@@ -545,8 +559,9 @@ class NewsMonitor(_BaseMonitor):
 
     kind = "news"
 
-    def __init__(self, feed: DataFeed, sink: SnapshotSink | None = None) -> None:
-        super().__init__(sink)
+    def __init__(self, feed: DataFeed, sink: SnapshotSink | None = None,
+                 clock: Callable[[], datetime] = utcnow) -> None:
+        super().__init__(sink, clock)
         self._feed = feed
 
     def poll(self, symbols: list[str] | None = None) -> NewsSnapshot:
@@ -554,7 +569,7 @@ class NewsMonitor(_BaseMonitor):
 
         Symbols whose news fetch fails with DataFeedError are skipped.
         """
-        ts = utcnow()
+        ts = self._clock()
         collected = []
         if symbols is None:
             try:
@@ -617,13 +632,14 @@ class AccountRiskMonitor(_BaseMonitor):
         broker: BrokerInterface,
         params: RiskParams | None = None,
         sink: SnapshotSink | None = None,
+        clock: Callable[[], datetime] = utcnow,
     ) -> None:
-        super().__init__(sink)
+        super().__init__(sink, clock)
         self._broker = broker
         self._params = params if params is not None else RiskParams()
 
     def poll(self) -> RiskStatus:
-        ts = utcnow()
+        ts = self._clock()
         account = self._broker.get_account()
         breaker = self._params.effective_breaker_pct
         if account.drawdown_pct <= breaker:

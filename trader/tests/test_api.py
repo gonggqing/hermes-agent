@@ -68,6 +68,29 @@ class TestReads:
         body = client.get("/v1/health").json()
         assert body["loop_attached"] is False
         assert body["breaker"] == "NORMAL"
+        assert "health" not in body  # no assessment until the loop runs
+
+    def test_health_exposes_dead_mans_switch(self, env):
+        """Phase 0.8: when the loop has assessed health, /v1/health surfaces the
+        dead-man's-switch state + per-check reasons (read-only)."""
+        from datetime import datetime, timezone
+
+        from swing_trader.health import HealthCheck, HealthLevel, HealthStatus
+
+        _, _, runtime, client = env
+        runtime.health = HealthStatus(
+            level=HealthLevel.UNHEALTHY,
+            as_of=datetime(2026, 7, 13, tzinfo=timezone.utc),
+            entries_allowed=False,
+            checks=[HealthCheck(name="market", level=HealthLevel.UNHEALTHY,
+                                detail="market data is 200 min old")],
+            warnings=["market data stale (200 min)"],
+        )
+        body = client.get("/v1/health").json()
+        assert body["health"]["level"] == "unhealthy"
+        assert body["health"]["entries_allowed"] is False
+        assert body["health"]["warnings"] == ["market data stale (200 min)"]
+        assert body["health"]["checks"][0]["name"] == "market"
 
     def test_account_live_view(self, env):
         _, _, _, client = env

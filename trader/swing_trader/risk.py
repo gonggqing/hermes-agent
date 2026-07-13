@@ -161,8 +161,13 @@ class RiskEngine:
         positions: list[Position],
         liquidity: LiquidityInfo | None,
         entries_today: int = 0,
+        system_healthy: bool = True,
     ) -> RiskDecision:
-        """Run the documented decision sequence over one candidate order."""
+        """Run the documented decision sequence over one candidate order.
+
+        ``system_healthy`` is the dead-man's switch (Loop.md §5.10, Phase 0.8):
+        when False (stale data / stalled loop / ledger-broker drift) new ENTRIES
+        are vetoed; exits are unaffected (protection is never blocked)."""
         params = self.params
         reasons: list[str] = []
 
@@ -190,6 +195,16 @@ class RiskEngine:
                 )
                 return self._decision(candidate, RiskVerdict.SHRUNK, held, reasons)
             return self._decision(candidate, RiskVerdict.APPROVED, qty, reasons)
+
+        # -- Dead-man's switch (Phase 0.8): halt NEW ENTRIES when the system is
+        # unhealthy (stale data / stalled loop / ledger-broker drift). Exits are
+        # handled above (never blocked); research-dependent new entries fail
+        # closed (Loop.md §5.10, §3). Authoritative + pure — cannot be bypassed.
+        if not system_healthy:
+            return veto(
+                "entry vetoed: system unhealthy — new entries halted "
+                "(dead-man's switch, Loop.md §5.10)"
+            )
 
         # -- 2. Equity sanity ------------------------------------------------
         if account.equity <= 0:

@@ -35,6 +35,7 @@ from swing_trader.api import FinanceRuntime
 from swing_trader.confirmation import ConfirmationService, Surface
 from swing_trader.datafeed import DataFeedError
 from swing_trader.decision import RuleBasedDecisionCore, SymbolView
+from swing_trader.health import HealthLevel, HealthStatus, assess_health
 from swing_trader.execution import ExecutionEngine
 from swing_trader.interfaces import BrokerInterface, DataFeed, NewsItem
 from swing_trader.ledger import Ledger
@@ -45,6 +46,7 @@ from swing_trader.monitors import (
     NewsMonitor,
     PortfolioMonitor,
 )
+from swing_trader.reconcile import reconcile_broker_ledger
 from swing_trader.reporter import morning_summary, push_window_preamble
 from swing_trader.risk import RiskEngine, RiskParams
 from swing_trader.scheduler import Event
@@ -259,10 +261,15 @@ class DailyLoop:
         self.risk_engine = RiskEngine(self.risk_params)
         self.decision = decision_core or RuleBasedDecisionCore(risk_params=self.risk_params)
         self.execution = ExecutionEngine(broker, ledger, mode=mode)
-        self.market_monitor = MarketMonitor(feed, breadth_symbols=self.symbols)
-        self.portfolio_monitor = PortfolioMonitor(feed, broker, symbols=self.symbols)
-        self.news_monitor = NewsMonitor(feed)
-        self.account_monitor = AccountRiskMonitor(broker, self.risk_params)
+        # Stamp snapshots with the loop's clock so Phase 0.8 health-freshness is
+        # consistent with ``self.clock()`` under the simulator/backtester too.
+        self.market_monitor = MarketMonitor(feed, breadth_symbols=self.symbols,
+                                            clock=self.clock)
+        self.portfolio_monitor = PortfolioMonitor(feed, broker, symbols=self.symbols,
+                                                  clock=self.clock)
+        self.news_monitor = NewsMonitor(feed, clock=self.clock)
+        self.account_monitor = AccountRiskMonitor(broker, self.risk_params,
+                                                  clock=self.clock)
         self.tech = TechnicalAgent()
         self.fundamentals_provider = fundamentals
         self.fund = FundamentalAgent(fundamentals or StaticFundamentals({}))
@@ -281,6 +288,7 @@ class DailyLoop:
         self._confirmation: Optional[ConfirmationService] = None
         self._entries_placed_today = 0
         self._memory_seen_trades: set[str] = set()
+        self._health: Optional[HealthStatus] = None  # Phase 0.8 (dead-man's switch)
 
     # ---------------------------------------------------------------- events
 
@@ -319,6 +327,14 @@ class DailyLoop:
         positions = self._portfolio.positions
         open_syms = {o.symbol for o in self.broker.get_orders(active_only=True)}
 
+        # Phase 0.8: assess system health BEFORE risk-evaluating candidates.
+        # When unhealthy (stale data / ledger-broker drift), the dead-man's
+        # switch vetoes every NEW entry in the RiskEngine below; exits still
+        # flow. Alert the reporter bot so the operator sees why (Loop.md §5.10).
+        health = self._assess_health(account)
+        if not health.entries_allowed:
+            self._alert_unhealthy(health)
+
         candidates = self.decision.propose(
             debates, views, account, positions,
             risk_on_off=self._market.risk_on_off if self._market else "neutral",
@@ -333,7 +349,8 @@ class DailyLoop:
             self.ledger.record_candidate(cand, self.mode)
             liquidity = self.portfolio_monitor.liquidity_for(cand.symbol)
             decision = self.risk_engine.evaluate(
-                cand, account, positions, liquidity, entries_today=entries_seen
+                cand, account, positions, liquidity, entries_today=entries_seen,
+                system_healthy=health.entries_allowed,
             )
             self.ledger.update_candidate(
                 cand.id, decision.candidate.status,
@@ -515,6 +532,43 @@ class DailyLoop:
                 continue
         return items
 
+    def _assess_health(self, account) -> HealthStatus:
+        """Phase 0.8 (Loop.md §5.10): assess whether the loop can be TRUSTED to
+        open NEW entries right now — from data freshness, ledger↔broker
+        reconciliation and the drawdown breaker. Stores the result on the
+        runtime (read-only Finance tab / reporter) and returns it. Pure w.r.t.
+        the injected snapshots; never raises (reconciliation fails closed)."""
+        recon = reconcile_broker_ledger(self.broker, self.ledger, self.mode)
+        health = assess_health(
+            market=self._market,
+            portfolio=self._portfolio,
+            news=self._news,
+            breaker_state=getattr(account, "breaker_state", None),
+            reconciliation=recon,
+            now=self.clock(),
+        )
+        self._health = health
+        if self.runtime is not None:
+            self.runtime.health = health
+        return health
+
+    def _alert_unhealthy(self, health: HealthStatus) -> None:
+        """Push a plain-language health alert to the reporter bot (outbound
+        only) when new entries are halted, so the operator sees the reason.
+        Never raises — an alert must not break the decide cycle."""
+        icon = "🔴" if health.level is HealthLevel.UNHEALTHY else "🟠"
+        reasons = "; ".join(health.warnings) or "system health degraded"
+        text = (
+            f"{icon} Trading halted — new entries paused (dead-man's switch).\n"
+            f"Reason: {reasons}\n"
+            f"Exits and protective stops are unaffected. "
+            f"(Loop.md §5.10, {health.level.value})"
+        )
+        try:
+            self.notify(text)
+        except Exception:  # noqa: BLE001 — alerting must never break the loop
+            logger.warning("health alert failed", extra={"level": health.level.value})
+
     def _revalidate_edit(self, cand: CandidateOrder) -> tuple[bool, str]:
         """Loop.md §5.6: every human edit re-passes the RiskEngine."""
         status = self.account_monitor.poll()
@@ -524,6 +578,10 @@ class DailyLoop:
             cand.model_copy(update={"status": cand.status}),
             status.snapshot, positions, liquidity,
             entries_today=self._entries_placed_today,
+            # Dead-man's switch also gates human edits: if the data the loop
+            # depends on went stale/drifted since decide, don't let an edit
+            # slip a fresh entry through (Loop.md §5.10). Exits are unaffected.
+            system_healthy=self._health.entries_allowed if self._health else True,
         )
         if not decision.approved:
             return False, decision.candidate.risk_note

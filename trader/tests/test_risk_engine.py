@@ -90,7 +90,8 @@ def liq(adv: float = 200_000_000.0, atr_pct: float | None = 3.0) -> LiquidityInf
 
 
 def evaluate(candidate=None, account=None, positions=None, liquidity=..., *,
-             engine: RiskEngine | None = None, entries_today: int = 0) -> RiskDecision:
+             engine: RiskEngine | None = None, entries_today: int = 0,
+             system_healthy: bool = True) -> RiskDecision:
     eng = engine if engine is not None else RiskEngine(RiskParams())
     return eng.evaluate(
         candidate if candidate is not None else make_candidate(),
@@ -98,6 +99,7 @@ def evaluate(candidate=None, account=None, positions=None, liquidity=..., *,
         positions if positions is not None else [],
         liq() if liquidity is ... else liquidity,
         entries_today=entries_today,
+        system_healthy=system_healthy,
     )
 
 
@@ -156,6 +158,44 @@ class TestExits:
         d = evaluate(make_sell(qty=10), account=account, positions=pos, liquidity=None)
         assert d.approved is True
         assert d.verdict is RiskVerdict.APPROVED
+
+
+# ---------------------------------------------- 1b. dead-man's switch (P0.8)
+
+
+class TestDeadMansSwitch:
+    """Loop.md §5.10: when the system is unhealthy (stale data / loop stall /
+    ledger-broker drift) new entries fail closed, but exits are never blocked.
+    Both branches of ``system_healthy`` are exercised to hold 100% coverage."""
+
+    def test_unhealthy_vetoes_new_entry(self):
+        d = evaluate(make_candidate(), system_healthy=False)
+        assert d.approved is False
+        assert d.verdict is RiskVerdict.VETOED
+        assert d.final_qty == 0.0
+        assert "dead-man's switch" in d.reasons[0]
+        assert "unhealthy" in d.reasons[0]
+
+    def test_healthy_allows_new_entry(self):
+        d = evaluate(make_candidate(), system_healthy=True)
+        assert d.approved is True
+        assert d.verdict is RiskVerdict.APPROVED
+
+    def test_unhealthy_still_allows_exit(self):
+        """Protection is never gated by the dead-man's switch (Loop.md §3)."""
+        pos = [Position(symbol="NVDA", qty=10, avg_px=90.0, mkt_px=80.0)]
+        d = evaluate(make_sell(qty=10), positions=pos, system_healthy=False)
+        assert d.approved is True
+        assert d.verdict is RiskVerdict.APPROVED
+        assert d.final_qty == 10.0
+
+    def test_switch_precedes_equity_and_breaker_checks(self):
+        """The switch fires before other entry checks — its reason wins even
+        when equity/breaker would also veto (proves ordering)."""
+        account = make_account(equity=0.0, cash=0.0, breaker=BreakerState.TRIPPED)
+        d = evaluate(make_candidate(), account=account, system_healthy=False)
+        assert d.verdict is RiskVerdict.VETOED
+        assert "dead-man's switch" in d.reasons[0]
 
 
 # ------------------------------------------------------- 2/3. equity & breaker

@@ -73,6 +73,8 @@ class FinanceRuntime:
     feed: Any = None  # DataFeed — real-time-ish quotes + K-line bars
     fundamentals: Any = None  # FundamentalsProvider — on-demand fundamentals
     llm_analyst: Any = None  # optional LLMAnalyst voice for /v1/analyze
+    # Phase 0.8 (resilience): last HealthStatus the loop assessed at decide time.
+    health: Any = None  # swing_trader.health.HealthStatus | None
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
 
 
@@ -129,13 +131,29 @@ def create_app(runtime: FinanceRuntime):
             snaps = runtime.ledger.get_snapshots(runtime.mode)
             if snaps:
                 breaker = snaps[-1].breaker_state.value
-        return {
+        out = {
             "status": "ok",
             "mode": runtime.mode.value,
             "loop_attached": runtime.broker is not None,
             "breaker": breaker,
             "ts": now.isoformat(),
         }
+        # Phase 0.8: surface the loop's last health assessment (dead-man's
+        # switch + freshness/reconciliation checks) so the Finance tab and the
+        # reporter bot can show *why* new entries may be halted. Read-only.
+        h = runtime.health
+        if h is not None:
+            out["health"] = {
+                "level": h.level.value,
+                "entries_allowed": h.entries_allowed,
+                "as_of": h.as_of.isoformat(),
+                "warnings": list(h.warnings),
+                "checks": [
+                    {"name": c.name, "level": c.level.value, "detail": c.detail}
+                    for c in h.checks
+                ],
+            }
+        return out
 
     @app.get(f"/{API_VERSION}/account")
     def account(mode: Optional[str] = Query(default=None)) -> dict:

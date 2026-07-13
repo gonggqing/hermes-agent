@@ -51,7 +51,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
     from swing_trader.api import DEFAULT_SERVICE_PORT, FinanceRuntime, create_app
     from swing_trader.dailyloop import DailyLoop, TelegramSurfaceAdapter
-    from swing_trader.datafeed import YFinanceFeed
+    from swing_trader.datafeed import RetryingFeed, YFinanceFeed
     from swing_trader.ledger import Ledger
     from swing_trader.llm import LLMAnalyst, llm_settings_from_env
     from swing_trader.paper_broker import PaperBroker
@@ -74,7 +74,10 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     broker = PaperBroker(starting_cash=args.starting_cash)
     rehydration = rehydrate_from_ledger(broker, ledger, settings.mode)
     print(rehydration.summary(), flush=True)
-    feed = YFinanceFeed()
+    # Phase 0.8 (resilience): wrap the live feed in RetryingFeed so transient
+    # yfinance errors (rate limits / network blips) retry with backoff instead
+    # of surfacing as a hard DataFeedError to the loop and /v1/analyze.
+    feed = RetryingFeed(YFinanceFeed())
     # Real fundamentals (Loop.md Phase 0.75 thrust A): yfinance-backed, cached,
     # fail-None. Feeds the scheduled FundamentalAgent AND on-demand /v1/analyze.
     from swing_trader.earnings import YFinanceEarnings
@@ -220,7 +223,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         cn_session = ResearchSession(
             market_id="CN",
             market_label="China / HK",
-            feed=YFinanceFeed(),
+            feed=RetryingFeed(YFinanceFeed()),
             ledger=ledger,  # never read (research-only); satisfies brief signature
             symbols=cn_wl.symbols,
             watchlist_lookup=cn_wl.lookup,
