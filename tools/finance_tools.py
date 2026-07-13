@@ -70,6 +70,35 @@ def _finance_get(path: str, params: dict | None = None) -> tuple[bool, dict | li
         return False, {"error": f"invalid JSON from finance service: {exc}"}
 
 
+def _finance_post(path: str, body: dict, *, params: dict | None = None,
+                  surface: str = "system") -> tuple[bool, dict | list]:
+    """POST ``path`` on the Finance service (used ONLY to create DRAFTS — never
+    to confirm/place). ``X-Finance-Surface: system`` marks these as Hermes-
+    drafted, which the service refuses to let system/LLM finalize (boundary #4).
+    Never raises; failures become an error dict."""
+    url = f"{FINANCE_SERVICE_URL}{path}"
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            resp = client.post(url, json=body, params=params or {},
+                               headers={"X-Finance-Surface": surface})
+    except Exception as exc:  # noqa: BLE001 — surfaced as a tool error
+        return False, {"error": f"finance service unreachable at "
+                                f"{FINANCE_SERVICE_URL}: {exc}"}
+    if resp.status_code not in (200, 201):
+        detail: object = resp.text
+        try:
+            body_json = resp.json()
+            detail = body_json.get("detail", body_json) if isinstance(body_json, dict) else body_json
+        except Exception:  # noqa: BLE001
+            pass
+        return False, {"error": f"finance service HTTP {resp.status_code}: {detail}",
+                       "status": resp.status_code}
+    try:
+        return True, resp.json()
+    except Exception as exc:  # noqa: BLE001
+        return False, {"error": f"invalid JSON from finance service: {exc}"}
+
+
 def _respond(ok: bool, payload: dict | list) -> str:
     if ok:
         return json.dumps(payload, ensure_ascii=False)
@@ -245,6 +274,144 @@ _ACCOUNT_VIEW_SCHEMA = {
 }
 
 
+# ------------------------------------------------------- portfolio (P0.9, draft-only)
+# Read the user's REAL holdings and DRAFT portfolio events from a conversation
+# ("today I bought 3 NVDA at 208.5"). These create a DRAFT only — a human must
+# confirm it on an authenticated surface (Desktop/Web/Telegram) before any
+# append-only event is recorded. There is deliberately NO confirm/update tool
+# (Loop.md P0.9 boundary #4/#8): free-form conversation can never mutate holdings.
+
+
+def _handle_portfolio_accounts(args: dict, **kw) -> str:
+    return _respond(*_finance_get("/v1/portfolio/accounts"))
+
+
+def _handle_portfolio_holdings(args: dict, **kw) -> str:
+    acct = str(args.get("account_id", "")).strip()
+    if not acct:
+        return tool_error("Missing required parameter: account_id "
+                          "(use portfolio_accounts to list account ids)")
+    return _respond(*_finance_get(f"/v1/portfolio/accounts/{acct}/holdings"))
+
+
+def _handle_draft_portfolio_trade(args: dict, **kw) -> str:
+    acct = str(args.get("account_id", "")).strip()
+    et = str(args.get("event_type", "buy")).strip().lower()
+    if not acct:
+        return tool_error("Missing required parameter: account_id")
+    body: dict = {
+        "account_id": acct,
+        "event_type": et,
+        "created_by": "hermes",
+        "original_text": str(args.get("original_text", ""))[:2000],
+    }
+    for key in ("symbol", "market", "currency", "occurred_at", "note", "external_id"):
+        v = args.get(key)
+        if v not in (None, ""):
+            body[key] = v
+    for key in ("qty", "price", "commission", "amount"):
+        v = args.get(key)
+        if v is not None:
+            try:
+                body[key] = float(v)
+            except (TypeError, ValueError):
+                return tool_error(f"Invalid numeric value for {key}: {v!r}")
+    ambig = args.get("ambiguities")
+    if isinstance(ambig, list) and ambig:
+        body["ambiguities"] = [str(a)[:200] for a in ambig]
+    return _respond(*_finance_post("/v1/portfolio/drafts", body, surface="system"))
+
+
+def _handle_draft_close_position(args: dict, **kw) -> str:
+    acct = str(args.get("account_id", "")).strip()
+    sym = _need_symbol(args)
+    if not acct or sym is None:
+        return tool_error("Both account_id and symbol are required")
+    return _respond(*_finance_post(
+        f"/v1/portfolio/accounts/{acct}/close-draft", {}, params={"symbol": sym},
+        surface="system"))
+
+
+_PORTFOLIO_ACCOUNTS_SCHEMA = {
+    "name": "portfolio_accounts",
+    "description": (
+        "List the user's REAL portfolio accounts (US/HK/CN) with id, name, market, "
+        "currency and provider. READ-ONLY. Use this to get an account_id before "
+        "reading holdings or drafting a trade."
+    ),
+    "parameters": {"type": "object", "properties": {}, "required": []},
+}
+
+_PORTFOLIO_HOLDINGS_SCHEMA = {
+    "name": "portfolio_holdings",
+    "description": (
+        "View current holdings + cash for one real portfolio account, derived from "
+        "its append-only events. Cost basis may be null when unknown (never guessed). "
+        "READ-ONLY."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "account_id": {"type": "string", "description": "Account id (see portfolio_accounts)."},
+        },
+        "required": ["account_id"],
+    },
+}
+
+_DRAFT_TRADE_SCHEMA = {
+    "name": "draft_portfolio_trade",
+    "description": (
+        "Turn a user statement about a REAL trade or holding (e.g. 'today I bought 3 "
+        "NVDA at 208.5, $1 fee') into a portfolio-event DRAFT for the user to review "
+        "and confirm. This does NOT change any holdings — it only proposes a draft; "
+        "the user must confirm it on Desktop/Web/Telegram. If the account, symbol, "
+        "quantity, price, currency or whether the order actually FILLED is unclear, do "
+        "NOT guess — ask the user, or pass what is uncertain in 'ambiguities'. Unknown "
+        "price is allowed (cost basis stays unknown)."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "account_id": {"type": "string", "description": "Target account id (see portfolio_accounts)."},
+            "event_type": {"type": "string",
+                           "enum": ["buy", "sell", "opening_balance", "dividend",
+                                    "fee", "cash_transfer", "split"],
+                           "description": "Kind of event (default buy)."},
+            "symbol": {"type": "string", "description": "Instrument symbol (e.g. NVDA, 0700.HK, 600519.SS)."},
+            "market": {"type": "string", "enum": ["US", "HK", "CN"]},
+            "currency": {"type": "string", "description": "ISO currency (USD/HKD/CNY)."},
+            "qty": {"type": "number", "description": "Share quantity (>0) for buy/sell."},
+            "price": {"type": "number", "description": "Execution price per share; omit if unknown."},
+            "commission": {"type": "number", "description": "Commission/fees, if known."},
+            "amount": {"type": "number", "description": "Cash amount for dividend/fee/cash_transfer."},
+            "occurred_at": {"type": "string", "description": "ISO timestamp of the trade, if known."},
+            "original_text": {"type": "string", "description": "The user's original statement (for the audit trail)."},
+            "ambiguities": {"type": "array", "items": {"type": "string"},
+                            "description": "Anything unclear that the user must clarify before confirming."},
+        },
+        "required": ["account_id"],
+    },
+}
+
+_DRAFT_CLOSE_SCHEMA = {
+    "name": "draft_close_position",
+    "description": (
+        "Draft a FULL exit of a holding ('I cleared my NVDA') — proposes selling the "
+        "current quantity from that account for the user to confirm. Does NOT change "
+        "holdings; the user must confirm. A placed-but-unfilled order does not reduce "
+        "holdings — if unsure whether it actually filled, ask the user instead."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "account_id": {"type": "string", "description": "Account id (see portfolio_accounts)."},
+            "symbol": {"type": "string", "description": "Symbol to close."},
+        },
+        "required": ["account_id", "symbol"],
+    },
+}
+
+
 # ------------------------------------------------------------------- registration
 
 for _name, _schema, _handler in (
@@ -254,6 +421,11 @@ for _name, _schema, _handler in (
     ("research_brief", _RESEARCH_BRIEF_SCHEMA, _handle_research_brief),
     ("search_research", _SEARCH_RESEARCH_SCHEMA, _handle_search_research),
     ("account_view", _ACCOUNT_VIEW_SCHEMA, _handle_account_view),
+    # Phase 0.9 portfolio — read + DRAFT-ONLY (no confirm/place; human confirms).
+    ("portfolio_accounts", _PORTFOLIO_ACCOUNTS_SCHEMA, _handle_portfolio_accounts),
+    ("portfolio_holdings", _PORTFOLIO_HOLDINGS_SCHEMA, _handle_portfolio_holdings),
+    ("draft_portfolio_trade", _DRAFT_TRADE_SCHEMA, _handle_draft_portfolio_trade),
+    ("draft_close_position", _DRAFT_CLOSE_SCHEMA, _handle_draft_close_position),
 ):
     registry.register(
         name=_name,

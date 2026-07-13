@@ -95,13 +95,80 @@ def test_finance_toolset_registered_and_read_only():
     assert names == {
         "get_quote", "get_kline", "analyze_symbol",
         "research_brief", "search_research", "account_view",
+        # Phase 0.9 portfolio: read + DRAFT-ONLY (no confirm/place tool).
+        "portfolio_accounts", "portfolio_holdings",
+        "draft_portfolio_trade", "draft_close_position",
     }
-    # HARD guardrail (Loop.md §3/§8): the toolset exposes NO write/order/approve
-    # capability to the general agent.
+    # HARD guardrail (Loop.md §3/§8, P0.9 boundary #4/#8): the toolset exposes NO
+    # write/order/approve capability AND no portfolio-CONFIRM/mutate tool — the
+    # LLM may only draft; a human confirms on an authenticated surface.
     forbidden = {"place_order", "approve", "approve_candidate", "cancel_order",
-                 "submit_order", "execute"}
+                 "submit_order", "execute", "confirm_portfolio_event",
+                 "confirm_draft", "update_position", "commit_portfolio"}
     assert not (names & forbidden)
     for n in names:
         entry = registry.get_entry(n)
         assert entry is not None and entry.toolset == "finance"
         assert entry.check_fn is ft._check_finance_available
+
+
+# ------------------------------------------------------- portfolio (P0.9)
+
+
+@pytest.fixture
+def capture_post(monkeypatch):
+    """Record POSTs (draft creation) so no network is hit."""
+    calls = []
+
+    def fake_post(path, body, *, params=None, surface="system"):
+        calls.append({"path": path, "body": body, "params": dict(params or {}),
+                      "surface": surface})
+        return True, {"ok": path, "status": "draft"}
+
+    monkeypatch.setattr(ft, "_finance_post", fake_post)
+    return calls
+
+
+def test_portfolio_accounts_and_holdings(capture):
+    ft._handle_portfolio_accounts({})
+    assert capture[-1][0] == "/v1/portfolio/accounts"
+    assert "Missing" in ft._handle_portfolio_holdings({})
+    ft._handle_portfolio_holdings({"account_id": "acc1"})
+    assert capture[-1][0] == "/v1/portfolio/accounts/acc1/holdings"
+
+
+def test_draft_portfolio_trade_posts_draft_as_system(capture_post):
+    out = ft._handle_draft_portfolio_trade({
+        "account_id": "acc1", "event_type": "buy", "symbol": "NVDA",
+        "qty": 3, "price": 208.5, "commission": 1,
+        "original_text": "bought 3 NVDA at 208.5",
+    })
+    assert json.loads(out)["status"] == "draft"
+    call = capture_post[-1]
+    assert call["path"] == "/v1/portfolio/drafts"
+    assert call["surface"] == "system"  # never a human surface → cannot self-confirm
+    assert call["body"]["created_by"] == "hermes"
+    assert call["body"]["qty"] == 3.0 and call["body"]["price"] == 208.5
+
+
+def test_draft_trade_requires_account(capture_post):
+    assert "account_id" in ft._handle_draft_portfolio_trade({"symbol": "NVDA"})
+
+
+def test_draft_trade_rejects_bad_number(capture_post):
+    assert "Invalid" in ft._handle_draft_portfolio_trade(
+        {"account_id": "a", "qty": "lots"})
+
+
+def test_draft_close_position(capture_post):
+    ft._handle_draft_close_position({"account_id": "acc1", "symbol": "NVDA"})
+    call = capture_post[-1]
+    assert call["path"] == "/v1/portfolio/accounts/acc1/close-draft"
+    assert call["params"] == {"symbol": "NVDA"} and call["surface"] == "system"
+    assert "required" in ft._handle_draft_close_position({"account_id": "acc1"})
+
+
+def test_no_confirm_tool_exists():
+    """The draft-only tools must NOT include any way to finalize a draft."""
+    names = set(registry.get_tool_names_for_toolset("finance"))
+    assert not any("confirm" in n or "commit" in n for n in names)
