@@ -1,29 +1,30 @@
 // Hand-built master-detail shell for the Finance tab (no shared web
 // primitive exists — precedent: ChannelsPage's Tailwind grid). A grouped
-// left sidebar + right detail + a bottom paper/live mode switcher, reused by
-// the Research, Queue and Portfolio views. Responsive: the two-column grid
-// collapses to a stack on narrow screens.
+// left sidebar + right detail, reused by the Research, Queue and Portfolio
+// views, plus the page-level bottom status/utility bar (service health +
+// breaker + last-updated + refresh + the paper/live toggle). Responsive: the
+// two-column grid collapses to a stack on narrow screens.
 
 import type { ReactNode } from "react";
-import { Segmented } from "@nous-research/ui/ui/components/segmented";
+import { RefreshCw } from "lucide-react";
+import { Button } from "@nous-research/ui/ui/components/button";
+import { Spinner } from "@nous-research/ui/ui/components/spinner";
 import { cn } from "@/lib/utils";
-import type { FinanceMode } from "@/lib/api";
+import type { FinanceHealth, FinanceMode } from "@/lib/api";
+import { useI18n } from "@/i18n";
 import { useFinanceT } from "./i18n";
 
 export function MasterDetail({
   sidebar,
-  footer,
   children,
 }: {
   sidebar: ReactNode;
-  footer?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)] lg:items-start">
       <aside className="flex flex-col gap-3 lg:sticky lg:top-4">
         <div className="flex flex-col gap-3">{sidebar}</div>
-        {footer}
       </aside>
       <div className="min-w-0">{children}</div>
     </div>
@@ -98,41 +99,155 @@ export function SidebarButton({
 }
 
 /**
- * The idiomatic finance paper/live toggle, pinned to the bottom of each
- * master-detail view. `mode` is the effective mode (override ?? service);
- * picking a value overrides the service default, which the hint line names.
+ * The idiomatic finance paper/live toggle — a SINGLE control (not two tabs)
+ * that reads out the current mode and flips to the other on click. `mode` is
+ * the effective mode (override ?? service); clicking sets an explicit override,
+ * so the initial `null`-follows-service semantics are preserved until the user
+ * touches it. Filter-only: never re-modes an action (Loop.md §3).
  */
-export function ModeSwitcher({
+export function ModeToggle({
   mode,
   serviceMode,
-  onChange,
+  onToggle,
 }: {
   mode: FinanceMode;
   serviceMode: FinanceMode | null;
-  onChange: (mode: FinanceMode) => void;
+  onToggle: () => void;
 }) {
   const ft = useFinanceT();
+  const isLive = mode === "live";
   const modeLabel = (m: FinanceMode) =>
     m === "live" ? ft.layout.modeLive : ft.layout.modePaper;
   return (
-    <div className="flex flex-col gap-1.5 border border-border p-2">
-      <span className="px-1 text-xs uppercase tracking-wider text-text-tertiary">
-        {ft.layout.modeLabel}
-      </span>
-      <Segmented<FinanceMode>
-        size="sm"
-        value={mode}
-        onChange={onChange}
-        options={[
-          { value: "paper", label: ft.layout.modePaper },
-          { value: "live", label: ft.layout.modeLive },
-        ]}
-      />
-      {serviceMode && (
-        <span className="px-1 font-mondwest normal-case text-xs text-text-tertiary">
-          {ft.layout.modeFollowsService.replace("{mode}", modeLabel(serviceMode))}
-        </span>
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-label={ft.page.toggleMode}
+      title={
+        serviceMode
+          ? ft.layout.modeFollowsService.replace("{mode}", modeLabel(serviceMode))
+          : undefined
+      }
+      className={cn(
+        "inline-flex items-center gap-1.5 border px-2.5 py-1 font-mondwest text-display text-xs uppercase tracking-wider outline-none transition-colors focus-visible:ring-1 focus-visible:ring-primary/60",
+        isLive
+          ? "border-destructive bg-destructive/10 text-destructive hover:bg-destructive/20"
+          : "border-border bg-secondary/30 text-foreground hover:bg-secondary/50",
       )}
+    >
+      <span
+        className={cn(
+          "h-1.5 w-1.5 rounded-full",
+          isLive ? "bg-destructive" : "bg-muted-foreground/60",
+        )}
+      />
+      {isLive ? ft.page.modeLive : ft.page.modePaper}
+    </button>
+  );
+}
+
+/**
+ * Bottom status/utility bar for the Finance view — the service online/offline
+ * dot, the loop-attached indicator, the circuit-breaker state, the last-updated
+ * time, a manual refresh button, and the paper/live toggle. Pinned to the
+ * bottom, out of the top page header.
+ */
+export function FinanceBottomBar({
+  health,
+  offline,
+  lastUpdated,
+  loading,
+  onRefresh,
+  mode,
+  serviceMode,
+  onToggleMode,
+}: {
+  health: FinanceHealth | null;
+  offline: boolean;
+  lastUpdated: Date | null;
+  loading: boolean;
+  onRefresh: () => void;
+  mode: FinanceMode;
+  serviceMode: FinanceMode | null;
+  onToggleMode: () => void;
+}) {
+  const ft = useFinanceT();
+  const { t } = useI18n();
+  const breaker = health?.breaker ?? "UNKNOWN";
+  const tripped = breaker === "TRIPPED";
+  const breakerText =
+    breaker === "TRIPPED"
+      ? ft.page.breakerTripped
+      : breaker === "NORMAL"
+        ? ft.page.breakerNormal
+        : "—";
+
+  return (
+    <div className="sticky bottom-0 z-10 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border bg-background/95 px-3 py-2 backdrop-blur">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 font-mondwest normal-case text-xs text-muted-foreground">
+        {/* Service online / offline. */}
+        <span className="flex items-center gap-1.5">
+          <span
+            className={cn(
+              "h-2 w-2 rounded-full",
+              offline ? "bg-destructive" : "bg-success",
+            )}
+          />
+          {offline ? ft.page.offline : ft.page.online}
+        </span>
+
+        {/* Loop-attached indicator. */}
+        {!offline && health && (
+          <span className="flex items-center gap-1.5">
+            <span
+              className={cn(
+                "h-2 w-2 rounded-full",
+                health.loop_attached ? "bg-success" : "bg-muted-foreground/40",
+              )}
+            />
+            {health.loop_attached ? ft.page.loopAttached : ft.page.loopIdle}
+          </span>
+        )}
+
+        {/* Circuit-breaker state. */}
+        {!offline && (
+          <span className="flex items-center gap-1.5">
+            <span className="text-text-tertiary">{ft.page.breakerLabel}</span>
+            <span className={tripped ? "text-destructive" : "text-foreground"}>
+              {breakerText}
+            </span>
+          </span>
+        )}
+
+        {/* Last-updated time. */}
+        {lastUpdated && !offline && (
+          <span className="text-text-tertiary">
+            {ft.page.updatedAt.replace(
+              "{time}",
+              lastUpdated.toLocaleTimeString(),
+            )}
+          </span>
+        )}
+      </div>
+
+      <div className="ml-auto flex items-center gap-2">
+        <Button
+          type="button"
+          ghost
+          size="icon"
+          className="text-muted-foreground hover:text-foreground"
+          onClick={onRefresh}
+          disabled={loading}
+          aria-label={t.common.refresh}
+        >
+          {loading ? <Spinner /> : <RefreshCw className="h-4 w-4" />}
+        </Button>
+        <ModeToggle
+          mode={mode}
+          serviceMode={serviceMode}
+          onToggle={onToggleMode}
+        />
+      </div>
     </div>
   );
 }

@@ -7,6 +7,7 @@ export const ja = defineLocale({
     modeBarAria: '取引モード',
     modeFollowsService: 'サービスに追従',
     modeOverridden: '手動指定',
+    modeSwitchTo: mode => `${mode}に切り替え`,
     queue: {
       selectPrompt: '候補を選択して、承認・編集・却下を行います。',
       rowMeta: (side, qty) => `${side} · ${qty}`
@@ -56,6 +57,13 @@ export const ja = defineLocale({
       chartTitle: '価格 · 直近 120 日',
       chartAria: symbol => `${symbol} の価格チャート`,
       chartEmpty: '価格履歴がありません。',
+      chartLoading: 'チャートを読み込み中…',
+      hoverOpen: '始',
+      hoverHigh: '高',
+      hoverLow: '安',
+      hoverClose: '終',
+      hoverVolume: '出来高',
+      liveTag: 'ライブ',
       analyze: '分析',
       hideAnalysis: '分析を隠す',
       analyzing: '分析中…',

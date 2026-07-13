@@ -3,10 +3,9 @@ import type * as React from 'react'
 import { useState } from 'react'
 
 import { PageLoader } from '@/components/page-loader'
-import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/error-state'
-import { type FinanceHealth, type FinanceMode, getFinanceHealth } from '@/hermes'
+import { type FinanceMode, getFinanceHealth } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { AlertTriangle, RefreshCw } from '@/lib/icons'
 import { cn } from '@/lib/utils'
@@ -16,9 +15,9 @@ import { useRouteEnumParam } from '../hooks/use-route-enum-param'
 import { PageSearchShell } from '../page-search-shell'
 import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
 
-import { BREAKER_TONE, enumLabel, FINANCE_KEY, financeKey, fmtTs, parseFinanceError } from './lib'
+import { FinanceBottomBar } from './chrome'
+import { FINANCE_KEY, financeKey, parseFinanceError } from './lib'
 import { FinancePortfolioView } from './portfolio'
-import { FinancePill } from './primitives'
 import { FinanceQueueView, usePendingCandidates } from './queue'
 import { FinanceResearchView } from './research'
 
@@ -68,15 +67,24 @@ export function FinanceView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...
 
   useRefreshHotkey(refreshAll)
 
-  const modeProps = { mode, modeOverride, onModeChange: setModeOverride }
+  // The service status / breaker / loop / last-updated / refresh cluster and
+  // the single paper/live toggle now live in ONE bottom utility bar, docked as
+  // each view's DetailColumn actionBar (out of the top header).
+  const bottomBar = (
+    <FinanceBottomBar
+      health={health}
+      mode={mode}
+      modeOverride={modeOverride}
+      offline={offline}
+      onModeChange={setModeOverride}
+      onRefresh={refreshAll}
+    />
+  )
 
   return (
     <PageSearchShell
       {...props}
       activeTab={tab}
-      filters={
-        <FinanceHealthStrip health={health} offline={offline} onRefresh={refreshAll} />
-      }
       onSearchChange={() => undefined}
       onTabChange={next => setTab(next as FinanceTabId)}
       searchHidden
@@ -111,57 +119,14 @@ export function FinanceView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...
           )}
           <div className="min-h-0 flex-1">
             {tab === 'research' && (
-              <FinanceResearchView {...modeProps} enabled={online} onOpenQueue={() => setTab('queue')} />
+              <FinanceResearchView bottomBar={bottomBar} enabled={online} onOpenQueue={() => setTab('queue')} />
             )}
-            {tab === 'queue' && <FinanceQueueView {...modeProps} enabled={online} />}
-            {tab === 'portfolio' && <FinancePortfolioView {...modeProps} enabled={online} />}
+            {tab === 'queue' && <FinanceQueueView bottomBar={bottomBar} enabled={online} />}
+            {tab === 'portfolio' && <FinancePortfolioView bottomBar={bottomBar} enabled={online} mode={mode} />}
           </div>
         </div>
       )}
     </PageSearchShell>
-  )
-}
-
-// Header strip under the tabs: service status, breaker and loop state, refresh
-// — always visible so connection state is never ambiguous. The paper/live
-// switch itself now lives at the BOTTOM of each master-detail view.
-function FinanceHealthStrip({
-  health,
-  offline,
-  onRefresh
-}: {
-  health: FinanceHealth | undefined
-  offline: boolean
-  onRefresh: () => void
-}) {
-  const { t } = useI18n()
-  const copy = t.finance
-
-  return (
-    <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-1.5">
-      <span className="inline-flex items-center gap-1.5 text-xs text-(--ui-text-secondary)">
-        <StatusDot tone={offline ? 'bad' : health ? 'good' : 'muted'} />
-        {offline ? copy.serviceOffline : health ? copy.serviceOnline : copy.serviceConnecting}
-      </span>
-
-      {health && (
-        <>
-          <FinancePill variant={health.breaker === 'TRIPPED' ? 'destructive' : 'muted'}>
-            <StatusDot tone={BREAKER_TONE[health.breaker] ?? 'muted'} />
-            {copy.breakerPill(enumLabel(t.finance.enums.breaker, health.breaker))}
-          </FinancePill>
-          <FinancePill variant={health.loop_attached ? 'default' : 'muted'}>
-            {health.loop_attached ? copy.loopAttached : copy.loopIdle}
-          </FinancePill>
-          <span className="text-[0.62rem] tabular-nums text-muted-foreground/70">{copy.asOf(fmtTs(health.ts))}</span>
-        </>
-      )}
-
-      <Button className="ml-auto" onClick={onRefresh} size="xs" variant="ghost">
-        <RefreshCw className="size-3" />
-        {t.common.refresh}
-      </Button>
-    </div>
   )
 }
 

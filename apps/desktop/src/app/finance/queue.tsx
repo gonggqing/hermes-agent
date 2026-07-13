@@ -18,7 +18,6 @@ import {
   type FinanceActionPayload,
   type FinanceCandidate,
   type FinanceCandidateEdits,
-  type FinanceMode,
   type FinancePendingCandidate,
   getFinancePendingCandidates,
   postFinanceCandidateAction
@@ -29,7 +28,7 @@ import { notify, notifyError } from '@/store/notifications'
 import { useRouteEnumParam } from '../hooks/use-route-enum-param'
 import { DetailColumn, ListColumn, MasterDetail } from '../master-detail'
 
-import { FinanceDetailPlaceholder, FinanceModeBar, FinanceNavRow } from './chrome'
+import { FinanceDetailPlaceholder, FinanceNavRow } from './chrome'
 import {
   CANDIDATE_STATUS_TONE,
   enumLabel,
@@ -73,17 +72,7 @@ interface ActionVars {
   version: number
 }
 
-export function FinanceQueueView({
-  enabled,
-  mode,
-  modeOverride,
-  onModeChange
-}: {
-  enabled: boolean
-  mode: FinanceMode
-  modeOverride: FinanceMode | null
-  onModeChange: (mode: FinanceMode) => void
-}) {
+export function FinanceQueueView({ bottomBar, enabled }: { bottomBar: React.ReactNode; enabled: boolean }) {
   const { t } = useI18n()
   const copy = t.finance.queue
   const queryClient = useQueryClient()
@@ -142,8 +131,6 @@ export function FinanceQueueView({
   const [selectedId, setSelectedId] = useRouteEnumParam('action', candidateIds, candidateIds[0] ?? '')
   const selected = pending.find(entry => entry.candidate.id === selectedId) ?? pending[0] ?? null
 
-  const actionBar = <FinanceModeBar mode={mode} modeOverride={modeOverride} onModeChange={onModeChange} />
-
   return (
     <>
       <MasterDetail>
@@ -174,7 +161,7 @@ export function FinanceQueueView({
           </QuerySection>
         </ListColumn>
 
-        <DetailColumn actionBar={actionBar}>
+        <DetailColumn actionBar={bottomBar}>
           {selected ? (
             <PendingCandidateCard
               busy={actionMutation.isPending}

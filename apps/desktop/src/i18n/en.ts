@@ -1545,6 +1545,7 @@ export const en: Translations = {
     modeBarAria: 'Trading mode',
     modeFollowsService: 'follows service',
     modeOverridden: 'override',
+    modeSwitchTo: mode => `Switch to ${mode}`,
     queue: {
       empty:
         'No pending candidates. The queue fills when the daily loop publishes risk-approved candidates (11:30 ET) and empties at the 12:30 ET cutoff.',
@@ -1753,6 +1754,13 @@ export const en: Translations = {
       chartTitle: 'Price · last 120 days',
       chartAria: symbol => `Price chart for ${symbol}`,
       chartEmpty: 'No price history available.',
+      chartLoading: 'Loading chart…',
+      hoverOpen: 'O',
+      hoverHigh: 'H',
+      hoverLow: 'L',
+      hoverClose: 'C',
+      hoverVolume: 'Vol',
+      liveTag: 'LIVE',
       analyze: 'Analyze',
       hideAnalysis: 'Hide analysis',
       analyzing: 'Analyzing…',

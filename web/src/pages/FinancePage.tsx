@@ -1,17 +1,10 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   Globe,
   Newspaper,
   PlugZap,
-  RefreshCw,
   TrendingUp,
   Wallet,
 } from "lucide-react";
@@ -35,7 +28,6 @@ import type {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Badge } from "@nous-research/ui/ui/components/badge";
-import { Button } from "@nous-research/ui/ui/components/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@nous-research/ui/ui/components/card";
 import { CommandBlock } from "@nous-research/ui/ui/components/command-block";
 import { Segmented } from "@nous-research/ui/ui/components/segmented";
@@ -43,15 +35,14 @@ import { Spinner } from "@nous-research/ui/ui/components/spinner";
 import { Stats } from "@nous-research/ui/ui/components/stats";
 import { Toast } from "@nous-research/ui/ui/components/toast";
 import { useToast } from "@nous-research/ui/hooks/use-toast";
-import { usePageHeader } from "@/contexts/usePageHeader";
 import { useI18n } from "@/i18n";
 import { ApprovalQueue } from "@/pages/finance/ApprovalQueue";
 import { HistorySection } from "@/pages/finance/HistorySection";
 import { ResearchBrief } from "@/pages/finance/ResearchBrief";
 import { WatchModule } from "@/pages/finance/WatchModule";
 import {
+  FinanceBottomBar,
   MasterDetail,
-  ModeSwitcher,
   SidebarButton,
   SidebarGroup,
 } from "@/pages/finance/layout";
@@ -597,7 +588,9 @@ function ResearchDetail({
   ft: FinanceTranslations;
 }) {
   if (isWatchDesk(desk)) {
-    return <WatchModule moduleKey={desk} />;
+    // Keyed by desk so switching watch modules remounts with a fresh selection
+    // + analysis state (no reset effect needed).
+    return <WatchModule key={desk} moduleKey={desk} />;
   }
   if (desk === "us") {
     return <ResearchBrief brief={briefs.us} market="us" />;
@@ -622,13 +615,11 @@ function ResearchView({
   onDeskChange,
   briefs,
   ft,
-  footer,
 }: {
   desk: FinanceDesk;
   onDeskChange: (desk: FinanceDesk) => void;
   briefs: { us: FinanceResearchBriefData | null; cn: FinanceResearchBriefData | null };
   ft: FinanceTranslations;
-  footer: React.ReactNode;
 }) {
   const sidebar = (
     <>
@@ -667,7 +658,7 @@ function ResearchView({
     </>
   );
   return (
-    <MasterDetail sidebar={sidebar} footer={footer}>
+    <MasterDetail sidebar={sidebar}>
       <ResearchDetail desk={desk} briefs={briefs} ft={ft} />
     </MasterDetail>
   );
@@ -684,7 +675,6 @@ function QueueView({
   ft,
   emptyForMode,
   modeLabel,
-  footer,
 }: {
   pending: FinancePendingCandidate[];
   selectedId: string | null;
@@ -694,7 +684,6 @@ function QueueView({
   ft: FinanceTranslations;
   emptyForMode: boolean;
   modeLabel: string;
-  footer: React.ReactNode;
 }) {
   const selected = pending.find((p) => p.candidate.id === selectedId) ?? null;
   const emptyNote = emptyForMode
@@ -728,7 +717,7 @@ function QueueView({
   );
 
   return (
-    <MasterDetail sidebar={sidebar} footer={footer}>
+    <MasterDetail sidebar={sidebar}>
       {selected !== null ? (
         <ApprovalQueue
           pending={[selected]}
@@ -764,7 +753,6 @@ function PortfolioView({
   candidates,
   fills,
   ft,
-  footer,
 }: {
   selected: string;
   onSelect: (view: string) => void;
@@ -779,7 +767,6 @@ function PortfolioView({
   candidates: FinanceCandidate[];
   fills: FinanceFill[];
   ft: FinanceTranslations;
-  footer: React.ReactNode;
 }) {
   const positions = liveView?.positions ?? [];
   const accountRows: { view: PortfolioView; label: string }[] = [
@@ -866,11 +853,7 @@ function PortfolioView({
     }
   }
 
-  return (
-    <MasterDetail sidebar={sidebar} footer={footer}>
-      {detail}
-    </MasterDetail>
-  );
+  return <MasterDetail sidebar={sidebar}>{detail}</MasterDetail>;
 }
 
 // ── Page ──────────────────────────────────────────────────────────────
@@ -899,9 +882,7 @@ export default function FinancePage() {
   const [queueSel, setQueueSel] = useState<string | null>(null);
   const [portfolioSel, setPortfolioSel] = useState<string>("account");
   const { toast, showToast } = useToast();
-  const { setAfterTitle, setEnd } = usePageHeader();
   const ft = useFinanceT();
-  const { t } = useI18n();
 
   // ── URL-persisted top tab + research desk ──
   const tabParam = searchParams.get("tab");
@@ -1004,58 +985,13 @@ export default function FinancePage() {
     return () => window.clearInterval(id);
   }, [load]);
 
-  useLayoutEffect(() => {
-    setAfterTitle(
-      <div className="flex flex-wrap items-center gap-2">
-        {health && !offline && (
-          <>
-            <Badge tone={health.mode === "live" ? "destructive" : "secondary"}>
-              {health.mode === "live" ? ft.page.modeLive : ft.page.modePaper}
-            </Badge>
-            <span className="flex items-center gap-1.5 font-mondwest normal-case text-xs text-muted-foreground">
-              <span
-                className={cn(
-                  "h-2 w-2 rounded-full",
-                  health.loop_attached
-                    ? "bg-success"
-                    : "bg-muted-foreground/40",
-                )}
-              />
-              {health.loop_attached ? ft.page.loopAttached : ft.page.loopIdle}
-            </span>
-          </>
-        )}
-        {offline && <Badge tone="destructive">{ft.page.offline}</Badge>}
-        {lastUpdated && !offline && (
-          <span className="font-mondwest normal-case text-xs text-text-tertiary">
-            {ft.page.updatedAt.replace(
-              "{time}",
-              lastUpdated.toLocaleTimeString(),
-            )}
-          </span>
-        )}
-        <Button
-          type="button"
-          ghost
-          size="icon"
-          className="text-muted-foreground hover:text-foreground"
-          onClick={() => {
-            setLoading(true);
-            load();
-          }}
-          disabled={loading}
-          aria-label={t.common.refresh}
-        >
-          {loading ? <Spinner /> : <RefreshCw />}
-        </Button>
-      </div>,
-    );
-    setEnd(null);
-    return () => {
-      setAfterTitle(null);
-      setEnd(null);
-    };
-  }, [health, offline, lastUpdated, loading, load, setAfterTitle, setEnd, ft, t]);
+  // Manual refresh, shared by the bottom utility bar. Flips `loading` on so the
+  // refresh control shows its spinner; the 30s background refresh never does
+  // (it leaves `loading` false), so the whole-page spinner never flashes.
+  const refresh = useCallback(() => {
+    setLoading(true);
+    load();
+  }, [load]);
 
   const ledgerFallback = account !== null && "source" in account;
   const liveView = account !== null && !("source" in account) ? account : null;
@@ -1076,11 +1012,21 @@ export default function FinancePage() {
     serviceMode === null || effectiveMode === serviceMode;
   const queuePending = modeMatchesService ? pending : [];
 
-  const modeSwitcher = (
-    <ModeSwitcher
+  // Single paper/live toggle: flip to the other mode as an explicit override.
+  // Filter-only — it re-scopes reads, never re-modes an action (Loop.md §3).
+  const toggleMode = () =>
+    setModeOverride(effectiveMode === "paper" ? "live" : "paper");
+
+  const bottomBar = (
+    <FinanceBottomBar
+      health={health}
+      offline={offline}
+      lastUpdated={lastUpdated}
+      loading={loading}
+      onRefresh={refresh}
       mode={effectiveMode}
       serviceMode={serviceMode}
-      onChange={setModeOverride}
+      onToggleMode={toggleMode}
     />
   );
 
@@ -1096,6 +1042,7 @@ export default function FinancePage() {
     return (
       <div className="flex flex-col gap-6">
         <OfflinePanel />
+        {bottomBar}
         <Toast toast={toast} />
       </div>
     );
@@ -1131,7 +1078,6 @@ export default function FinancePage() {
           onDeskChange={setResearchDesk}
           briefs={briefs}
           ft={ft}
-          footer={modeSwitcher}
         />
       )}
 
@@ -1145,7 +1091,6 @@ export default function FinancePage() {
           ft={ft}
           emptyForMode={!modeMatchesService}
           modeLabel={modeLabelText}
-          footer={modeSwitcher}
         />
       )}
 
@@ -1164,9 +1109,10 @@ export default function FinancePage() {
           candidates={candidates}
           fills={fills}
           ft={ft}
-          footer={modeSwitcher}
         />
       )}
+
+      {bottomBar}
 
       <Toast toast={toast} />
     </div>

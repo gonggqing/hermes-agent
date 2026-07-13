@@ -1,9 +1,14 @@
 import type { ReactNode } from 'react'
 
-import { SegmentedControl } from '@/components/ui/segmented-control'
-import type { FinanceMode } from '@/hermes'
+import { StatusDot } from '@/components/status-dot'
+import { Button } from '@/components/ui/button'
+import type { FinanceHealth, FinanceMode } from '@/hermes'
 import { useI18n } from '@/i18n'
+import { RefreshCw } from '@/lib/icons'
 import { cn } from '@/lib/utils'
+
+import { BREAKER_TONE, enumLabel, fmtTs } from './lib'
+import { FinancePill } from './primitives'
 
 // Shared master-detail chrome for the three Finance views (Research, Queue,
 // Portfolio). Rows mirror the messaging sidebar (PlatformRow) so the surfaces
@@ -84,10 +89,11 @@ export function FinanceNavRow({
   )
 }
 
-// The paper/live segmented control pinned to the BOTTOM of each master-detail
-// view (rendered inside DetailColumn's actionBar). Mode override = null follows
-// the service /health.mode; setting it is an explicit override.
-export function FinanceModeBar({
+// Single paper/live toggle button (replaces the 2-segment SegmentedControl):
+// one pill showing the CURRENT mode; clicking switches to the other. Live is
+// amber-toned so real-mode is never mistaken for paper. Override = null follows
+// the service /health.mode; clicking sets an explicit override.
+function ModeToggle({
   mode,
   modeOverride,
   onModeChange
@@ -98,20 +104,85 @@ export function FinanceModeBar({
 }) {
   const { t } = useI18n()
   const copy = t.finance
+  const live = mode === 'live'
+  const next: FinanceMode = live ? 'paper' : 'live'
+  const switchLabel = copy.modeSwitchTo(next === 'live' ? copy.modeLive : copy.modePaper)
 
   return (
-    <div aria-label={copy.modeBarAria} className="flex w-full items-center gap-2" role="group">
-      <SegmentedControl
-        onChange={onModeChange}
-        options={[
-          { id: 'paper' as const, label: copy.modePaper },
-          { id: 'live' as const, label: copy.modeLive }
-        ]}
-        value={mode}
-      />
+    <span className="flex items-center gap-2">
+      <button
+        aria-label={switchLabel}
+        className={cn(
+          'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[0.6875rem] font-semibold uppercase tracking-wide transition-colors',
+          live
+            ? 'bg-amber-500/15 text-amber-600 ring-1 ring-inset ring-amber-500/40 hover:bg-amber-500/20 dark:text-amber-300'
+            : 'bg-(--ui-bg-tertiary) text-(--ui-text-secondary) ring-1 ring-inset ring-(--ui-stroke-tertiary) hover:text-foreground'
+        )}
+        onClick={() => onModeChange(next)}
+        title={switchLabel}
+        type="button"
+      >
+        <StatusDot tone={live ? 'warn' : 'muted'} />
+        {live ? copy.modeLive : copy.modePaper}
+      </button>
       <span className="text-[0.62rem] text-muted-foreground/70">
         {modeOverride === null ? copy.modeFollowsService : copy.modeOverridden}
       </span>
+    </span>
+  )
+}
+
+// Bottom utility bar pinned below each master-detail view (rendered inside
+// DetailColumn's actionBar): the single paper/live toggle on the LEFT, and the
+// service status / breaker / loop / last-updated / manual-refresh cluster on
+// the RIGHT — relocated here out of the top header so connection state reads as
+// chrome, not a filter.
+export function FinanceBottomBar({
+  health,
+  mode,
+  modeOverride,
+  offline,
+  onModeChange,
+  onRefresh
+}: {
+  health: FinanceHealth | undefined
+  mode: FinanceMode
+  modeOverride: FinanceMode | null
+  offline: boolean
+  onModeChange: (mode: FinanceMode) => void
+  onRefresh: () => void
+}) {
+  const { t } = useI18n()
+  const copy = t.finance
+
+  return (
+    <div aria-label={copy.modeBarAria} className="flex w-full flex-wrap items-center gap-x-3 gap-y-1.5" role="group">
+      <ModeToggle mode={mode} modeOverride={modeOverride} onModeChange={onModeChange} />
+
+      <div className="ml-auto flex flex-wrap items-center gap-x-2.5 gap-y-1">
+        <span className="inline-flex items-center gap-1.5 text-[0.68rem] text-(--ui-text-secondary)">
+          <StatusDot tone={offline ? 'bad' : health ? 'good' : 'muted'} />
+          {offline ? copy.serviceOffline : health ? copy.serviceOnline : copy.serviceConnecting}
+        </span>
+
+        {health && (
+          <>
+            <FinancePill variant={health.breaker === 'TRIPPED' ? 'destructive' : 'muted'}>
+              <StatusDot tone={BREAKER_TONE[health.breaker] ?? 'muted'} />
+              {copy.breakerPill(enumLabel(t.finance.enums.breaker, health.breaker))}
+            </FinancePill>
+            <FinancePill variant={health.loop_attached ? 'default' : 'muted'}>
+              {health.loop_attached ? copy.loopAttached : copy.loopIdle}
+            </FinancePill>
+            <span className="text-[0.62rem] tabular-nums text-muted-foreground/70">{copy.asOf(fmtTs(health.ts))}</span>
+          </>
+        )}
+
+        <Button onClick={onRefresh} size="xs" variant="ghost">
+          <RefreshCw className="size-3" />
+          {t.common.refresh}
+        </Button>
+      </div>
     </div>
   )
 }

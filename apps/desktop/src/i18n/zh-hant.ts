@@ -7,6 +7,7 @@ export const zhHant = defineLocale({
     modeBarAria: '交易模式',
     modeFollowsService: '跟隨服務',
     modeOverridden: '手動覆寫',
+    modeSwitchTo: mode => `切換到${mode}`,
     queue: {
       selectPrompt: '選擇一個候選單以查看並批准、編輯或拒絕。',
       rowMeta: (side, qty) => `${side} · ${qty}`
@@ -56,6 +57,13 @@ export const zhHant = defineLocale({
       chartTitle: '價格 · 近 120 天',
       chartAria: symbol => `${symbol} 價格走勢圖`,
       chartEmpty: '暫無價格歷史。',
+      chartLoading: '載入圖表…',
+      hoverOpen: '開',
+      hoverHigh: '高',
+      hoverLow: '低',
+      hoverClose: '收',
+      hoverVolume: '量',
+      liveTag: '即時',
       analyze: '分析',
       hideAnalysis: '隱藏分析',
       analyzing: '分析中…',

@@ -8,7 +8,6 @@ import { Input } from '@/components/ui/input'
 import {
   type FinanceBriefPendingCandidate,
   type FinanceFreshness,
-  type FinanceMode,
   type FinanceMover,
   type FinanceNewsDigestItem,
   type FinanceProvenanceLink,
@@ -28,7 +27,7 @@ import { cn } from '@/lib/utils'
 import { useRouteEnumParam } from '../hooks/use-route-enum-param'
 import { DetailColumn, ListColumn, MasterDetail } from '../master-detail'
 
-import { FinanceComingSoonBadge, FinanceListGroup, FinanceModeBar, FinanceNavRow } from './chrome'
+import { FinanceComingSoonBadge, FinanceListGroup, FinanceNavRow } from './chrome'
 import {
   enumLabel,
   financeKey,
@@ -92,17 +91,13 @@ function partitionCnBrief(brief: FinanceResearchBrief, region: 'china' | 'hk'): 
 }
 
 interface FinanceViewCommonProps {
+  bottomBar: React.ReactNode
   enabled: boolean
-  mode: FinanceMode
-  modeOverride: FinanceMode | null
-  onModeChange: (mode: FinanceMode) => void
 }
 
 export function FinanceResearchView({
+  bottomBar,
   enabled,
-  mode,
-  modeOverride,
-  onModeChange,
   onOpenQueue
 }: FinanceViewCommonProps & { onOpenQueue: () => void }) {
   const { t } = useI18n()
@@ -164,7 +159,7 @@ export function FinanceResearchView({
         </FinanceListGroup>
       </ListColumn>
 
-      <DetailColumn actionBar={<FinanceModeBar mode={mode} modeOverride={modeOverride} onModeChange={onModeChange} />}>
+      <DetailColumn actionBar={bottomBar}>
         {marketDesk ? (
           <div className="space-y-5">
             {isCn && <RegionNote note={copy.regionNote} />}

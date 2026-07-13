@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { type CSSProperties, type MouseEvent as ReactMouseEvent, useMemo, useRef, useState } from 'react'
 
 import { StatusDot, type StatusTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   type FinanceAnalyze,
   financeAnalyze,
@@ -14,7 +15,8 @@ import {
 } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { ExternalLink } from '@/lib/external-link'
-import { BarChart3, Info, Zap } from '@/lib/icons'
+import { BarChart3, Info } from '@/lib/icons'
+import { fmtDate } from '@/lib/time'
 import { cn } from '@/lib/utils'
 
 import { enumLabel, financeKey, fmtPct, fmtPrice, fmtQty, fmtTs, parseFinanceError } from './lib'
@@ -38,27 +40,72 @@ export const WATCH_MODULE_SYMBOLS: Record<WatchModuleId, readonly string[]> = {
   crypto: ['BTC-USD', 'ETH-USD']
 }
 
-const CHART_POLL_MS = 5 * 60_000
-const QUOTE_POLL_MS = 60_000
+const CHART_TIMEFRAME = '1d'
+const BARS_LIMIT = 120
+// Full bars are refetched SPARINGLY — daily candles barely move intraday, and
+// the last candle grows LIVE from the lightweight quote poll instead. Long
+// stale/gc windows keep the chart cached so navigating away and back (or
+// re-selecting a symbol) renders instantly with no full-screen reload flash.
+const BARS_REFETCH_MS = 60_000
+const BARS_STALE_MS = 60_000
+const BARS_GC_MS = 30 * 60_000
+// Lightweight last-price poll that grows the live candle without touching the
+// heavy bars endpoint. Data is ~15-min delayed, so ~4s stays backend-friendly.
+const QUOTE_POLL_MS = 4_000
+
+// Stable empty reference so the live-candle memo doesn't recompute every render
+// while a symbol has no bars yet (react-hooks/exhaustive-deps).
+const NO_BARS: FinanceBar[] = []
 
 export function WatchModulePanel({ enabled, module }: { enabled: boolean; module: WatchModuleId }) {
   const { t } = useI18n()
   const copy = t.finance.watch
   const symbols = WATCH_MODULE_SYMBOLS[module]
+  const [selected, setSelected] = useState<string>(symbols[0])
+  const [showAnalysis, setShowAnalysis] = useState(false)
+
+  // Keep the selection valid when the sidebar switches modules (the symbol set
+  // changes); default to the first symbol so the single Analyze always targets
+  // something concrete.
+  const activeSymbol = symbols.includes(selected) ? selected : symbols[0]
 
   return (
     <div className="space-y-5">
-      <header className="space-y-1.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <h3 className="text-[0.9375rem] font-semibold tracking-tight text-foreground">{copy.modules[module]}</h3>
-          <FinancePill variant="muted">{copy.readOnlyTag}</FinancePill>
+      <header className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-[0.9375rem] font-semibold tracking-tight text-foreground">{copy.modules[module]}</h3>
+            <FinancePill variant="muted">{copy.readOnlyTag}</FinancePill>
+          </div>
+          <ReadOnlyNote text={copy.readOnlyNote} />
         </div>
-        <ReadOnlyNote text={copy.readOnlyNote} />
+        {/* Exactly ONE Analyze button per page, top-right of the content area —
+            no icon; it analyzes the currently selected symbol (Loop.md §3:
+            read-only, no order/approve path). */}
+        <Button className="shrink-0" onClick={() => setShowAnalysis(value => !value)} size="sm" variant="outline">
+          {showAnalysis ? copy.hideAnalysis : copy.analyze}
+        </Button>
       </header>
+
+      {showAnalysis && (
+        <FinanceCard className="space-y-3">
+          <div className="flex items-center gap-2">
+            <FinanceSectionLabel>{copy.analyze}</FinanceSectionLabel>
+            <span className="text-xs font-semibold tracking-tight text-foreground">{activeSymbol}</span>
+          </div>
+          <AnalyzePanel enabled={enabled} symbol={activeSymbol} />
+        </FinanceCard>
+      )}
 
       <div className="space-y-4">
         {symbols.map(symbol => (
-          <WatchSymbolCard enabled={enabled} key={symbol} symbol={symbol} />
+          <WatchSymbolCard
+            active={symbol === activeSymbol}
+            enabled={enabled}
+            key={symbol}
+            onSelect={() => setSelected(symbol)}
+            symbol={symbol}
+          />
         ))}
       </div>
 
@@ -81,10 +128,19 @@ function ReadOnlyNote({ text }: { text: string }) {
   )
 }
 
-function WatchSymbolCard({ enabled, symbol }: { enabled: boolean; symbol: string }) {
+function WatchSymbolCard({
+  active,
+  enabled,
+  onSelect,
+  symbol
+}: {
+  active: boolean
+  enabled: boolean
+  onSelect: () => void
+  symbol: string
+}) {
   const { t } = useI18n()
   const copy = t.finance.watch
-  const [showAnalysis, setShowAnalysis] = useState(false)
 
   const quoteQuery = useQuery({
     enabled,
@@ -95,22 +151,65 @@ function WatchSymbolCard({ enabled, symbol }: { enabled: boolean; symbol: string
     retry: false
   })
 
+  // Bars are keyed by symbol + timeframe and cached long (stale/gc), so the
+  // chart renders instantly from cache on revisit — no fresh full-screen load.
   const barsQuery = useQuery({
     enabled,
-    queryFn: () => financeBars(symbol, { limit: 120, timeframe: '1d' }),
-    queryKey: financeKey('watch', 'bars', symbol),
-    refetchInterval: CHART_POLL_MS,
-    retry: false
+    gcTime: BARS_GC_MS,
+    queryFn: () => financeBars(symbol, { limit: BARS_LIMIT, timeframe: CHART_TIMEFRAME }),
+    queryKey: financeKey('watch', 'bars', symbol, CHART_TIMEFRAME),
+    refetchInterval: BARS_REFETCH_MS,
+    retry: false,
+    staleTime: BARS_STALE_MS
   })
 
   const quote = quoteQuery.data
-  const bars = barsQuery.data?.bars ?? []
+  const bars = barsQuery.data?.bars ?? NO_BARS
   const label = copy.labels[symbol] ?? symbol
   const quoteFailed = quoteQuery.isError
   const barsFailed = barsQuery.isError
+  const livePrice = !quoteFailed && quote?.last != null && Number.isFinite(quote.last) ? quote.last : null
+
+  // Grow the LAST candle in place from the lightweight quote poll — no bars
+  // refetch: move the close to the live price and extend the running high/low.
+  const liveBars = useMemo(() => {
+    if (bars.length === 0 || livePrice === null) {
+      return bars
+    }
+
+    const last = bars[bars.length - 1]
+
+    const merged: FinanceBar = {
+      ...last,
+      close: livePrice,
+      high: Math.max(last.high, livePrice),
+      low: Math.min(last.low, livePrice)
+    }
+
+    return [...bars.slice(0, -1), merged]
+  }, [bars, livePrice])
+
+  const isLive = livePrice !== null && !barsFailed && bars.length > 0
 
   return (
-    <FinanceCard className="space-y-3">
+    <div
+      aria-pressed={active}
+      className={cn(
+        'w-full space-y-3 rounded-lg border bg-(--ui-bg-quinary) p-3 text-left transition-colors',
+        active
+          ? 'border-primary/40 ring-1 ring-inset ring-primary/25'
+          : 'cursor-pointer border-(--ui-stroke-tertiary) hover:border-(--ui-stroke-secondary)'
+      )}
+      onClick={onSelect}
+      onKeyDown={event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onSelect()
+        }
+      }}
+      role="button"
+      tabIndex={0}
+    >
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <div className="flex min-w-0 items-baseline gap-2">
           <span className="text-sm font-semibold tracking-tight text-foreground">{symbol}</span>
@@ -124,7 +223,9 @@ function WatchSymbolCard({ enabled, symbol }: { enabled: boolean; symbol: string
           ) : (
             <>
               <span className="text-[0.6rem] font-medium text-(--ui-text-tertiary)">{copy.last}</span>
-              <span className="text-sm font-semibold text-foreground">{fmtPrice(quote?.last)}</span>
+              <span className="text-sm font-semibold text-foreground transition-colors duration-300">
+                {fmtPrice(quote?.last)}
+              </span>
             </>
           )}
         </div>
@@ -152,35 +253,61 @@ function WatchSymbolCard({ enabled, symbol }: { enabled: boolean; symbol: string
       )}
 
       <div className="space-y-1.5">
-        <div className="flex items-center gap-1.5 text-[0.6rem] font-medium text-(--ui-text-tertiary)">
-          <BarChart3 className="size-3" />
-          {copy.chartTitle}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-[0.6rem] font-medium text-(--ui-text-tertiary)">
+            <BarChart3 className="size-3" />
+            {copy.chartTitle}
+          </div>
+          {isLive && (
+            <span className="inline-flex items-center gap-1 text-[0.55rem] font-semibold uppercase tracking-wide text-primary">
+              <span className="size-1.5 animate-pulse rounded-full bg-primary" />
+              {copy.liveTag}
+            </span>
+          )}
         </div>
         {barsQuery.isPending ? (
-          <InlineSpinner />
+          <ChartSkeleton label={copy.chartLoading} />
         ) : barsFailed || bars.length === 0 ? (
           <div className="py-1 text-[0.65rem] text-muted-foreground">{barsFailed ? copy.noData : copy.chartEmpty}</div>
         ) : (
-          <CandlestickChart aria={copy.chartAria(symbol)} bars={bars} />
+          <CandlestickChart aria={copy.chartAria(symbol)} bars={liveBars} />
         )}
       </div>
-
-      <div>
-        <Button onClick={() => setShowAnalysis(value => !value)} size="xs" variant="outline">
-          <Zap className="size-3" />
-          {showAnalysis ? copy.hideAnalysis : copy.analyze}
-        </Button>
-      </div>
-
-      {showAnalysis && <AnalyzePanel enabled={enabled} symbol={symbol} />}
-    </FinanceCard>
+    </div>
   )
 }
 
+// First-load placeholder for the chart. Reuses the app's shared Skeleton
+// (animate-pulse) so the initial fetch reads as a calm shimmer that matches
+// Hermes — never a spinner-then-flash. Cache hits skip this entirely.
+function ChartSkeleton({ label }: { label: string }) {
+  return (
+    <div aria-label={label} className="py-0.5" role="status">
+      <Skeleton className="h-24 w-full rounded-md" />
+    </div>
+  )
+}
+
+// One hovered session, in container-local pixels, captured on mouse-move so the
+// crosshair + tooltip can be laid out over the (aspect-distorted) SVG.
+interface ChartHover {
+  height: number
+  index: number
+  width: number
+  x: number
+  y: number
+}
+
 // Dependency-free candlestick chart over daily OHLCV bars. Vertical scale is
-// price (shared min-low / max-high); horizontal is evenly spaced sessions.
-// Up candles use the primary tone, down candles the destructive tone.
+// price (shared min-low / max-high); horizontal is evenly spaced sessions. Up
+// candles use the primary tone, down candles the destructive tone. A
+// TradingView-style crosshair + OHLC tooltip tracks the cursor (values come
+// straight from the already-fetched bars — no extra fetch), and the live last
+// candle transitions smoothly as the quote poll grows it.
 function CandlestickChart({ aria, bars }: { aria: string; bars: FinanceBar[] }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [hover, setHover] = useState<ChartHover | null>(null)
+
   const width = 100
   const height = 40
   const lows = bars.map(bar => bar.low)
@@ -191,43 +318,137 @@ function CandlestickChart({ aria, bars }: { aria: string; bars: FinanceBar[] }) 
   const slot = width / bars.length
   const bodyWidth = Math.max(slot * 0.6, 0.4)
   const y = (value: number) => height - ((value - min) / span) * height
+  const lastIndex = bars.length - 1
+
+  const handleMove = (event: ReactMouseEvent<HTMLDivElement>) => {
+    const el = containerRef.current
+
+    if (!el) {
+      return
+    }
+
+    const rect = el.getBoundingClientRect()
+    const localX = event.clientX - rect.left
+    const index = Math.min(bars.length - 1, Math.max(0, Math.floor((localX / rect.width) * bars.length)))
+
+    setHover({ height: rect.height, index, width: rect.width, x: localX, y: event.clientY - rect.top })
+  }
+
+  const hoveredBar = hover ? bars[hover.index] : null
+  // Snap the vertical guide to the hovered session's center (fraction of width).
+  const crosshairLeft = hover ? ((hover.index + 0.5) / bars.length) * 100 : 0
 
   return (
-    <svg
-      aria-label={aria}
-      className="h-24 w-full"
-      preserveAspectRatio="none"
-      role="img"
-      viewBox={`0 0 ${width} ${height}`}
+    <div
+      className="relative select-none"
+      onMouseLeave={() => setHover(null)}
+      onMouseMove={handleMove}
+      ref={containerRef}
     >
-      {bars.map((bar, index) => {
-        const cx = index * slot + slot / 2
-        const up = bar.close >= bar.open
-        const bodyTop = y(Math.max(bar.open, bar.close))
-        const bodyBottom = y(Math.min(bar.open, bar.close))
+      <svg
+        aria-label={aria}
+        className="h-24 w-full"
+        preserveAspectRatio="none"
+        role="img"
+        viewBox={`0 0 ${width} ${height}`}
+      >
+        {bars.map((bar, index) => {
+          const cx = index * slot + slot / 2
+          const up = bar.close >= bar.open
+          const bodyTop = y(Math.max(bar.open, bar.close))
+          const bodyBottom = y(Math.min(bar.open, bar.close))
 
-        return (
-          <g className={up ? 'text-primary' : 'text-destructive'} key={`${bar.ts}-${index}`}>
-            <line
-              stroke="currentColor"
-              strokeWidth="0.6"
-              vectorEffect="non-scaling-stroke"
-              x1={cx}
-              x2={cx}
-              y1={y(bar.high)}
-              y2={y(bar.low)}
-            />
-            <rect
-              fill="currentColor"
-              height={Math.max(bodyBottom - bodyTop, 0.4)}
-              width={bodyWidth}
-              x={cx - bodyWidth / 2}
-              y={bodyTop}
-            />
-          </g>
-        )
-      })}
-    </svg>
+          // Only the live last candle animates as the quote poll updates it.
+          const liveStyle: CSSProperties | undefined =
+            index === lastIndex ? { transition: 'y 300ms ease-out, height 300ms ease-out' } : undefined
+
+          return (
+            <g className={up ? 'text-primary' : 'text-destructive'} key={`${bar.ts}-${index}`}>
+              <line
+                stroke="currentColor"
+                strokeWidth="0.6"
+                vectorEffect="non-scaling-stroke"
+                x1={cx}
+                x2={cx}
+                y1={y(bar.high)}
+                y2={y(bar.low)}
+              />
+              <rect
+                fill="currentColor"
+                height={Math.max(bodyBottom - bodyTop, 0.4)}
+                style={liveStyle}
+                width={bodyWidth}
+                x={cx - bodyWidth / 2}
+                y={bodyTop}
+              />
+            </g>
+          )
+        })}
+      </svg>
+
+      {hover && hoveredBar && (
+        <>
+          <div
+            className="pointer-events-none absolute inset-y-0 w-px bg-foreground/25"
+            style={{ left: `${crosshairLeft}%` }}
+          />
+          <div className="pointer-events-none absolute inset-x-0 h-px bg-foreground/25" style={{ top: hover.y }} />
+          <ChartTooltip bar={hoveredBar} hover={hover} />
+        </>
+      )}
+    </div>
+  )
+}
+
+// Compact OHLCV readout for the hovered candle. Follows the cursor and flips to
+// whichever quadrant keeps it inside the chart. Readable in light + dark via
+// the elevated popover surface; disappears with the crosshair on mouse-leave.
+function ChartTooltip({ bar, hover }: { bar: FinanceBar; hover: ChartHover }) {
+  const { t } = useI18n()
+  const copy = t.finance.watch
+  const up = bar.close >= bar.open
+  const parsed = new Date(bar.ts)
+  const dateLabel = Number.isNaN(parsed.valueOf()) ? bar.ts : fmtDate.format(parsed)
+  const flipX = hover.x > hover.width / 2
+  const flipY = hover.y > hover.height / 2
+
+  const style: CSSProperties = {
+    ...(flipX ? { right: hover.width - hover.x + 12 } : { left: hover.x + 12 }),
+    ...(flipY ? { bottom: hover.height - hover.y + 12 } : { top: hover.y + 12 })
+  }
+
+  return (
+    <div
+      className="pointer-events-none absolute z-10 min-w-max rounded-md border border-(--ui-stroke-secondary) bg-(--ui-bg-elevated) px-2 py-1.5 text-[0.6rem] leading-4 shadow-md"
+      style={style}
+    >
+      <div className="mb-1 font-medium text-foreground">{dateLabel}</div>
+      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 tabular-nums">
+        <TooltipCell label={copy.hoverOpen} value={fmtPrice(bar.open)} />
+        <TooltipCell label={copy.hoverHigh} value={fmtPrice(bar.high)} />
+        <TooltipCell label={copy.hoverLow} value={fmtPrice(bar.low)} />
+        <TooltipCell
+          label={copy.hoverClose}
+          tone={up ? 'text-primary' : 'text-destructive'}
+          value={fmtPrice(bar.close)}
+        />
+      </div>
+      {bar.volume > 0 && (
+        <div className="mt-1 flex justify-between gap-3 tabular-nums text-muted-foreground">
+          <span>{copy.hoverVolume}</span>
+          <span className="text-foreground">{fmtQty(bar.volume)}</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TooltipCell({ label, tone, value }: { label: string; tone?: string; value: string }) {
+  return (
+    <span className="flex justify-between gap-2">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={cn('font-medium text-foreground', tone)}>{value}</span>
+    </span>
   )
 }
 
@@ -259,7 +480,7 @@ function AnalyzePanel({ enabled, symbol }: { enabled: boolean; symbol: string })
   const analyze: FinanceAnalyze = analyzeQuery.data
 
   return (
-    <div className="space-y-3 border-t border-(--ui-stroke-tertiary) pt-3">
+    <div className="space-y-3">
       <VerdictRow analyze={analyze} />
       <AgentSignals signals={analyze.signals ?? []} />
       <Citations items={analyze.news ?? []} title={copy.newsTitle} />

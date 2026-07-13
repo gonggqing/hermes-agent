@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { type ReactNode, useMemo } from 'react'
 
 import type { FinanceMode, FinancePosition } from '@/hermes'
 import { useI18n } from '@/i18n'
@@ -7,7 +7,7 @@ import { useRouteEnumParam } from '../hooks/use-route-enum-param'
 import { DetailColumn, ListColumn, MasterDetail } from '../master-detail'
 
 import { AccountSummary, OrdersTable, TradeStatsSection, useAccountQueries } from './account'
-import { FinanceDetailPlaceholder, FinanceListGroup, FinanceModeBar, FinanceNavRow } from './chrome'
+import { FinanceDetailPlaceholder, FinanceListGroup, FinanceNavRow } from './chrome'
 import { FinanceHistoryTab } from './history'
 import { fmtPrice, fmtQty, fmtSignedMoney, pnlClass } from './lib'
 import { FinanceMarketTab } from './market'
@@ -24,15 +24,13 @@ const OVERVIEW_IDS = ['account', 'orders', 'stats', 'market', 'history', 'report
 type OverviewId = (typeof OVERVIEW_IDS)[number]
 
 export function FinancePortfolioView({
+  bottomBar,
   enabled,
-  mode,
-  modeOverride,
-  onModeChange
+  mode
 }: {
+  bottomBar: ReactNode
   enabled: boolean
   mode: FinanceMode
-  modeOverride: FinanceMode | null
-  onModeChange: (mode: FinanceMode) => void
 }) {
   const { t } = useI18n()
   const copy = t.finance.portfolio
@@ -91,7 +89,7 @@ export function FinancePortfolioView({
         </FinanceListGroup>
       </ListColumn>
 
-      <DetailColumn actionBar={<FinanceModeBar mode={mode} modeOverride={modeOverride} onModeChange={onModeChange} />}>
+      <DetailColumn actionBar={bottomBar}>
         {selectedPosition ? (
           <PositionDetail position={selectedPosition} />
         ) : selected === 'account' ? (

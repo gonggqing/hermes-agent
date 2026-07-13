@@ -30,12 +30,18 @@ export interface FinanceTranslations {
     loopAttached: string;
     loopIdle: string;
     offline: string;
+    online: string;
     updatedAt: string; // "updated {time}"
     serviceOfflineTitle: string;
     serviceOfflineBody: string;
     serviceOfflineStartLabel: string;
     modePaper: string;
     modeLive: string;
+    // Bottom status/utility bar.
+    breakerLabel: string; // "Breaker"
+    breakerNormal: string; // "Normal"
+    breakerTripped: string; // "Tripped"
+    toggleMode: string; // aria-label for the paper/live toggle
   };
   brief: {
     title: string;
@@ -290,8 +296,17 @@ export interface FinanceTranslations {
     asOf: string; // "as of {time}"
     noData: string; // per-symbol inline error
     chartUnavailable: string;
+    chartLoading: string; // aria-label for the chart skeleton
+    // Crosshair tooltip (K-line hover details).
+    date: string;
+    open: string;
+    high: string;
+    low: string;
+    close: string;
+    liveBadge: string; // "LIVE" chip on a live-updating chart
     analyze: string;
     analyzing: string;
+    analysisFor: string; // "Analysis · {symbol}"
     hideAnalysis: string;
     verdict: string;
     noVerdict: string;

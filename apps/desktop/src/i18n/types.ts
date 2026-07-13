@@ -1276,6 +1276,9 @@ export interface Translations {
     modeBarAria: string
     modeFollowsService: string
     modeOverridden: string
+    // Single paper/live toggle button (replaces the 2-segment control): the
+    // label describes the mode a click switches TO.
+    modeSwitchTo: (mode: string) => string
     queue: {
       empty: string
       selectPrompt: string
@@ -1461,6 +1464,15 @@ export interface Translations {
       chartTitle: string
       chartAria: (symbol: string) => string
       chartEmpty: string
+      chartLoading: string
+      // TradingView-style crosshair tooltip: short OHLCV labels + the live
+      // last-candle tag on the growing bar.
+      hoverOpen: string
+      hoverHigh: string
+      hoverLow: string
+      hoverClose: string
+      hoverVolume: string
+      liveTag: string
       analyze: string
       hideAnalysis: string
       analyzing: string
