@@ -30,6 +30,10 @@ _PROVIDER_DEFAULTS = {
     # provider: (base_url, model, api-key env var)
     "deepseek": ("https://api.deepseek.com/v1", "deepseek-v4-flash", "DEEPSEEK_API_KEY"),
     "glm": ("https://open.bigmodel.cn/api/paas/v4", "glm5-turbo", "GLM_API_KEY"),
+    # MiniMax China (OpenAI-compatible endpoint). M-series are REASONING models
+    # (emit <think>…</think>), so the analyst uses a larger token budget and
+    # extracts the trailing JSON object.
+    "minimax": ("https://api.minimaxi.com/v1", "MiniMax-M2.7-highspeed", "MINIMAX_CN_API_KEY"),
 }
 
 _SYSTEM = (
@@ -99,7 +103,9 @@ def _http_complete(settings: LLMSettings, system: str, prompt: str) -> str:
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.2,
-            "max_tokens": 300,
+            # Headroom for reasoning models (MiniMax M-series / deepseek-v4)
+            # that spend tokens on <think> before the JSON verdict.
+            "max_tokens": 800,
         },
         timeout=settings.timeout,
     )
