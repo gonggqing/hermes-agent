@@ -43,6 +43,25 @@ def core(**kw) -> RuleBasedDecisionCore:
     return RuleBasedDecisionCore(**kw)
 
 
+class TestEarningsAvoidance:
+    def test_imminent_earnings_blocks_fresh_entry(self):
+        # a strong long normally becomes one bracket entry...
+        assert len(core().propose([sig()], {"NVDA": view()}, account(), [])) == 1
+        # ...but not when NVDA has an imminent earnings print.
+        out = core().propose([sig()], {"NVDA": view()}, account(), [],
+                             earnings_symbols={"NVDA"})
+        assert out == []
+
+    def test_earnings_does_not_block_exit(self):
+        # protecting capital always wins: a held name with a SHORT exit signal
+        # still exits even if it reports earnings imminently.
+        held = [Position(symbol="NVDA", qty=3, avg_px=90.0)]
+        out = core().propose([sig(direction=Direction.SHORT, conf=0.7)],
+                             {"NVDA": view()}, account(), held,
+                             earnings_symbols={"NVDA"})
+        assert len(out) == 1 and out[0].side is Side.SELL
+
+
 class TestEntries:
     def test_long_signal_becomes_bracket_candidate(self):
         out = core().propose([sig()], {"NVDA": view()}, account(), [])

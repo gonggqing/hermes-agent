@@ -71,13 +71,21 @@ def analyze_symbol(
     *,
     fundamentals: Any = None,
     llm_analyst: Any = None,
+    knowledge: Any = None,
+    knowledge_index: Any = None,
     now: Optional[datetime] = None,
 ) -> dict:
     """One-shot multi-agent analysis of ``symbol``. Raises DataFeedError only
     when no bars are available; otherwise degrades gracefully.
 
-    Returns a JSON-friendly dict: ``{symbol, last, verdict, signals, news}``
-    (the API layer adds ``as_of``/``note``)."""
+    When ``knowledge`` is supplied, the LLM voice is RAG-grounded on retrieved
+    research (fail-closed) and the result carries the source citations.
+
+    Returns a JSON-friendly dict:
+    ``{symbol, last, verdict, signals, news, research}`` (the API layer adds
+    ``as_of``/``note``)."""
+    from swing_trader.rag import research_snippets, research_sources, retrieve_research
+
     now = now or datetime.now(timezone.utc)
     rows = feed.get_bars(symbol, "1d", _ANALYSIS_BARS)  # DataFeedError propagates
 
@@ -96,6 +104,10 @@ def analyze_symbol(
     except DataFeedError:
         pass
 
+    # RAG: retrieve source-attributed research to ground the LLM (fail-closed).
+    query = f"{symbol} " + " ".join(n.headline for n in news_scored[:2])
+    research_hits = retrieve_research(knowledge, knowledge_index, query, k=4)
+
     signals = []
     tech = TechnicalAgent().analyze(symbol, rows)
     if tech is not None:
@@ -111,6 +123,7 @@ def analyze_symbol(
         llm_sig = llm_analyst.analyze(
             symbol, features=tech.features_json,
             headlines=[n.headline for n in news_scored],
+            research=research_snippets(research_hits),
         )
         if llm_sig is not None:
             signals.append(llm_sig)
@@ -129,6 +142,7 @@ def analyze_symbol(
         "signals": [_sig(s) for s in signals],
         "news": [{"headline": n.headline, "source": n.source, "url": n.url,
                   "sentiment": n.sentiment} for n in news_scored[:6]],
+        "research": research_sources(research_hits),
     }
 
 

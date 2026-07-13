@@ -157,11 +157,17 @@ class RuleBasedDecisionCore:
         positions: list[Position],
         risk_on_off: str = "neutral",
         open_order_symbols: set[str] | None = None,
+        earnings_symbols: set[str] | None = None,
     ) -> list[CandidateOrder]:
-        """Turn post-debate signals into candidate orders (entries + exits)."""
+        """Turn post-debate signals into candidate orders (entries + exits).
+
+        ``earnings_symbols``: symbols with an imminent earnings print — no fresh
+        ENTRY is opened into them (a known landmine); exits are unaffected.
+        """
         p = self.params
         held = {pos.symbol: pos for pos in positions if pos.qty > 0}
         busy = set(open_order_symbols or set())
+        earnings_syms = {s.strip().upper() for s in (earnings_symbols or set())}
         entries: list[CandidateOrder] = []
         exits: list[CandidateOrder] = []
 
@@ -197,6 +203,8 @@ class RuleBasedDecisionCore:
                 continue
             if sig.symbol in held or sig.symbol in busy:
                 continue  # no pyramiding, no duplicate resting orders (v0)
+            if sig.symbol in earnings_syms:
+                continue  # never open a fresh position into an earnings print
             if view.atr_pct is None or view.atr_pct <= 0:
                 continue  # cannot place stops without volatility context
             confidence = self._memory_adjusted_confidence(sig)

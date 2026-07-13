@@ -38,7 +38,9 @@ _SYSTEM = (
     '{"direction": "long"|"short"|"neutral", "confidence": 0.0-1.0, '
     '"thesis": "<one sentence, cite the evidence given>"}. '
     "short means avoid/trim (the account cannot short). Be conservative: "
-    "prefer neutral when evidence is mixed."
+    "prefer neutral when evidence is mixed. When research_context is provided, "
+    "GROUND your thesis in it and reference the source; never invent facts "
+    "beyond the evidence given."
 )
 
 
@@ -122,16 +124,17 @@ class LLMAnalyst:
         features: dict,
         headlines: list[str],
         regime: str = "neutral",
+        research: Optional[list[str]] = None,
     ) -> Optional[Signal]:
-        prompt = json.dumps(
-            {
-                "symbol": symbol,
-                "market_regime": regime,
-                "technical_features": features,
-                "recent_headlines": headlines[:8],
-            },
-            ensure_ascii=False,
-        )
+        payload = {
+            "symbol": symbol,
+            "market_regime": regime,
+            "technical_features": features,
+            "recent_headlines": headlines[:8],
+        }
+        if research:  # RAG grounding (Loop.md §5.10) — cite, don't invent
+            payload["research_context"] = research[:6]
+        prompt = json.dumps(payload, ensure_ascii=False)
         try:
             raw = self._complete(self.settings, _SYSTEM, prompt)
             match = re.search(r"\{.*\}", raw, re.DOTALL)
@@ -153,5 +156,6 @@ class LLMAnalyst:
             thesis=thesis,
             direction=direction,
             confidence=confidence,
-            features_json={"regime": regime, "n_headlines": len(headlines)},
+            features_json={"regime": regime, "n_headlines": len(headlines),
+                           "n_research": len(research or [])},
         )

@@ -181,7 +181,8 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             try:
                 result = analyze_symbol(
                     feed, sym, fundamentals=fundamentals,
-                    llm_analyst=llm_analyst, now=runtime.clock(),
+                    llm_analyst=llm_analyst, knowledge=knowledge,
+                    knowledge_index=knowledge_index, now=runtime.clock(),
                 )
             except Exception:
                 return f"没找到 {sym} 的行情数据，换个代码试试？"

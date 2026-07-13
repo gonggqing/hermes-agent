@@ -309,6 +309,8 @@ def create_app(runtime: FinanceRuntime):
                 runtime.feed, symbol,
                 fundamentals=runtime.fundamentals,
                 llm_analyst=runtime.llm_analyst,
+                knowledge=runtime.knowledge,
+                knowledge_index=runtime.knowledge_index,
                 now=runtime.clock(),
             )
         except (DataFeedError, ValueError) as exc:

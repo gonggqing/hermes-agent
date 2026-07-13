@@ -321,6 +321,8 @@ class DailyLoop:
             debates, views, account, positions,
             risk_on_off=self._market.risk_on_off if self._market else "neutral",
             open_order_symbols=open_syms,
+            earnings_symbols={e.symbol for e in self._earnings
+                              if getattr(e, "imminent", False)},
         )
 
         self._risk_approved = []
@@ -461,11 +463,18 @@ class DailyLoop:
             if senti is not None:
                 signals.append(senti)
             if self.llm_analyst is not None and tech is not None:
+                from swing_trader.rag import research_snippets, retrieve_research
+
+                query = f"{symbol} " + " ".join(n.headline for n in sym_news[:2])
+                hits = retrieve_research(
+                    self.knowledge, self.knowledge_index, query, k=4
+                )
                 llm_sig = self.llm_analyst.analyze(
                     symbol,
                     features=tech.features_json,
                     headlines=[n.headline for n in sym_news],
                     regime=self._market.risk_on_off if self._market else "neutral",
+                    research=research_snippets(hits),
                 )
                 if llm_sig is not None:  # fail-safe: None on any LLM trouble
                     signals.append(llm_sig)
