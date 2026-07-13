@@ -4,22 +4,50 @@
 > plan in Loop.md §8, the next phase (refine & complete) is intended for
 > Opus 4.8. **Read `Loop.md` first — it is the single source of truth.**
 
-## Where we are (updated 2026-07-13)
+## Where we are (updated 2026-07-14)
 
-**Phases 0 → 0.9 are BUILT.** Phase 0 (paper loop) was approved; since then:
-0.5 (research-first UI + rehydration + knowledge store), 0.5+ (two-session
-CN-morning/US-evening + dual bots), 0.75 (fundamentals, on-demand endpoints,
-finance toolset, K-line skill, earnings, RAG, deeper ingestion), **0.8
-(resilience: dead-man's switch + health/heartbeat + ledger↔broker reconcile +
-feed retry/backoff)**, and **0.9 Portfolio Foundation (auditable multi-account
-US/HK/CN Portfolio Journal — append-only events, instrument search,
-human-confirmed drafts, CSV import, reconciliation, aggregate, Desktop+Web UI)**.
-Still NO live orders — the §3 triple gate is untouched; IBKR account is the
-blocker for Phase 1. See Loop.md §13 for the dated detail.
+**Phases 0 → 0.9 are BUILT; Phase 0.95 (pre-live gate) is LANDING.** Phase 0
+(paper loop) was approved; since then: 0.5 (research-first UI + rehydration +
+knowledge store), 0.5+ (two-session CN-morning/US-evening + dual bots), 0.75
+(fundamentals, on-demand endpoints, finance toolset, K-line skill, earnings,
+RAG, deeper ingestion), **0.8 (resilience: dead-man's switch + health/heartbeat
++ ledger↔broker reconcile + feed retry/backoff)**, **0.9 Portfolio Foundation
+(auditable multi-account US/HK/CN Portfolio Journal)**, and now **Phase-1
+broker backbone + 0.95 go-live gate** (see next block). Still NO live orders —
+the §3 triple gate is untouched; IBKR account is the last blocker for Phase 1.
+See Loop.md §13 for the dated detail.
+
+### Phase-1 readiness landed this cycle (2026-07-14)
+
+The Phase-1 *code* is now built and validated OFFLINE so IBKR slots in the
+moment the account funds:
+
+- **IBKRBroker** (`ibkr_broker.py`) behind a neutral `IBClient` port — full
+  place→partial→fill→cancel→reject/bracket-OCA lifecycle, driven by a mock IB
+  transport; `ib_async` imported lazily (constructing the broker opens no
+  socket, imports nothing — asserted). CASH account spends only `SettledCash`;
+  IBKR *paper* account tags `Mode.PAPER`, live account tags `Mode.LIVE`.
+- **Broker factory** (`broker_factory.py`) — `BROKER=ibkr` now runs; the
+  paper/live account flag is derived from the triple gate, and a live port
+  under an un-gated config fails closed at construction. `__main__` Phase-0
+  hard stop removed (order gate intact). `live_orders_allowed` threaded
+  DailyLoop→ExecutionEngine (default False). Optional `[ibkr]` extra.
+- **Kill-switch** (`killswitch.py`) — filesystem HALT flag; halts NEW entries
+  via the RiskEngine (does NOT touch protective stops); HTTP engage(any)/
+  release(human-only) + `cancel-all`; CLI `kill`/`release`/`killswitch-status`.
+- **Go-live runbook** — `docs/finance/go-live-runbook.md` (paper-first dry run,
+  cutover, kill-switch drill, emergency + rollback, defence-in-depth appendix).
+- **Regime-segmented walk-forward** (`regime_analysis.py`) — OOS validation
+  bucketed by market regime with a ≥2-regime coverage gate.
+- **Broker parity harness** — PaperBroker↔IBKRBroker substitutability tests.
+
+Still TODO for the ⛔ Phase-0.95 human gate (do NOT self-advance): reviewed
+weekend upstream sync merge; a real IBKR-**paper** dry run once TWS is up;
+≥20 paper-day exit criterion; guardrail audit; **human sign-off**.
 
 - All trading code: `trader/` (self-contained package `swing_trader`, zero
   Hermes-internal imports, extractable to its own repo before Phase 1).
-- **935 trader tests green** (+15 root finance-tool tests, +81 web tests):
+- **1050 trader tests green** (+15 root finance-tool tests, +81 web tests):
   `cd trader && uv run --no-sync python -m pytest`
 - RiskEngine 100% branch coverage gate:
   `uv run --no-sync pytest tests/test_risk_engine.py --cov=swing_trader.risk --cov-branch --cov-fail-under=100`
