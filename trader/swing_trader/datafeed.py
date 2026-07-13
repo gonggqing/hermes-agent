@@ -26,19 +26,33 @@ __all__ = ["DataFeedError", "StubPaidFeed", "YFinanceFeed"]
 #: Ticker used for market-wide news when no symbol is given (Loop.md §11.A).
 MARKET_PROXY_SYMBOL = "SPY"
 
-#: Supported DataFeed timeframes -> yfinance ``interval`` strings.
-_TIMEFRAME_TO_INTERVAL: dict[str, str] = {"1d": "1d", "1h": "1h", "1wk": "1wk"}
+#: Supported DataFeed timeframes -> yfinance ``interval`` strings. Intraday
+#: (1m/5m/15m/30m/1h) power the "1 day"/"5 day" chart presets; 1d/1wk/1mo power
+#: the "day"/"week"/"month" presets (Loop.md Phase 0.75 chart iteration).
+_TIMEFRAME_TO_INTERVAL: dict[str, str] = {
+    "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+    "1h": "1h", "1d": "1d", "1wk": "1wk", "1mo": "1mo",
+}
 
 # Period ladders: smallest yfinance ``period`` that comfortably covers
 # ``limit`` bars (thresholds ~80% of the bars a period typically yields:
-# ~21 trading days/month, ~7 hourly bars/session, 52 weeks/year).
+# ~21 trading days/month, ~78 5m-bars/session, ~7 hourly bars/session,
+# 52 weeks/year, 12 months/year). Yahoo caps intraday history: 1m -> ~7d,
+# 5m/15m/30m -> ~60d, 1h -> ~730d.
 _PERIOD_LADDERS: dict[str, tuple[tuple[int, str], ...]] = {
-    "1d": ((50, "3mo"), (100, "6mo"), (200, "1y"), (400, "2y"), (1000, "5y"), (2000, "10y")),
+    "1m": ((390, "1d"), (1950, "5d"),),
+    "5m": ((78, "1d"), (390, "5d"), (1560, "1mo")),
+    "15m": ((26, "1d"), (130, "5d"), (520, "1mo")),
+    "30m": ((13, "1d"), (65, "5d"), (260, "1mo")),
     "1h": ((117, "1mo"), (352, "3mo"), (705, "6mo"), (1411, "1y")),
+    "1d": ((50, "3mo"), (100, "6mo"), (200, "1y"), (400, "2y"), (1000, "5y"), (2000, "10y")),
     "1wk": ((41, "1y"), (83, "2y"), (208, "5y"), (416, "10y")),
+    "1mo": ((12, "1y"), (24, "2y"), (60, "5y"), (120, "10y")),
 }
-# Yahoo caps hourly history at ~730 days, so the 1h fallback is "2y" not "max".
-_PERIOD_FALLBACK: dict[str, str] = {"1d": "max", "1h": "2y", "1wk": "max"}
+_PERIOD_FALLBACK: dict[str, str] = {
+    "1m": "7d", "5m": "60d", "15m": "60d", "30m": "60d",
+    "1h": "2y", "1d": "max", "1wk": "max", "1mo": "max",
+}
 
 _REQUIRED_BAR_COLUMNS = ("Open", "High", "Low", "Close")
 

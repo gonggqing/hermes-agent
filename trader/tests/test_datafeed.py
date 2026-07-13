@@ -209,6 +209,23 @@ def test_get_bars_naive_index_localized_utc() -> None:
     assert bars[1].ts == datetime(2026, 7, 10, tzinfo=UTC)
 
 
+@pytest.mark.parametrize(
+    "timeframe,interval,period",
+    [("5m", "5m", "1d"), ("30m", "30m", "1d"), ("1h", "1h", "1mo"),
+     ("1d", "1d", "3mo"), ("1wk", "1wk", "1y"), ("1mo", "1mo", "1y")],
+)
+def test_get_bars_supports_all_chart_timeframes(timeframe, interval, period) -> None:
+    # 1D/5D presets (intraday 5m/30m) + day/week/month presets map to the right
+    # yfinance interval + a period large enough for the requested bar count.
+    idx = pd.date_range("2026-06-01", periods=10, freq="D", tz="UTC")
+    ticker = FakeTicker(history_df=ohlcv_df(idx, start_price=10.0))
+    feed, _ = make_feed(ticker)
+
+    feed.get_bars("NVDA", timeframe=timeframe, limit=10)
+
+    assert ticker.history_calls[-1] == {"period": period, "interval": interval}
+
+
 def test_get_bars_keeps_last_limit_rows() -> None:
     idx = pd.date_range("2026-06-01", periods=10, freq="D", tz="UTC")
     ticker = FakeTicker(history_df=ohlcv_df(idx, start_price=10.0))
@@ -276,7 +293,7 @@ def test_get_bars_unknown_timeframe_raises_valueerror() -> None:
     feed, _ = make_feed(FakeTicker())
 
     with pytest.raises(ValueError, match="timeframe"):
-        feed.get_bars("NVDA", timeframe="5m")
+        feed.get_bars("NVDA", timeframe="2h")  # genuinely unsupported interval
 
 
 def test_get_bars_empty_history_raises() -> None:
