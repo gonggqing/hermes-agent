@@ -384,6 +384,16 @@ def _cmd_killswitch_status(args: argparse.Namespace) -> None:
         print("released (new entries permitted)")
 
 
+def _cmd_readiness(args: argparse.Namespace) -> None:
+    from swing_trader.ledger import Ledger
+    from swing_trader.readiness import assess_paper_readiness
+
+    settings = load_settings()
+    ledger = Ledger(url=f"sqlite:///{args.db or settings.db_path}")
+    report = assess_paper_readiness(ledger, min_days=args.min_days)
+    print(report.summary())
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="swing_trader")
     parser.add_argument("--log-level", default="INFO")
@@ -420,6 +430,12 @@ def main() -> None:
     p_ks = sub.add_parser("killswitch-status", help="print the kill-switch state")
     p_ks.add_argument("--db", default=None)
     p_ks.set_defaults(func=_cmd_killswitch_status)
+
+    p_rd = sub.add_parser("readiness",
+                          help="print paper-trading readiness vs the ≥20-day gate")
+    p_rd.add_argument("--db", default=None)
+    p_rd.add_argument("--min-days", type=int, default=20)
+    p_rd.set_defaults(func=_cmd_readiness)
 
     args = parser.parse_args()
     setup_logging(level=args.log_level)

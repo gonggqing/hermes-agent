@@ -261,7 +261,31 @@ def create_app(runtime: FinanceRuntime):
                     for c in h.checks
                 ],
             }
+        # Phase 0.95: the operator kill-switch state (cheap filesystem check) so
+        # the Finance tab shows a HALT the instant it is engaged out-of-band.
+        if runtime.kill_switch is not None:
+            out["kill_switch"] = runtime.kill_switch.state().to_dict()
         return out
+
+    @app.get(f"/{API_VERSION}/readiness")
+    def readiness() -> dict:
+        """Progress toward the ≥20 paper-day Phase-0.95 exit criterion. Computed
+        on demand (ledger queries) so it never slows the frequently-polled
+        /health endpoint."""
+        from swing_trader.readiness import assess_paper_readiness
+
+        r = assess_paper_readiness(runtime.ledger, mode=runtime.mode)
+        return {
+            "ready": r.ready,
+            "min_days": r.min_days,
+            "session_days": r.session_days,
+            "days_remaining": r.days_remaining,
+            "fill_days": r.fill_days,
+            "closed_trades": r.closed_trades,
+            "first_day": r.first_day,
+            "last_day": r.last_day,
+            "summary": r.summary(),
+        }
 
     @app.get(f"/{API_VERSION}/account")
     def account(mode: Optional[str] = Query(default=None)) -> dict:
