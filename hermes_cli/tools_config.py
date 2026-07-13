@@ -1762,6 +1762,21 @@ def _get_platform_tools(
         if x_search_auto_enabled:
             enabled_toolsets.add("x_search")
 
+        # Finance is its own toolset whose tools are NOT part of any platform
+        # composite (like x_search above), so the subset loop never picks it up.
+        # The default_off carve-out below only PREVENTS REMOVAL — it never ADDS
+        # finance — so without this injection finance stays off on every chat
+        # platform even when HERMES_FINANCE_SERVICE_URL is set. Inject it
+        # directly (read-only tools, Loop.md §3); only when the user hasn't
+        # saved an explicit toolset list (the has_explicit_config branch already
+        # honors an explicit "finance" entry).
+        finance_auto_enabled = (
+            _toolset_allowed_for_platform("finance", platform)
+            and bool(os.getenv("HERMES_FINANCE_SERVICE_URL"))
+        )
+        if finance_auto_enabled:
+            enabled_toolsets.add("finance")
+
         default_off = set(_DEFAULT_OFF_TOOLSETS)
         # Legacy safety: if the platform's own name matches a default-off
         # toolset (e.g. `homeassistant` platform + `homeassistant` toolset),
