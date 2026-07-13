@@ -443,26 +443,24 @@ _DRAFT_CLOSE_SCHEMA = {
 
 
 # ------------------------------------------------------------------- registration
+# NOTE: registration MUST be TOP-LEVEL `registry.register(...)` calls (not a
+# loop): the builtin-tool auto-discovery (tools.registry._module_registers_tools)
+# only imports a module when it finds a module-body registry.register() call, so
+# a for-loop registration would make the whole finance toolset invisible to the
+# gateway agent. Keep these flat.
 
-for _name, _schema, _handler in (
-    ("get_quote", _GET_QUOTE_SCHEMA, _handle_get_quote),
-    ("get_kline", _GET_KLINE_SCHEMA, _handle_get_kline),
-    ("analyze_symbol", _ANALYZE_SYMBOL_SCHEMA, _handle_analyze_symbol),
-    ("research_brief", _RESEARCH_BRIEF_SCHEMA, _handle_research_brief),
-    ("search_research", _SEARCH_RESEARCH_SCHEMA, _handle_search_research),
-    ("account_view", _ACCOUNT_VIEW_SCHEMA, _handle_account_view),
-    # Phase 0.9 portfolio — read + DRAFT-ONLY (no confirm/place; human confirms).
-    ("portfolio_accounts", _PORTFOLIO_ACCOUNTS_SCHEMA, _handle_portfolio_accounts),
-    ("portfolio_holdings", _PORTFOLIO_HOLDINGS_SCHEMA, _handle_portfolio_holdings),
-    ("portfolio_valuation", _PORTFOLIO_VALUATION_SCHEMA, _handle_portfolio_valuation),
-    ("draft_portfolio_trade", _DRAFT_TRADE_SCHEMA, _handle_draft_portfolio_trade),
-    ("draft_close_position", _DRAFT_CLOSE_SCHEMA, _handle_draft_close_position),
-):
-    registry.register(
-        name=_name,
-        toolset="finance",
-        schema=_schema,
-        handler=_handler,
-        check_fn=_check_finance_available,
-        emoji="📈",
-    )
+
+_F = dict(toolset="finance", check_fn=_check_finance_available, emoji="📈")
+
+registry.register(name="get_quote", schema=_GET_QUOTE_SCHEMA, handler=_handle_get_quote, **_F)
+registry.register(name="get_kline", schema=_GET_KLINE_SCHEMA, handler=_handle_get_kline, **_F)
+registry.register(name="analyze_symbol", schema=_ANALYZE_SYMBOL_SCHEMA, handler=_handle_analyze_symbol, **_F)
+registry.register(name="research_brief", schema=_RESEARCH_BRIEF_SCHEMA, handler=_handle_research_brief, **_F)
+registry.register(name="search_research", schema=_SEARCH_RESEARCH_SCHEMA, handler=_handle_search_research, **_F)
+registry.register(name="account_view", schema=_ACCOUNT_VIEW_SCHEMA, handler=_handle_account_view, **_F)
+# Phase 0.9 portfolio — read + DRAFT-ONLY (no confirm/place; human confirms).
+registry.register(name="portfolio_accounts", schema=_PORTFOLIO_ACCOUNTS_SCHEMA, handler=_handle_portfolio_accounts, **_F)
+registry.register(name="portfolio_holdings", schema=_PORTFOLIO_HOLDINGS_SCHEMA, handler=_handle_portfolio_holdings, **_F)
+registry.register(name="portfolio_valuation", schema=_PORTFOLIO_VALUATION_SCHEMA, handler=_handle_portfolio_valuation, **_F)
+registry.register(name="draft_portfolio_trade", schema=_DRAFT_TRADE_SCHEMA, handler=_handle_draft_portfolio_trade, **_F)
+registry.register(name="draft_close_position", schema=_DRAFT_CLOSE_SCHEMA, handler=_handle_draft_close_position, **_F)

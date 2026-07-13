@@ -272,7 +272,11 @@ TOOLSETS = {
         "tools": [
             "get_quote", "get_kline", "analyze_symbol",
             "research_brief", "search_research", "account_view",
+            # Phase 0.9 real portfolio (read + draft-only; human confirms):
+            "portfolio_accounts", "portfolio_holdings", "portfolio_valuation",
+            "draft_portfolio_trade", "draft_close_position",
         ],
+        "module": "tools.finance_tools",
         "includes": [],
     },
 
