@@ -38,6 +38,7 @@ import { useToast } from "@nous-research/ui/hooks/use-toast";
 import { useI18n } from "@/i18n";
 import { ApprovalQueue } from "@/pages/finance/ApprovalQueue";
 import { HistorySection } from "@/pages/finance/HistorySection";
+import { PortfolioManager } from "@/pages/finance/PortfolioManager";
 import { ResearchBrief } from "@/pages/finance/ResearchBrief";
 import { WatchModule } from "@/pages/finance/WatchModule";
 import {
@@ -76,9 +77,9 @@ const SNAPSHOT_LIMIT = 120;
 const SERVICE_START_COMMAND =
   "cd trader && uv run python -m swing_trader serve";
 
-type FinanceTab = "research" | "queue" | "portfolio";
+type FinanceTab = "research" | "queue" | "portfolio" | "holdings";
 
-const TABS: FinanceTab[] = ["research", "queue", "portfolio"];
+const TABS: FinanceTab[] = ["research", "queue", "portfolio", "holdings"];
 const DESKS: FinanceDesk[] = [
   ...ACTIVE_MARKETS,
   ...PLACEHOLDER_MARKETS,
@@ -1069,6 +1070,7 @@ export default function FinancePage() {
           { value: "research", label: ft.layout.tabResearch },
           { value: "queue", label: ft.layout.tabQueue },
           { value: "portfolio", label: ft.layout.tabPortfolio },
+          { value: "holdings", label: ft.layout.tabHoldings },
         ]}
       />
 
@@ -1111,6 +1113,8 @@ export default function FinancePage() {
           ft={ft}
         />
       )}
+
+      {activeTab === "holdings" && <PortfolioManager />}
 
       {bottomBar}
 

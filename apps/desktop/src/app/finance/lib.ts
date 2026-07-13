@@ -1,5 +1,5 @@
 import type { StatusTone } from '@/components/status-dot'
-import type { FinanceBreakerState, FinanceCandidateEdits, FinanceCandidateStatus } from '@/hermes'
+import type { FinanceBreakerState, FinanceCandidateStatus } from '@/hermes'
 import { fmtDateTime } from '@/lib/time'
 
 // Human actor recorded in the confirmation-service audit trail.
@@ -20,10 +20,13 @@ export const financeKey = (...parts: ReadonlyArray<string | undefined>) =>
 // (applied/replayed or a terminal 4xx); kept across network failures.
 const idempotencyKeys = new Map<string, string>()
 
-const intentKey = (candidateId: string, action: string, edits?: FinanceCandidateEdits): string =>
+// `edits` is any structured edit payload (candidate qty/px edits, or a real-
+// portfolio draft edit map) — only its JSON shape distinguishes one intent from
+// another, so `object` keeps both callers type-safe without a shared edit type.
+const intentKey = (candidateId: string, action: string, edits?: object): string =>
   `${candidateId}:${action}:${edits ? JSON.stringify(edits) : ''}`
 
-export function idempotencyKeyFor(candidateId: string, action: string, edits?: FinanceCandidateEdits): string {
+export function idempotencyKeyFor(candidateId: string, action: string, edits?: object): string {
   const key = intentKey(candidateId, action, edits)
   let value = idempotencyKeys.get(key)
 
@@ -35,7 +38,7 @@ export function idempotencyKeyFor(candidateId: string, action: string, edits?: F
   return value
 }
 
-export function settleIdempotencyKey(candidateId: string, action: string, edits?: FinanceCandidateEdits): void {
+export function settleIdempotencyKey(candidateId: string, action: string, edits?: object): void {
   idempotencyKeys.delete(intentKey(candidateId, action, edits))
 }
 

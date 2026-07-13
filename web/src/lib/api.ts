@@ -1414,7 +1414,206 @@ export const api = {
       candidate: null,
     };
   },
+
+  // ── Portfolio (Phase 0.9): real multi-account holdings ──────────────
+  // Separate from the paper-trading account above. READ + DRAFT only: the
+  // only writes are creating a draft and the human confirm/edit/reject
+  // action (mirrors financeCandidateAction — a human surface + human actor,
+  // never "system"/"hermes"). All routes proxy to the Finance service's
+  // /v1/portfolio/* (trader/swing_trader/api.py); read calls throw when the
+  // service is offline so the Portfolio tab renders its offline/error note.
+  financePortfolioAccounts: () =>
+    fetchJSON<FinancePortfolioAccount[]>("/api/finance/v1/portfolio/accounts"),
+  financePortfolioAccount: (id: string) =>
+    fetchJSON<FinancePortfolioAccount>(
+      `/api/finance/v1/portfolio/accounts/${encodeURIComponent(id)}`,
+    ),
+  financePortfolioHoldings: (id: string) =>
+    fetchJSON<FinancePortfolioHoldings>(
+      `/api/finance/v1/portfolio/accounts/${encodeURIComponent(id)}/holdings`,
+    ),
+  financePortfolioEvents: (id: string) =>
+    fetchJSON<FinancePortfolioEvent[]>(
+      `/api/finance/v1/portfolio/accounts/${encodeURIComponent(id)}/events`,
+    ),
+  financePortfolioReconcile: (id: string) =>
+    fetchJSON<FinancePortfolioReconcile>(
+      `/api/finance/v1/portfolio/accounts/${encodeURIComponent(id)}/reconcile`,
+    ),
+  financePortfolioAggregate: (includeInRiskOnly?: boolean) =>
+    fetchJSON<FinancePortfolioAggregate>(
+      `/api/finance/v1/portfolio/aggregate${financeQuery({
+        include_in_risk_only: includeInRiskOnly || undefined,
+      })}`,
+    ),
+  financePortfolioAudit: (accountId?: string) =>
+    fetchJSON<FinancePortfolioAudit[]>(
+      `/api/finance/v1/portfolio/audit${financeQuery({ account_id: accountId })}`,
+    ),
+  financePortfolioDrafts: (accountId?: string, status?: string) =>
+    fetchJSON<FinancePortfolioDraft[]>(
+      `/api/finance/v1/portfolio/drafts${financeQuery({
+        account_id: accountId,
+        status,
+      })}`,
+    ),
+  financePortfolioDraft: (id: string) =>
+    fetchJSON<FinancePortfolioDraft>(
+      `/api/finance/v1/portfolio/drafts/${encodeURIComponent(id)}`,
+    ),
+  /** Instrument type-ahead. `degraded` warns the caller results may be
+   * partial (upstream provider slow/unavailable) — the UI shows a note. */
+  financeInstrumentSearch: (q: string, market?: string, limit = 8) =>
+    fetchJSON<FinanceInstrumentSearchResult>(
+      `/api/finance/v1/instruments/search${financeQuery({ q, market, limit })}`,
+    ),
+  /** CSV dry-run: always 200 with a per-row verdict (no mutation, no surface
+   * header). Throws only on service/proxy failure. */
+  financePortfolioImportPreview: (id: string, csv: string) =>
+    fetchJSON<FinanceImportPreview>(
+      `/api/finance/v1/portfolio/accounts/${encodeURIComponent(id)}/import/preview`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ csv }),
+      },
+    ),
+
+  // Writers — authedFetch with the human web surface header; each returns a
+  // structured outcome (never throws on a domain non-2xx) so the forms
+  // render server errors inline instead of blanking. Network/proxy failures
+  // still reject so callers can catch + retry.
+  financePortfolioCreateAccount: (body: FinancePortfolioAccountCreate) =>
+    financePortfolioWrite<FinancePortfolioAccount>(
+      "/api/finance/v1/portfolio/accounts",
+      body,
+    ),
+  financePortfolioUpdateAccount: (
+    id: string,
+    body: FinancePortfolioAccountUpdate,
+  ) =>
+    financePortfolioWrite<FinancePortfolioAccount>(
+      `/api/finance/v1/portfolio/accounts/${encodeURIComponent(id)}/update`,
+      body,
+    ),
+  financePortfolioCreateDraft: (body: FinancePortfolioDraftCreate) =>
+    financePortfolioWrite<FinancePortfolioDraft>(
+      "/api/finance/v1/portfolio/drafts",
+      { surface: "web", ...body },
+    ),
+  financePortfolioImportCommit: (id: string, csv: string, actor: string) =>
+    financePortfolioWrite<FinanceImportCommit>(
+      `/api/finance/v1/portfolio/accounts/${encodeURIComponent(id)}/import/commit`,
+      { csv, actor },
+    ),
+  /**
+   * POST a human confirm/edit/reject action for a portfolio draft. Mirrors
+   * {@link api.financeCandidateAction}: does NOT throw on a domain non-2xx
+   * (403 not_human, 422 incomplete/invalid_edit, 409 terminal/
+   * version_conflict, 404 unknown) — those render as notices. The web
+   * surface header + a human actor are mandatory or the service 403s.
+   */
+  financePortfolioDraftAction: async (
+    id: string,
+    body: FinancePortfolioDraftActionRequest,
+  ): Promise<FinancePortfolioDraftActionOutcome> => {
+    const res = await authedFetch(
+      `/api/finance/v1/portfolio/drafts/${encodeURIComponent(id)}/action`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Finance-Surface": "web",
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    let parsed: unknown = null;
+    try {
+      parsed = await res.json();
+    } catch {
+      /* non-JSON body (e.g. proxy 502 page) — normalized below */
+    }
+    if (parsed && typeof parsed === "object" && "code" in parsed) {
+      const p = parsed as {
+        ok?: boolean;
+        code: string;
+        message?: string;
+        version?: number | null;
+        draft?: FinancePortfolioDraft | null;
+        event?: FinancePortfolioEvent | null;
+      };
+      return {
+        status: res.status,
+        ok: p.ok === true,
+        code: p.code,
+        message: p.message ?? "",
+        version: p.version ?? null,
+        draft: p.draft ?? null,
+        event: p.event ?? null,
+      };
+    }
+    let detail = res.statusText || `HTTP ${res.status}`;
+    if (parsed && typeof parsed === "object" && "detail" in parsed) {
+      const d = (parsed as { detail: unknown }).detail;
+      detail = typeof d === "string" ? d : JSON.stringify(d);
+    }
+    return {
+      status: res.status,
+      ok: false,
+      code: res.status === 503 ? "service_unavailable" : `http_${res.status}`,
+      message: detail,
+      version: null,
+      draft: null,
+      event: null,
+    };
+  },
 };
+
+/**
+ * POST a portfolio write (create account / draft, account update, import
+ * commit) via {@link authedFetch} with the human web surface header,
+ * normalized to a {@link FinancePortfolioWriteOutcome} that never throws on a
+ * domain non-2xx (the forms render the server message inline). Network/proxy
+ * failures reject so callers can catch them.
+ */
+async function financePortfolioWrite<T>(
+  url: string,
+  body: unknown,
+): Promise<FinancePortfolioWriteOutcome<T>> {
+  const res = await authedFetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Finance-Surface": "web",
+    },
+    body: JSON.stringify(body),
+  });
+  let parsed: unknown = null;
+  try {
+    parsed = await res.json();
+  } catch {
+    /* non-JSON body — normalized below */
+  }
+  if (res.ok) {
+    return {
+      ok: true,
+      status: res.status,
+      data: (parsed as T) ?? null,
+      error: "",
+    };
+  }
+  let detail = res.statusText || `HTTP ${res.status}`;
+  if (parsed && typeof parsed === "object") {
+    if ("detail" in parsed) {
+      const d = (parsed as { detail: unknown }).detail;
+      detail = typeof d === "string" ? d : JSON.stringify(d);
+    } else if ("message" in parsed) {
+      detail = String((parsed as { message: unknown }).message);
+    }
+  }
+  return { ok: false, status: res.status, data: null, error: detail };
+}
 
 /** Build a query string from defined params only ("" when none). */
 function financeQuery(
@@ -3116,4 +3315,264 @@ export class FinanceKnowledgeOfflineError extends Error {
     super(message);
     this.name = "FinanceKnowledgeOfflineError";
   }
+}
+
+// ── Portfolio types (Phase 0.9: real multi-account US/HK/CN holdings) ────
+// Separate from the paper-trading account shapes above. READ + DRAFT only.
+
+export type FinancePortfolioMarket = "US" | "HK" | "CN";
+export type FinancePortfolioProvider = "manual" | "ibkr";
+export type FinancePortfolioAccountType = "cash" | "margin";
+export type FinanceInstrumentSecurityType = "stock" | "etf" | "fund";
+export type FinancePortfolioDraftStatus =
+  | "draft"
+  | "confirmed"
+  | "rejected"
+  | "expired";
+export type FinancePortfolioAuthority = "broker" | "manual";
+
+export interface FinancePortfolioAccount {
+  id: string;
+  name: string;
+  provider: string;
+  market_scope: FinancePortfolioMarket;
+  account_type: FinancePortfolioAccountType;
+  base_currency: string;
+  include_in_risk: boolean;
+  note: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FinancePortfolioHolding {
+  symbol: string;
+  market: string;
+  currency: string;
+  qty: number;
+  /** Nullable: when unknown, `cost_basis_known` is false — render a
+   * localized "unknown", never a fabricated 0. */
+  avg_cost: number | null;
+  cost_basis_known: boolean;
+}
+
+export interface FinancePortfolioCash {
+  currency: string;
+  amount: number | null;
+  known: boolean;
+}
+
+export interface FinancePortfolioHoldings {
+  account_id: string;
+  as_of: string;
+  n_events: number;
+  holdings: FinancePortfolioHolding[];
+  cash: FinancePortfolioCash[];
+}
+
+export interface FinancePortfolioEvent {
+  event_type: string;
+  symbol: string | null;
+  market: string | null;
+  currency: string | null;
+  qty: number | null;
+  price: number | null;
+  commission: number | null;
+  amount: number | null;
+  occurred_at: string;
+  source: string;
+  external_id: string | null;
+  note: string;
+}
+
+export interface FinancePortfolioDrift {
+  symbol: string;
+  portfolio_qty: number;
+  broker_qty: number;
+}
+
+export interface FinancePortfolioReconcile {
+  account_id: string;
+  ok: boolean;
+  authority: FinancePortfolioAuthority;
+  summary: string;
+  note: string;
+  as_of: string;
+  drifts: FinancePortfolioDrift[];
+}
+
+export interface FinancePortfolioAggregateHolding
+  extends FinancePortfolioHolding {
+  /** Ids of the accounts this aggregate row rolls up. */
+  accounts: string[];
+}
+
+export interface FinancePortfolioAggregate {
+  accounts: number;
+  as_of: string;
+  holdings: FinancePortfolioAggregateHolding[];
+  cash: FinancePortfolioCash[];
+}
+
+export interface FinancePortfolioAudit {
+  ts: string;
+  action: string;
+  actor: string;
+  surface: string;
+  applied: boolean;
+  detail: string;
+}
+
+export interface FinancePortfolioDraft {
+  id: string;
+  account_id: string;
+  event_type: string;
+  symbol: string | null;
+  market: string | null;
+  currency: string | null;
+  qty: number | null;
+  price: number | null;
+  commission: number | null;
+  amount: number | null;
+  occurred_at: string | null;
+  source: string;
+  note: string;
+  status: FinancePortfolioDraftStatus;
+  version: number;
+  original_text: string;
+  missing: string[];
+  ambiguities: string[];
+  created_by: string;
+  confirmed_by: string | null;
+  confirmed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FinanceInstrumentMatch {
+  canonical_symbol: string;
+  display_name: string;
+  market: string;
+  exchange: string;
+  currency: string;
+  security_type: FinanceInstrumentSecurityType;
+  provider_id: string;
+}
+
+export interface FinanceInstrumentSearchResult {
+  query: string;
+  degraded: boolean;
+  source: string;
+  matches: FinanceInstrumentMatch[];
+}
+
+export interface FinanceImportRow {
+  line: number;
+  duplicate: boolean;
+  errors: string[];
+  ok: boolean;
+  event_type: string;
+  symbol: string;
+  qty: number | null;
+  price: number | null;
+  amount: number | null;
+}
+
+export interface FinanceImportPreview {
+  header_error: string | null;
+  n_valid: number;
+  n_invalid: number;
+  n_duplicate: number;
+  committable: boolean;
+  rows: FinanceImportRow[];
+}
+
+export interface FinanceImportCommit {
+  n_committed: number;
+  n_duplicate: number;
+  n_skipped: number;
+  event_ids: string[];
+}
+
+// ── Portfolio write request bodies + outcomes ──
+
+export interface FinancePortfolioAccountCreate {
+  name: string;
+  market_scope: FinancePortfolioMarket;
+  base_currency: string;
+  provider?: FinancePortfolioProvider;
+  account_type?: FinancePortfolioAccountType;
+  include_in_risk?: boolean;
+  note?: string;
+  actor: string;
+}
+
+export interface FinancePortfolioAccountUpdate {
+  name?: string;
+  include_in_risk?: boolean;
+  note?: string;
+  account_type?: FinancePortfolioAccountType;
+  actor: string;
+}
+
+export interface FinancePortfolioDraftCreate {
+  account_id: string;
+  event_type: string;
+  symbol?: string;
+  market?: string;
+  currency?: string;
+  qty?: number;
+  price?: number;
+  commission?: number;
+  amount?: number;
+  occurred_at?: string;
+  note?: string;
+  original_text?: string;
+  created_by?: string;
+  surface?: string;
+}
+
+export interface FinancePortfolioDraftEdits {
+  event_type?: string;
+  symbol?: string;
+  market?: string;
+  currency?: string;
+  qty?: number;
+  price?: number;
+  commission?: number;
+  amount?: number;
+  occurred_at?: string;
+  note?: string;
+}
+
+export interface FinancePortfolioDraftActionRequest {
+  action: "confirm" | "edit" | "reject";
+  actor: string;
+  idempotency_key: string;
+  expected_version?: number;
+  edits?: FinancePortfolioDraftEdits;
+}
+
+/** Structured result of a portfolio write; `ok` mirrors the HTTP 2xx. */
+export interface FinancePortfolioWriteOutcome<T> {
+  ok: boolean;
+  status: number;
+  data: T | null;
+  error: string;
+}
+
+/**
+ * Normalized outcome of {@link api.financePortfolioDraftAction}: service
+ * result codes (``applied``/``replayed``/``not_human``/``incomplete``/
+ * ``invalid_edit``/``terminal``/``version_conflict``/``unknown``) plus the
+ * synthesized ``service_unavailable``/``http_*`` codes for non-envelope
+ * error responses.
+ */
+export interface FinancePortfolioDraftActionOutcome {
+  status: number;
+  ok: boolean;
+  code: string;
+  message: string;
+  version: number | null;
+  draft: FinancePortfolioDraft | null;
+  event: FinancePortfolioEvent | null;
 }

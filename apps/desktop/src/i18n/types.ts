@@ -1527,6 +1527,158 @@ export interface Translations {
       positionPool: string
       positionsEmpty: string
     }
+    // Real multi-account holdings (Phase 0.9): the user's US/HK/CN accounts,
+    // separate from the paper book above. READ / DRAFT surface only.
+    holdings: {
+      // Sub-nav toggling the paper book vs. the real accounts.
+      subnavAria: string
+      subnavPaper: string
+      subnavReal: string
+      // Sidebar groups + special rows.
+      groupPortfolio: string
+      groupAccounts: string
+      aggregate: string
+      drafts: string
+      addAccount: string
+      accountMeta: (market: string, type: string) => string
+      accountsEmpty: string
+      accountsLoadError: string
+      selectPrompt: string
+      readOnlyNote: string
+      // Per-account detail: inner tabs + header actions.
+      tabsAria: string
+      tabHoldings: string
+      tabActivity: string
+      tabReconcile: string
+      recordTrade: string
+      importCsv: string
+      editAccount: string
+      asOf: (ts: string) => string
+      nEvents: (n: number) => string
+      // Holdings table + cash.
+      colSymbol: string
+      colMarket: string
+      colQty: string
+      colAvgCost: string
+      colCurrency: string
+      colAmount: string
+      colAccounts: string
+      unknownCost: string
+      unknownCash: string
+      holdingsEmpty: string
+      cashTitle: string
+      cashEmpty: string
+      heldInAccounts: (n: number) => string
+      // Aggregate roll-up.
+      aggregateTitle: string
+      aggregateEmpty: string
+      riskOnly: string
+      accountsCount: (n: number) => string
+      // Activity (events) table.
+      colDate: string
+      colEvent: string
+      colPrice: string
+      colSource: string
+      colNote: string
+      activityEmpty: string
+      // Reconciliation.
+      reconcileTitle: string
+      reconcileOk: string
+      reconcileDrift: string
+      reconcileAuthority: (authority: string) => string
+      driftTitle: string
+      colPortfolioQty: string
+      colBrokerQty: string
+      noDrift: string
+      reconcileEmpty: string
+      // Add / edit account dialog.
+      addAccountTitle: string
+      addAccountDesc: string
+      editAccountTitle: (name: string) => string
+      editAccountDesc: string
+      fieldName: string
+      namePlaceholder: string
+      fieldMarket: string
+      fieldBaseCurrency: string
+      fieldProvider: string
+      fieldAccountType: string
+      fieldIncludeInRisk: string
+      includeInRiskHint: string
+      fieldNote: string
+      notePlaceholder: string
+      createAccount: string
+      creating: string
+      saveAccount: string
+      accountCreated: (name: string) => string
+      accountUpdated: (name: string) => string
+      accountSaveFailed: string
+      nameRequired: string
+      // Record trade dialog (instrument type-ahead + draft→confirm).
+      recordTradeTitle: (account: string) => string
+      recordTradeDesc: string
+      fieldInstrument: string
+      instrumentPlaceholder: string
+      instrumentSearchPlaceholder: string
+      instrumentMinChars: string
+      instrumentSearching: string
+      instrumentEmpty: (q: string) => string
+      instrumentDegraded: string
+      instrumentPicked: (symbol: string, market: string, currency: string) => string
+      fieldEventType: string
+      fieldQty: string
+      fieldPrice: string
+      priceUnknownHint: string
+      fieldCommission: string
+      fieldOccurredAt: string
+      submitTrade: string
+      submitting: string
+      tradeRecorded: (symbol: string) => string
+      tradeFailed: string
+      instrumentRequired: string
+      qtyRequired: string
+      positiveNumber: (label: string) => string
+      // Drafts review.
+      draftsTitle: string
+      draftsEmpty: string
+      draftMissing: (fields: string) => string
+      draftAmbiguities: (items: string) => string
+      draftOriginal: (text: string) => string
+      draftCreatedBy: (actor: string) => string
+      confirm: string
+      edit: string
+      reject: string
+      draftConfirmed: (symbol: string) => string
+      draftRejected: (symbol: string) => string
+      draftActionDone: (symbol: string, action: string, code: string) => string
+      draftActionFailed: (action: string, symbol: string) => string
+      draftRowMeta: (event: string, status: string) => string
+      // Edit draft dialog.
+      editDraftTitle: string
+      editDraftDesc: string
+      saveConfirm: string
+      // CSV import dialog.
+      importTitle: (account: string) => string
+      importDesc: string
+      csvLabel: string
+      csvPlaceholder: string
+      csvColumnsHint: string
+      preview: string
+      previewing: string
+      commit: string
+      committing: string
+      importHeaderError: (error: string) => string
+      importCounts: (valid: number, invalid: number, duplicate: number) => string
+      importNotCommittable: string
+      importColLine: string
+      importColStatus: string
+      importColEvent: string
+      importColSymbol: string
+      importRowOk: string
+      importRowDuplicate: string
+      importCommitted: (n: number) => string
+      importFailed: string
+      previewFailed: string
+    }
     // Localized labels for the fixed backend enum vocabularies (Loop.md
     // schemas): looked up by the raw wire value, humanized fallback for any
     // value not listed so a new backend code never renders blank.
@@ -1540,6 +1692,14 @@ export interface Translations {
       breaker: Record<string, string>
       candidateStatus: Record<string, string>
       auditAction: Record<string, string>
+      // Real-portfolio vocab (Phase 0.9).
+      market: Record<string, string>
+      eventType: Record<string, string>
+      draftStatus: Record<string, string>
+      securityType: Record<string, string>
+      authority: Record<string, string>
+      provider: Record<string, string>
+      accountType: Record<string, string>
     }
   }
 

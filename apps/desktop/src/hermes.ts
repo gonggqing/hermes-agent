@@ -1794,3 +1794,372 @@ export function financeBars(
 export function financeAnalyze(symbol: string): Promise<FinanceAnalyze> {
   return window.hermesDesktop.api<FinanceAnalyze>({ path: `/api/finance/v1/analyze${financeQuery({ symbol })}` })
 }
+
+// ---------------------------------------------------------------------------
+// Real portfolio (Loop.md Phase 0.9). The user's REAL multi-account holdings
+// (US/HK/CN), tracked separately from the paper-trading account above. This is
+// a READ / DRAFT surface: the only "write" is creating a draft event and then
+// running a HUMAN confirm/edit/reject action on it (no order placement). Manual
+// entry = POST a draft (surface desktop, human created_by) then POST a confirm
+// action (surface desktop, human actor) so the event lands as a holding.
+//
+// As with the confirmation service above, the desktop IPC bridge drops custom
+// headers, so the human `surface` rides in the request body; the service treats
+// body.surface as the fallback when X-Finance-Surface is absent. Confirm/import
+// MUST carry a human actor (never "system"/"hermes") or the service answers 403.
+// ---------------------------------------------------------------------------
+
+export type FinancePortfolioMarket = 'CN' | 'HK' | 'US'
+
+export type FinanceAccountType = 'cash' | 'margin'
+
+// Terminal draft lifecycle (human-confirmation surface).
+export type FinanceDraftStatus = 'confirmed' | 'draft' | 'expired' | 'rejected'
+
+export interface FinancePortfolioAccount {
+  id: string
+  name: string
+  provider: string
+  market_scope: FinancePortfolioMarket
+  account_type: FinanceAccountType
+  base_currency: string
+  include_in_risk: boolean
+  note: string
+  created_at: string
+  updated_at: string
+}
+
+// One derived holding. `avg_cost` is null and `cost_basis_known` false when the
+// lot cost is not known (e.g. a position opened without a recorded price) — the
+// UI shows a localized "unknown", NEVER a fabricated 0. In the aggregate view
+// each holding also carries the account ids it is held across.
+export interface FinanceHolding {
+  symbol: string
+  market: string
+  currency: string
+  qty: number
+  avg_cost: null | number
+  cost_basis_known: boolean
+  accounts?: string[]
+}
+
+// A cash balance per currency. `amount` is null and `known` false when the
+// balance cannot be derived (no opening cash recorded).
+export interface FinanceCashBalance {
+  currency: string
+  amount: null | number
+  known: boolean
+}
+
+export interface FinanceHoldingsResponse {
+  account_id: string
+  as_of: string
+  n_events: number
+  holdings: FinanceHolding[]
+  cash: FinanceCashBalance[]
+}
+
+// Cross-account roll-up. `accounts` is the number of accounts rolled up.
+export interface FinanceAggregateResponse {
+  accounts: number
+  as_of: string
+  holdings: FinanceHolding[]
+  cash: FinanceCashBalance[]
+}
+
+export interface FinancePortfolioEvent {
+  event_type: string
+  symbol: null | string
+  market: null | string
+  currency: null | string
+  qty: null | number
+  price: null | number
+  commission: null | number
+  amount: null | number
+  occurred_at: string
+  source: string
+  external_id: null | string
+  note: null | string
+}
+
+export interface FinanceDrift {
+  symbol: string
+  portfolio_qty: number
+  broker_qty: number
+}
+
+export interface FinanceReconcile {
+  account_id: string
+  ok: boolean
+  authority: 'broker' | 'manual'
+  summary: string
+  note: string
+  as_of: string
+  drifts: FinanceDrift[]
+}
+
+export interface FinancePortfolioAuditEvent {
+  ts: string
+  action: string
+  actor: string
+  surface: string
+  applied: boolean
+  detail: string
+}
+
+export interface FinancePortfolioDraft {
+  id: string
+  account_id: string
+  event_type: string
+  symbol: null | string
+  market: null | string
+  currency: null | string
+  qty: null | number
+  price: null | number
+  commission: null | number
+  amount: null | number
+  occurred_at: null | string
+  source: string
+  note: null | string
+  status: FinanceDraftStatus
+  version: number
+  original_text: null | string
+  missing: string[]
+  ambiguities: string[]
+  created_by: null | string
+  confirmed_by: null | string
+  confirmed_at: null | string
+  created_at: string
+  updated_at: string
+}
+
+// One instrument-resolver hit. `degraded` on the envelope means the resolver
+// fell back to a local/cached source; the UI surfaces that as an inline note.
+export interface FinanceInstrumentMatch {
+  canonical_symbol: string
+  display_name: string
+  market: string
+  exchange: string
+  currency: string
+  security_type: string
+  provider_id: string
+}
+
+export interface FinanceInstrumentSearch {
+  query: string
+  degraded: boolean
+  source: string
+  matches: FinanceInstrumentMatch[]
+}
+
+export interface FinanceImportRow {
+  line: number
+  duplicate: boolean
+  errors: string[]
+  ok: boolean
+  event_type: null | string
+  symbol: null | string
+  qty: null | number
+  price: null | number
+  amount: null | number
+}
+
+export interface FinanceImportPreview {
+  header_error: null | string
+  n_valid: number
+  n_invalid: number
+  n_duplicate: number
+  committable: boolean
+  rows: FinanceImportRow[]
+}
+
+export interface FinanceImportCommitResult {
+  n_committed: number
+  n_duplicate: number
+  n_skipped: number
+  event_ids: string[]
+}
+
+export interface FinanceAccountCreatePayload {
+  name: string
+  market_scope: FinancePortfolioMarket
+  base_currency: string
+  provider?: string
+  account_type?: FinanceAccountType
+  include_in_risk?: boolean
+  note?: string
+  actor: string
+}
+
+export interface FinanceAccountUpdatePayload {
+  name?: string
+  include_in_risk?: boolean
+  note?: string
+  account_type?: FinanceAccountType
+  actor: string
+}
+
+export interface FinanceDraftCreatePayload {
+  account_id: string
+  event_type: string
+  symbol?: string
+  market?: string
+  currency?: string
+  qty?: number
+  price?: number
+  commission?: number
+  amount?: number
+  occurred_at?: string
+  note?: string
+  original_text?: string
+  created_by?: string
+}
+
+// Human confirm/edit/reject on a draft. `actor` MUST be a human identity and
+// the surface a human surface (desktop) — the service 403s "not_human"
+// otherwise. `idempotency_key` is generated once per intent and reused on
+// retry so a confirm replays instead of double-applying.
+export interface FinanceDraftActionPayload {
+  action: 'confirm' | 'edit' | 'reject'
+  actor: string
+  idempotency_key: string
+  expected_version?: number
+  edits?: Record<string, boolean | number | string | null>
+}
+
+export interface FinanceDraftActionResult {
+  ok: boolean
+  code: string
+  message: string
+  version: null | number
+  draft: FinancePortfolioDraft | null
+  event: FinancePortfolioEvent | null
+}
+
+export function getPortfolioAccounts(): Promise<FinancePortfolioAccount[]> {
+  return window.hermesDesktop.api<FinancePortfolioAccount[]>({ path: '/api/finance/v1/portfolio/accounts' })
+}
+
+export function getPortfolioAccount(id: string): Promise<FinancePortfolioAccount> {
+  return window.hermesDesktop.api<FinancePortfolioAccount>({
+    path: `/api/finance/v1/portfolio/accounts/${encodeURIComponent(id)}`
+  })
+}
+
+export function postPortfolioAccount(payload: FinanceAccountCreatePayload): Promise<FinancePortfolioAccount> {
+  return window.hermesDesktop.api<FinancePortfolioAccount>({
+    path: '/api/finance/v1/portfolio/accounts',
+    method: 'POST',
+    body: { surface: 'desktop', ...payload }
+  })
+}
+
+export function postPortfolioAccountUpdate(
+  id: string,
+  payload: FinanceAccountUpdatePayload
+): Promise<FinancePortfolioAccount> {
+  return window.hermesDesktop.api<FinancePortfolioAccount>({
+    path: `/api/finance/v1/portfolio/accounts/${encodeURIComponent(id)}/update`,
+    method: 'POST',
+    body: { surface: 'desktop', ...payload }
+  })
+}
+
+export function getPortfolioHoldings(id: string): Promise<FinanceHoldingsResponse> {
+  return window.hermesDesktop.api<FinanceHoldingsResponse>({
+    path: `/api/finance/v1/portfolio/accounts/${encodeURIComponent(id)}/holdings`
+  })
+}
+
+export function getPortfolioEvents(id: string): Promise<FinancePortfolioEvent[]> {
+  return window.hermesDesktop.api<FinancePortfolioEvent[]>({
+    path: `/api/finance/v1/portfolio/accounts/${encodeURIComponent(id)}/events`
+  })
+}
+
+export function getPortfolioReconcile(id: string): Promise<FinanceReconcile> {
+  return window.hermesDesktop.api<FinanceReconcile>({
+    path: `/api/finance/v1/portfolio/accounts/${encodeURIComponent(id)}/reconcile`
+  })
+}
+
+export function getPortfolioAggregate(opts: { includeInRiskOnly?: boolean } = {}): Promise<FinanceAggregateResponse> {
+  return window.hermesDesktop.api<FinanceAggregateResponse>({
+    path: `/api/finance/v1/portfolio/aggregate${financeQuery({ include_in_risk_only: opts.includeInRiskOnly })}`
+  })
+}
+
+export function getPortfolioAudit(opts: { accountId?: string } = {}): Promise<FinancePortfolioAuditEvent[]> {
+  return window.hermesDesktop.api<FinancePortfolioAuditEvent[]>({
+    path: `/api/finance/v1/portfolio/audit${financeQuery({ account_id: opts.accountId })}`
+  })
+}
+
+export function getPortfolioDrafts(
+  opts: { accountId?: string; status?: FinanceDraftStatus } = {}
+): Promise<FinancePortfolioDraft[]> {
+  return window.hermesDesktop.api<FinancePortfolioDraft[]>({
+    path: `/api/finance/v1/portfolio/drafts${financeQuery({ account_id: opts.accountId, status: opts.status })}`
+  })
+}
+
+export function getPortfolioDraft(id: string): Promise<FinancePortfolioDraft> {
+  return window.hermesDesktop.api<FinancePortfolioDraft>({
+    path: `/api/finance/v1/portfolio/drafts/${encodeURIComponent(id)}`
+  })
+}
+
+// Create a DRAFT event (surface desktop, human created_by). A draft is inert
+// until a human confirm action applies it — this call never mutates holdings.
+export function postPortfolioDraft(payload: FinanceDraftCreatePayload): Promise<FinancePortfolioDraft> {
+  return window.hermesDesktop.api<FinancePortfolioDraft>({
+    path: '/api/finance/v1/portfolio/drafts',
+    method: 'POST',
+    body: { surface: 'desktop', ...payload }
+  })
+}
+
+// Relay a HUMAN confirm/edit/reject to the draft. 200 applied/replayed, 403
+// not_human, 422 incomplete/invalid_edit, 409 terminal/version_conflict, 404
+// unknown — parse via parseFinanceError. Surface rides in the body (header is
+// dropped by the IPC bridge); the service keeps the audit trail as "desktop".
+export function postPortfolioDraftAction(
+  id: string,
+  payload: FinanceDraftActionPayload
+): Promise<FinanceDraftActionResult> {
+  return window.hermesDesktop.api<FinanceDraftActionResult>({
+    path: `/api/finance/v1/portfolio/drafts/${encodeURIComponent(id)}/action`,
+    method: 'POST',
+    body: { surface: 'desktop', ...payload }
+  })
+}
+
+// Instrument type-ahead resolver. `degraded` on the envelope flags a fallback
+// source; callers surface that inline but still use the matches.
+export function searchInstruments(
+  opts: { q: string; market?: string; limit?: number }
+): Promise<FinanceInstrumentSearch> {
+  return window.hermesDesktop.api<FinanceInstrumentSearch>({
+    path: `/api/finance/v1/instruments/search${financeQuery({ q: opts.q, market: opts.market, limit: opts.limit })}`
+  })
+}
+
+export function postPortfolioImportPreview(id: string, csv: string): Promise<FinanceImportPreview> {
+  return window.hermesDesktop.api<FinanceImportPreview>({
+    path: `/api/finance/v1/portfolio/accounts/${encodeURIComponent(id)}/import/preview`,
+    method: 'POST',
+    body: { csv }
+  })
+}
+
+export function postPortfolioImportCommit(
+  id: string,
+  csv: string,
+  actor: string
+): Promise<FinanceImportCommitResult> {
+  return window.hermesDesktop.api<FinanceImportCommitResult>({
+    path: `/api/finance/v1/portfolio/accounts/${encodeURIComponent(id)}/import/commit`,
+    method: 'POST',
+    body: { surface: 'desktop', csv, actor }
+  })
+}

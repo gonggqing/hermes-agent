@@ -135,6 +135,27 @@ export const ja = defineLocale({
       positionUpnl: '評価損益',
       positionPool: 'プール',
       positionsEmpty: '保有ポジションはありません。'
+    },
+    holdings: {
+      subnavAria: 'ポートフォリオ台帳',
+      subnavPaper: 'ペーパー口座',
+      subnavReal: 'マイ保有',
+      groupPortfolio: 'ポートフォリオ',
+      groupAccounts: '口座',
+      aggregate: '全口座',
+      drafts: 'ドラフト',
+      addAccount: '口座を追加',
+      tabHoldings: '保有',
+      tabActivity: '取引履歴',
+      tabReconcile: '照合',
+      recordTrade: '取引を記録',
+      importCsv: 'CSV を取り込む',
+      editAccount: '編集',
+      draftsTitle: 'レビュー待ちのドラフト',
+      aggregateTitle: '全口座',
+      reconcileTitle: '照合',
+      addAccountTitle: '口座を追加',
+      readOnlyNote: '読み取り専用 — 唯一の書き込みはレビュー済みドラフトの確認です。ここでは発注しません。'
     }
   },
   common: {

@@ -249,6 +249,7 @@ export interface FinanceTranslations {
     tabResearch: string;
     tabQueue: string;
     tabPortfolio: string;
+    tabHoldings: string; // Phase 0.9 real multi-account holdings sub-area
     // Research sidebar sections + entries.
     marketsGroup: string; // "Markets"
     watchGroup: string; // "Watch"
@@ -369,6 +370,232 @@ export interface FinanceTranslations {
     confidence: string; // "confidence {pct}%"
     dataDelay: string; // honest delay disclaimer (fallback if note absent)
     loadingQuote: string;
+  };
+  // Phase 0.9 real multi-account holdings sub-area (US/HK/CN). READ + DRAFT
+  // only — the only writes are creating a draft + the human confirm/edit/
+  // reject action. Separate from the paper-trading account above.
+  portfolio: {
+    // Shell + sidebar.
+    allAccounts: string;
+    drafts: string;
+    addAccount: string;
+    accountsGroup: string;
+    reviewGroup: string;
+    loading: string;
+    loadError: string;
+    selectHint: string;
+    noAccounts: string;
+    includeInRisk: string; // "In risk" badge
+    // Enum labels (web has no finance.enums catalog — localized here).
+    markets: { US: string; HK: string; CN: string };
+    providers: { manual: string; ibkr: string };
+    accountTypes: { cash: string; margin: string };
+    securityTypes: { stock: string; etf: string; fund: string };
+    eventTypes: {
+      buy: string;
+      sell: string;
+      dividend: string;
+      deposit: string;
+      withdraw: string;
+      fee: string;
+      opening: string;
+      split: string;
+    };
+    draftStatus: {
+      draft: string;
+      confirmed: string;
+      rejected: string;
+      expired: string;
+    };
+    authority: { broker: string; manual: string };
+    // Account-detail sub-tabs.
+    tabs: {
+      holdings: string;
+      record: string;
+      activity: string;
+      reconcile: string;
+      import: string;
+      settings: string;
+    };
+    // Add-account form.
+    form: {
+      title: string;
+      name: string;
+      namePlaceholder: string;
+      market: string;
+      baseCurrency: string;
+      baseCurrencyPlaceholder: string;
+      provider: string;
+      accountType: string;
+      includeInRisk: string;
+      includeInRiskHint: string;
+      note: string;
+      notePlaceholder: string;
+      submit: string;
+      submitting: string;
+      errName: string;
+      errCurrency: string;
+      created: string; // "Account “{name}” created."
+      failed: string; // "Could not create the account ({message})."
+    };
+    // Holdings table + cash balances (per-account and aggregate).
+    holdings: {
+      title: string;
+      asOf: string; // "as of {time}"
+      nEvents: string; // "{n} events"
+      symbol: string;
+      market: string;
+      qty: string;
+      avgCost: string;
+      currency: string;
+      accounts: string; // aggregate column
+      unknownCost: string; // localized "unknown"
+      empty: string;
+      emptyAggregate: string;
+      cashTitle: string;
+      cashEmpty: string;
+      cashAmount: string;
+      unknownCash: string;
+    };
+    aggregate: {
+      title: string;
+      riskOnly: string;
+      accountsCount: string; // "{n} accounts"
+    };
+    // Record trade / opening position form (instrument type-ahead + confirm).
+    record: {
+      title: string;
+      subtitle: string;
+      instrument: string;
+      instrumentPlaceholder: string;
+      searching: string;
+      noMatches: string;
+      degraded: string;
+      selected: string;
+      clearInstrument: string;
+      eventType: string;
+      qty: string;
+      price: string;
+      priceHint: string;
+      commission: string;
+      occurredAt: string;
+      note: string;
+      notePlaceholder: string;
+      submit: string;
+      submitting: string;
+      errInstrument: string;
+      errQty: string;
+      errPrice: string;
+      errCommission: string;
+      recorded: string; // "{symbol} recorded."
+      failedDraft: string; // "Could not create the draft ({message})."
+      failedConfirm: string; // "Draft created but confirmation failed ({message})."
+      requestFailed: string; // "Request failed ({error})."
+    };
+    // Drafts review (human-confirmation surface).
+    draftsView: {
+      title: string;
+      subtitle: string;
+      empty: string;
+      filterStatus: string;
+      missing: string; // "Missing: {fields}"
+      ambiguities: string; // "Ambiguous: {items}"
+      original: string; // "From: “{text}”"
+      createdBy: string; // "by {actor}"
+      confirm: string;
+      reject: string;
+      edit: string;
+      save: string;
+      cancel: string;
+      fields: { qty: string; price: string; commission: string; note: string };
+      errQty: string;
+      errPrice: string;
+      errCommission: string;
+      outcome: {
+        requestFailed: string;
+        confirmed: string; // "{symbol} confirmed"
+        rejected: string; // "{symbol} rejected"
+        edited: string; // "{symbol} updated"
+        replayed: string;
+        notHuman: string;
+        incomplete: string;
+        invalidEdit: string;
+        terminal: string;
+        versionConflict: string;
+        unknown: string;
+        serviceUnavailable: string;
+        unexpected: string;
+        unexpectedFallback: string;
+      };
+    };
+    // CSV import (paste → preview → commit).
+    import: {
+      title: string;
+      columns: string;
+      placeholder: string;
+      preview: string;
+      previewing: string;
+      commit: string;
+      committing: string;
+      emptyCsv: string;
+      headerError: string; // "Header error: {message}"
+      summary: string; // "{valid} valid · {invalid} invalid · {duplicate} duplicate"
+      notCommittable: string;
+      colLine: string;
+      colStatus: string;
+      colType: string;
+      colSymbol: string;
+      colQty: string;
+      colPrice: string;
+      colAmount: string;
+      colErrors: string;
+      rowOk: string;
+      rowDuplicate: string;
+      rowInvalid: string;
+      committed: string; // "{committed} rows committed ({duplicate} duplicate, {skipped} skipped)."
+      previewFailed: string;
+      failed: string;
+    };
+    // Per-account reconciliation status.
+    reconcile: {
+      title: string;
+      authority: string;
+      asOf: string;
+      inSync: string;
+      drift: string;
+      noDrift: string;
+      driftSymbol: string;
+      portfolioQty: string;
+      brokerQty: string;
+      unavailable: string;
+    };
+    // Activity / event ledger.
+    activity: {
+      title: string;
+      empty: string;
+      colTime: string;
+      colType: string;
+      colSymbol: string;
+      colQty: string;
+      colPrice: string;
+      colAmount: string;
+      colSource: string;
+      colNote: string;
+    };
+    // Account settings (update).
+    settings: {
+      title: string;
+      name: string;
+      accountType: string;
+      includeInRisk: string;
+      note: string;
+      save: string;
+      saving: string;
+      saved: string;
+      failed: string;
+      meta: string; // "Provider {provider} · {market} · base {currency}"
+      created: string; // "Created {time}"
+    };
   };
 }
 

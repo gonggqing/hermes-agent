@@ -135,6 +135,27 @@ export const zhHant = defineLocale({
       positionUpnl: '浮動盈虧',
       positionPool: '資金池',
       positionsEmpty: '暫無持倉。'
+    },
+    holdings: {
+      subnavAria: '組合帳本',
+      subnavPaper: '模擬帳戶',
+      subnavReal: '我的持倉',
+      groupPortfolio: '組合',
+      groupAccounts: '帳戶',
+      aggregate: '全部帳戶',
+      drafts: '草稿',
+      addAccount: '新增帳戶',
+      tabHoldings: '持倉',
+      tabActivity: '流水',
+      tabReconcile: '對帳',
+      recordTrade: '記錄交易',
+      importCsv: '匯入 CSV',
+      editAccount: '編輯',
+      draftsTitle: '待審核草稿',
+      aggregateTitle: '全部帳戶',
+      reconcileTitle: '對帳',
+      addAccountTitle: '新增帳戶',
+      readOnlyNote: '唯讀 — 唯一的寫入是確認你審核過的草稿。此處不下任何訂單。'
     }
   },
   common: {

@@ -1,5 +1,6 @@
 import { type ReactNode, useMemo } from 'react'
 
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import type { FinanceMode, FinancePosition } from '@/hermes'
 import { useI18n } from '@/i18n'
 
@@ -9,6 +10,7 @@ import { DetailColumn, ListColumn, MasterDetail } from '../master-detail'
 import { AccountSummary, OrdersTable, TradeStatsSection, useAccountQueries } from './account'
 import { FinanceDetailPlaceholder, FinanceListGroup, FinanceNavRow } from './chrome'
 import { FinanceHistoryTab } from './history'
+import { FinanceHoldingsView } from './holdings'
 import { fmtPrice, fmtQty, fmtSignedMoney, pnlClass } from './lib'
 import { FinanceMarketTab } from './market'
 import { FinancePill, FinanceSectionLabel, QuerySection, StatTile } from './primitives'
@@ -23,7 +25,49 @@ const OVERVIEW_IDS = ['account', 'orders', 'stats', 'market', 'history', 'report
 
 type OverviewId = (typeof OVERVIEW_IDS)[number]
 
+const BOOKS = ['paper', 'real'] as const
+
+// The Portfolio tab holds two BOOKS: the paper-trading account above (default,
+// unchanged), and the user's REAL multi-account holdings (Phase 0.9). A thin
+// sub-nav toggles between them; the paper/live footer only makes sense for the
+// paper book, so the real book renders without it.
 export function FinancePortfolioView({
+  bottomBar,
+  enabled,
+  mode
+}: {
+  bottomBar: ReactNode
+  enabled: boolean
+  mode: FinanceMode
+}) {
+  const { t } = useI18n()
+  const copy = t.finance.holdings
+  const [book, setBook] = useRouteEnumParam('book', BOOKS, 'paper')
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div aria-label={copy.subnavAria} className="shrink-0 px-3 py-2" role="group">
+        <SegmentedControl
+          onChange={setBook}
+          options={[
+            { id: 'paper', label: copy.subnavPaper },
+            { id: 'real', label: copy.subnavReal }
+          ]}
+          value={book}
+        />
+      </div>
+      <div className="min-h-0 flex-1">
+        {book === 'paper' ? (
+          <PaperPortfolio bottomBar={bottomBar} enabled={enabled} mode={mode} />
+        ) : (
+          <FinanceHoldingsView enabled={enabled} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function PaperPortfolio({
   bottomBar,
   enabled,
   mode
