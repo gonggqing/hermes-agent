@@ -355,9 +355,12 @@ class TestPendingAndActions:
 
     def test_no_place_order_endpoint_exists(self, env):
         """Loop.md §3: order authority is service-bound — the HTTP surface
-        must not expose any order-placement route."""
+        must not expose any order-PLACEMENT route. The only order-authority
+        route allowed is the human-gated safety CANCEL-ALL (reduces exposure,
+        never places), part of the kill-switch drill."""
         _, _, _, client = env
         app = client.app
         paths = {r.path for r in app.routes}
-        assert not any("order" in p and p != "/v1/orders" for p in paths)
+        _SAFE = {"/v1/orders", "/v1/orders/cancel-all"}
+        assert not any("order" in p and p not in _SAFE for p in paths)
         assert client.post("/v1/orders", json={}).status_code == 405

@@ -174,6 +174,31 @@ class ExecutionEngine:
             logger.info("synced fills", extra={"n": new})
         return new
 
+    def cancel_all_orders(self, *, include_protection: bool = True) -> list[Order]:
+        """Deliberate operator flatten (Loop.md §3 kill-switch drill): cancel
+        active working orders at the broker and mark them CANCELLED in the
+        ledger. Returns the orders successfully cancelled.
+
+        This is SEPARATE from the kill-switch (which only halts NEW entries):
+        cancelling protective SELL stops leaves open positions naked, so it is
+        an explicit action. ``include_protection=False`` keeps resting
+        protective stops while cancelling only pending entries."""
+        cancelled: list[Order] = []
+        for order in self.broker.get_orders(active_only=True):
+            if not include_protection and order.side is Side.SELL:
+                continue  # keep protective stops resting
+            if self.broker.cancel_order(order.id):
+                self.ledger.update_order(
+                    order.model_copy(update={"status": OrderStatus.CANCELLED})
+                )
+                cancelled.append(order)
+        if cancelled:
+            logger.warning(
+                "cancel_all_orders",
+                extra={"n": len(cancelled), "include_protection": include_protection},
+            )
+        return cancelled
+
     # ------------------------------------------------------------- internals
 
     def _revalidate(

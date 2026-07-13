@@ -101,6 +101,18 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     # On-demand market analysis for the conversational agent (thrust B):
     runtime.feed = feed
     runtime.fundamentals = fundamentals
+    # Manual kill-switch (Loop.md §3 / Phase 0.95): a filesystem HALT flag next
+    # to the DB. Engaged → the loop's dead-man's switch vetoes NEW entries (the
+    # RiskEngine enforces it); exits/protection are untouched. Survives restart
+    # and is `touch`-able out-of-band if the service wedges.
+    from swing_trader.killswitch import KillSwitch, kill_switch_path
+
+    kill_switch = KillSwitch(kill_switch_path(args.db or settings.db_path),
+                             clock=runtime.clock)
+    runtime.kill_switch = kill_switch
+    if kill_switch.engaged():
+        print(f"⚠️  KILL-SWITCH ENGAGED at startup: {kill_switch.state().reason or '(no reason)'}",
+              flush=True)
     # Phase 0.9 (portfolio): instrument type-ahead behind a cached, offline
     # provider (a live adapter can slot behind the same port later).
     # Append-only Portfolio Journal + human-confirmation draft service, sharing
@@ -245,6 +257,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         earnings_provider=earnings_provider,  # earnings calendar (Phase 0.75)
         llm_analyst=llm_analyst,
         knowledge=knowledge, knowledge_index=knowledge_index,
+        kill_switch=kill_switch,  # Phase 0.95 manual HALT
     )
     if rehydration.performed:
         loop.execution.seed_synced_fills(rehydration.fill_ids)
@@ -254,6 +267,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     # run + finalize so /v1/session/* can trigger them on demand (human-gated).
     runtime.run_session = loop.run_session_now
     runtime.finalize_session = loop.finalize_session_now
+    runtime.execution = loop.execution  # Phase 0.95: /orders/cancel-all
 
     # CN MORNING research session (Loop.md two-session extension): a lighter,
     # technology-focused research brief on the China/HK market, on the CN
@@ -339,6 +353,37 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         print("bye")
 
 
+def _kill_switch_for(args: argparse.Namespace):
+    from swing_trader.killswitch import KillSwitch, kill_switch_path
+
+    settings = load_settings()
+    return KillSwitch(kill_switch_path(args.db or settings.db_path))
+
+
+def _cmd_kill(args: argparse.Namespace) -> None:
+    ks = _kill_switch_for(args)
+    st = ks.engage(reason=args.reason, actor=args.actor)
+    print(f"KILL-SWITCH ENGAGED at {st.since} (actor={st.actor}); reason: {st.reason or '(none)'}")
+    print(f"flag file: {ks.path}")
+    print("New entries are HALTED. Exits and protective stops are unaffected.")
+    print("Release with:  python -m swing_trader release")
+
+
+def _cmd_release(args: argparse.Namespace) -> None:
+    ks = _kill_switch_for(args)
+    ks.release(actor=args.actor)
+    print(f"kill-switch RELEASED (actor={args.actor}); new entries permitted again.")
+    print(f"flag file removed: {ks.path}")
+
+
+def _cmd_killswitch_status(args: argparse.Namespace) -> None:
+    st = _kill_switch_for(args).state()
+    if st.engaged:
+        print(f"ENGAGED since {st.since} (actor={st.actor}); reason: {st.reason or '(none)'}")
+    else:
+        print("released (new entries permitted)")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="swing_trader")
     parser.add_argument("--log-level", default="INFO")
@@ -357,6 +402,24 @@ def main() -> None:
     p_serve.add_argument("--check-now", action="store_true",
                          help="run monitors + morning report once at startup")
     p_serve.set_defaults(func=_cmd_serve)
+
+    # Out-of-band kill-switch (Loop.md §3 / Phase 0.95): engage/release the HALT
+    # flag from the shell even if the service is wedged. Resolves the SAME file
+    # the running service reads (next to --db / DB_PATH).
+    p_kill = sub.add_parser("kill", help="ENGAGE the kill-switch (halt new entries)")
+    p_kill.add_argument("--db", default=None)
+    p_kill.add_argument("--reason", default="", help="why (recorded in the flag file)")
+    p_kill.add_argument("--actor", default="cli")
+    p_kill.set_defaults(func=_cmd_kill)
+
+    p_rel = sub.add_parser("release", help="RELEASE the kill-switch (re-permit entries)")
+    p_rel.add_argument("--db", default=None)
+    p_rel.add_argument("--actor", default="cli")
+    p_rel.set_defaults(func=_cmd_release)
+
+    p_ks = sub.add_parser("killswitch-status", help="print the kill-switch state")
+    p_ks.add_argument("--db", default=None)
+    p_ks.set_defaults(func=_cmd_killswitch_status)
 
     args = parser.parse_args()
     setup_logging(level=args.log_level)

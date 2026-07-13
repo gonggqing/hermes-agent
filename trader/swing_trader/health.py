@@ -73,10 +73,16 @@ def assess_health(
     news=None,
     breaker_state: Optional[BreakerState] = None,
     reconciliation: Optional[ReconciliationResult] = None,
+    kill_switch_engaged: bool = False,
+    kill_switch_reason: str = "",
     now: Optional[datetime] = None,
 ) -> HealthStatus:
     """Build the current :class:`HealthStatus`. Snapshots are the monitor
-    outputs (each carries ``.ts``); any may be None. Never raises."""
+    outputs (each carries ``.ts``); any may be None. Never raises.
+
+    ``kill_switch_engaged`` is the MANUAL operator halt (Loop.md §3): when True
+    it forces ``entries_allowed=False`` and marks the system UNHEALTHY, taking
+    precedence over every automatic check."""
     now = now or datetime.now(timezone.utc)
     checks: list[HealthCheck] = []
     warnings: list[str] = []
@@ -124,10 +130,21 @@ def assess_health(
         checks.append(HealthCheck(name="breaker", level=HealthLevel.OK,
                                   detail=f"breaker {breaker_state.value}"))
 
-    # Dead-man's switch: new entries need FRESH critical data + no ledger drift.
-    # (The breaker is enforced separately in the RiskEngine, so it is not
-    # duplicated here.)
-    entries_allowed = market_fresh and portfolio_fresh and recon_ok
+    # Manual kill-switch (operator HALT) — highest precedence, overrides all.
+    if kill_switch_engaged:
+        detail = "KILL-SWITCH ENGAGED — all new entries halted by operator"
+        if kill_switch_reason:
+            detail += f" ({kill_switch_reason})"
+        checks.append(HealthCheck(name="kill_switch", level=HealthLevel.UNHEALTHY,
+                                  detail=detail))
+        warnings.append("kill-switch engaged — new entries halted")
+
+    # Dead-man's switch: new entries need FRESH critical data + no ledger drift
+    # AND the manual kill-switch must be released. (The breaker is enforced
+    # separately in the RiskEngine, so it is not duplicated here.)
+    entries_allowed = (
+        market_fresh and portfolio_fresh and recon_ok and not kill_switch_engaged
+    )
 
     level = HealthLevel.OK
     for c in checks:

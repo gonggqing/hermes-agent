@@ -85,6 +85,9 @@ class FinanceRuntime:
     finalize_session: Any = None  # Callable[[], dict] — loop.finalize_session_now
     nav_provider: Any = None  # swing_trader.fund_nav.NavProvider — 场外基金 NAV
     gold_provider: Any = None  # swing_trader.sge_gold.GoldProvider — 国内金价 (SGE)
+    # Phase 0.95 (go-live gate): manual operator kill-switch (halts NEW entries).
+    kill_switch: Any = None  # swing_trader.killswitch.KillSwitch | None
+    execution: Any = None  # swing_trader.execution.ExecutionEngine — cancel_all
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
 
 
@@ -190,6 +193,19 @@ class PortfolioMarkRequest(BaseModel):
 class SessionActionRequest(BaseModel):
     actor: str = Field(min_length=1, max_length=200)
     window_minutes: int = Field(default=60, ge=5, le=240)
+    surface: Optional[str] = None
+
+
+class KillSwitchRequest(BaseModel):
+    actor: str = Field(min_length=1, max_length=200)
+    reason: str = Field(default="", max_length=500)
+    surface: Optional[str] = None
+
+
+class CancelAllRequest(BaseModel):
+    actor: str = Field(min_length=1, max_length=200)
+    #: Cancel resting protective stops too (leaves positions naked — explicit).
+    include_protection: bool = True
     surface: Optional[str] = None
 
 
@@ -1024,5 +1040,66 @@ def create_app(runtime: FinanceRuntime):
         summary["actor"] = body.actor
         summary["surface"] = surface
         return summary
+
+    # ---- Kill-switch (Loop.md §3 / Phase 0.95 go-live gate) ----
+    # ENGAGE is safe for anyone (halting trading is never dangerous), so the
+    # LLM/agent may trip it. RELEASE and CANCEL-ALL are privileged HUMAN-only
+    # actions (mirror the confirmation gate): un-halting or flattening must never
+    # be done by system/LLM/agent.
+
+    @app.get(f"/{API_VERSION}/killswitch")
+    def killswitch_status() -> dict:
+        if runtime.kill_switch is None:
+            raise HTTPException(503, "kill-switch not attached")
+        return runtime.kill_switch.state().to_dict()
+
+    @app.post(f"/{API_VERSION}/killswitch/engage")
+    def killswitch_engage(
+        body: KillSwitchRequest,
+        x_finance_surface: Optional[str] = Header(default=None),
+    ) -> dict:
+        if runtime.kill_switch is None:
+            raise HTTPException(503, "kill-switch not attached")
+        surface = _resolve_surface(x_finance_surface, body.surface, default="system")
+        st = runtime.kill_switch.engage(reason=body.reason, actor=body.actor)
+        out = st.to_dict()
+        out["surface"] = surface
+        return out
+
+    @app.post(f"/{API_VERSION}/killswitch/release")
+    def killswitch_release(
+        body: KillSwitchRequest,
+        x_finance_surface: Optional[str] = Header(default=None),
+    ) -> dict:
+        if runtime.kill_switch is None:
+            raise HTTPException(503, "kill-switch not attached")
+        # HUMAN-only: releasing re-permits new entries.
+        surface = _human_session(x_finance_surface, body.surface, body.actor)
+        st = runtime.kill_switch.release(actor=body.actor)
+        out = st.to_dict()
+        out["surface"] = surface
+        return out
+
+    @app.post(f"/{API_VERSION}/orders/cancel-all")
+    def orders_cancel_all(
+        body: CancelAllRequest,
+        x_finance_surface: Optional[str] = Header(default=None),
+    ) -> dict:
+        """Deliberate flatten (kill-switch drill): cancel active working orders.
+        HUMAN-only — cancelling protective stops can leave positions naked."""
+        if runtime.execution is None:
+            raise HTTPException(503, "execution engine not attached")
+        surface = _human_session(x_finance_surface, body.surface, body.actor)
+        cancelled = runtime.execution.cancel_all_orders(
+            include_protection=body.include_protection
+        )
+        return {
+            "actor": body.actor,
+            "surface": surface,
+            "include_protection": body.include_protection,
+            "cancelled": [{"id": o.id, "symbol": o.symbol, "side": o.side.value,
+                           "order_type": o.order_type.value} for o in cancelled],
+            "n_cancelled": len(cancelled),
+        }
 
     return app

@@ -110,6 +110,61 @@ class TestReValidation:
         assert "no fresh quote" in report.skipped[0][1]
 
 
+class _StubBroker:
+    """Minimal broker exposing just the cancel-all surface with independent,
+    non-cascading orders (unlike PaperBroker's bracket cascade)."""
+
+    def __init__(self, orders):
+        self._orders = {o.id: o for o in orders}
+
+    def get_orders(self, active_only=False):
+        return list(self._orders.values())
+
+    def cancel_order(self, order_id):
+        o = self._orders.get(order_id)
+        if o is None or o.status is OrderStatus.FILLED:
+            return False
+        self._orders[order_id] = o.model_copy(update={"status": OrderStatus.CANCELLED})
+        return True
+
+
+class TestCancelAll:
+    def _order(self, oid, side, ot, status=OrderStatus.SUBMITTED):
+        from swing_trader.schemas import Order
+        return Order(id=oid, mode=Mode.PAPER, symbol="NVDA", side=side,
+                     qty=2, order_type=ot, limit=100.0, stop=90.0, status=status)
+
+    def test_cancels_active_bracket(self, env):
+        broker, ledger, engine = env
+        c = record(ledger, candidate())
+        engine.execute([c], {"NVDA": 101.0}, NOW)
+        assert broker.get_orders(active_only=True)
+        cancelled = engine.cancel_all_orders()
+        assert len(cancelled) >= 1
+        assert broker.get_orders(active_only=True) == []
+
+    def test_include_protection_false_keeps_stops(self, tmp_path):
+        ledger = Ledger(url=f"sqlite:///{tmp_path/'c.db'}")
+        entry = self._order("e1", Side.BUY, OrderType.LMT)
+        stop = self._order("s1", Side.SELL, OrderType.STP)
+        broker = _StubBroker([entry, stop])
+        engine = ExecutionEngine(broker, ledger, mode=Mode.PAPER)
+        cancelled = engine.cancel_all_orders(include_protection=False)
+        assert [o.id for o in cancelled] == ["e1"]  # entry only
+        remaining = {o.id: o.status for o in broker.get_orders()}
+        assert remaining["s1"] is OrderStatus.SUBMITTED  # protective stop kept
+        assert remaining["e1"] is OrderStatus.CANCELLED
+
+    def test_include_protection_true_cancels_everything(self, tmp_path):
+        ledger = Ledger(url=f"sqlite:///{tmp_path/'c.db'}")
+        entry = self._order("e1", Side.BUY, OrderType.LMT)
+        stop = self._order("s1", Side.SELL, OrderType.STP)
+        broker = _StubBroker([entry, stop])
+        engine = ExecutionEngine(broker, ledger, mode=Mode.PAPER)
+        cancelled = engine.cancel_all_orders(include_protection=True)
+        assert {o.id for o in cancelled} == {"e1", "s1"}
+
+
 class TestTranslation:
     def test_bracket_candidate_places_bracket_with_children(self, env):
         broker, ledger, engine = env

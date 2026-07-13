@@ -247,6 +247,7 @@ class DailyLoop:
         knowledge=None,  # Optional[FinanceKnowledge] (Phase 0.5 ingestion)
         knowledge_index=None,  # Optional[KnowledgeIndex] — None = fail-closed
         earnings_provider=None,  # Optional[EarningsProvider] (Phase 0.75)
+        kill_switch=None,  # Optional[KillSwitch] — manual operator HALT (§3)
     ) -> None:
         self.feed = feed
         self.broker = broker
@@ -296,6 +297,7 @@ class DailyLoop:
         self._entries_placed_today = 0
         self._memory_seen_trades: set[str] = set()
         self._health: Optional[HealthStatus] = None  # Phase 0.8 (dead-man's switch)
+        self.kill_switch = kill_switch  # Phase 0.95 manual HALT (may be None)
 
     # ---------------------------------------------------------------- events
 
@@ -612,12 +614,15 @@ class DailyLoop:
         runtime (read-only Finance tab / reporter) and returns it. Pure w.r.t.
         the injected snapshots; never raises (reconciliation fails closed)."""
         recon = reconcile_broker_ledger(self.broker, self.ledger, self.mode)
+        ks_state = self.kill_switch.state() if self.kill_switch is not None else None
         health = assess_health(
             market=self._market,
             portfolio=self._portfolio,
             news=self._news,
             breaker_state=getattr(account, "breaker_state", None),
             reconciliation=recon,
+            kill_switch_engaged=ks_state.engaged if ks_state else False,
+            kill_switch_reason=ks_state.reason if ks_state else "",
             now=self.clock(),
         )
         self._health = health
