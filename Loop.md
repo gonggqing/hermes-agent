@@ -161,6 +161,15 @@ Paper and live share identical schemas (only the `mode` tag differs) so paper-vs
 - **Build:** PaperBroker restart rehydration; an Investment Research briefing contract/API; Desktop and Web research-first landing views; source-linked knowledge ingestion/search; earnings/event calendar; explicit data-freshness and risk-warning model; dedicated Finance Telegram bot before interactive mobile approvals.
 - **Acceptance:** Desktop defaults to `Investment Research`; Web presents the same research/risk summary before any queue; Queue is a compact badged action area rather than the primary canvas; all briefs show as-of time, citations/unknowns, PAPER/LIVE mode, and actionable risk warnings; no UI path gains authority beyond §3/§5.6.
 
+### Phase 0.75 — Deepen the analysis brain + conversational finance agent (AFTER Phase 0.5; while paper data accumulates and IBKR is pending) — human decision 2026-07-13
+- **Goal:** two thrusts, both bounded by §3. (A) Move *scheduled* analysis from the rule-based v0 skeleton to a genuinely informed research agent. (B) Make the **general Hermes conversational agent** finance-capable: the human can chat with the everyday Hermes bot and ask for **complex finance analysis and real-time market feedback (K-line/candlestick data + current price)** on any symbol, on demand. "Smarter" means better *analysis quality* and *on-demand access*, never more *authority*.
+- **Human intent (2026-07-13):** "we want the current hermes bot (the general one) to handle complex finance analysis and give feedback on the real-time market (k-chart, current stock price)."
+- **Why now:** the loop plumbing is done but the brain is shallow — fundamentals are empty, the earnings calendar is unwired, the LLM is one confidence-capped debate voice (the LLM decision core is a stub), the knowledge store doesn't feed analysis (no RAG), and memory only lowers confidence. And nothing yet lets the human *ask* for analysis interactively. Better/on-demand analysis is what decides the project's actual success metric — whether any edge survives paper→live — and it does not need IBKR.
+- **Build (A — scheduled brain):** real fundamentals feed; earnings/events calendar; an LLM decision core that synthesizes monitors + sub-agents + retrieved knowledge-store research (RAG-grounded) and PROPOSES candidates only; an analysis feedback loop from closed-trade outcomes; deeper research ingestion (earnings/filings) with provenance.
+- **Build (B — conversational agent):** on-demand finance-service read endpoints (real-time quote, K-line bars, one-shot multi-agent symbol analysis, research retrieval); a **fixed Finance toolset** the general Hermes agent can call (thin wrappers over the versioned finance-service API — never trader internals, per §8); real-time price/chart feedback surfaced in chat.
+- **§3 authority for thrust B (HARD):** the general agent's Finance toolset is **READ / ANALYSIS ONLY** — quote, bars, analyze, research brief, knowledge search, account/portfolio *views*. It exposes **NO** order-placement or candidate-approval tool. Order authority stays service-bound to ExecutionEngine; approval stays a human-only action from an authenticated surface. This preserves §8's "isolate financial authority from unrelated conversations."
+- **Acceptance:** candidates carry data-grounded fundamental + event context; the brief's "no fundamentals / earnings not wired" unknowns clear when data is present; the general Hermes agent can, in chat, return a symbol's current price + recent K-line + a multi-agent analysis with cited sources; any LLM proposal still passes RiskEngine + human approval before execution; the feedback loop adjusts analysis/signal quality only (never risk caps, position limits, or order authority); every external dependency stays mockable and tests never hit the network.
+
 ### Phase 1 — Shadow & tiny live (AFTER IBKR opens & funds)
 - **Goal:** implement `IBKRBroker` (ib_async); run on **IBKR paper first**, then **tiny real money (a few hundred USD)**.
 - **Target:** quantify the **sim→real gap** (slippage, fill quality, timing) using paper-vs-live ledger comparison.
@@ -242,6 +251,22 @@ Python 3.11 · `ib_async` (later) · `alpaca-py` (optional) · `yfinance` · `pa
 - [x] `build_research_brief` params (`watchlist_lookup`, `trading_tz`, in-memory `signals`/`candidates`, `include_account`) so CN research never touches the US trading ledger; CN brief served at `/v1/research/brief?market=cn`; Telegram brief renderer (`brief_telegram`, zh/en).
 - [x] Search/summary LLM pinned to `deepseek-v4-flash` (`FINANCE_LLM_SEARCH_MODEL`, role-based) to save token fees, independent of any decision-tier model.
 - [x] Complete Finance i18n across all Web + Desktop surfaces (en+zh) and add a US / China·HK market toggle to the Investment Research view (`?market=cn`). — DONE: Web migrated ~63 hard-coded strings (ApprovalQueue/HistorySection were 100% English) + CN toggle (RiskStrip/queue/account hidden in CN research-only mode); Desktop migrated ~38 (sidebar nav label + a `finance.enums` catalog localizing all backend enum vocabularies) + CN toggle. Web typecheck/lint/build green; Desktop typecheck/lint green.
+
+### Phase 0.75 backlog — deepen the analysis brain (2026-07-13)
+
+> §3 invariant for EVERY item: analysis quality only. The LLM never approves; RiskEngine stays authoritative; human approval unchanged; all deps mockable; tests never hit the network.
+
+- [ ] Real fundamentals provider (yfinance-backed, behind the existing `FundamentalsProvider` port; per-symbol cached; any failure → None) wired into the US loop so `FundamentalAgent` produces real signals (empty `StaticFundamentals({})` today)
+- [ ] Earnings/events calendar feed (behind a mockable port) wired into the brief `EventsView` + as an analysis input (e.g. flag/avoid opening straight into an earnings print)
+- [ ] LLM decision core with RAG over the knowledge store: synthesizes monitors + sub-agents + retrieved research → candidate proposals with cited rationale; PROPOSES ONLY, re-validated by RiskEngine + human approval (LLMDecisionCore is a stub today)
+- [ ] Analysis feedback loop: closed-trade outcomes adjust analysis/signal quality (never risk limits/caps/authority)
+- [ ] Deeper research ingestion: earnings summaries / public filings into the knowledge store with provenance (public/owned/licensed only)
+
+**Thrust B — conversational finance agent (general Hermes bot; READ/ANALYSIS ONLY, no order/approve tools):**
+
+- [ ] Finance-service on-demand read endpoints: `/v1/quote` (real-time-ish last price + change), `/v1/bars` (K-line OHLCV), `/v1/analyze` (one-shot technical+fundamental+sentiment+debate on a symbol). Feed added to `FinanceRuntime`; honest data-source/delay note; mockable; tests.
+- [ ] Fixed **Finance toolset** registered with the general Hermes agent (thin wrappers over the finance-service API via the dashboard proxy — never trader internals): get_quote, get_kline, analyze_symbol, research_brief, search_research, account_view. NO place_order / approve tool exposed.
+- [ ] Real-time market feedback in chat: agent returns current price + recent K-line + multi-agent analysis; K-line rendered (web/desktop) / summarized (Telegram) with as-of time + delay caveat.
 
 ---
 

@@ -41,6 +41,14 @@ DEFAULT_SERVICE_PORT = 9319
 
 API_VERSION = "v1"
 
+#: Honest provenance/delay note on every on-demand quote/bar (Loop.md §5.9,
+#: §8 data policy): free Yahoo Finance data can lag real time and must never be
+#: treated as an execution-grade tick.
+MARKET_DATA_NOTE = (
+    "prices/bars via Yahoo Finance (yfinance) — may be delayed (~15 min for "
+    "many symbols); for research/analysis only, not execution timing"
+)
+
 
 @dataclass
 class FinanceRuntime:
@@ -61,6 +69,10 @@ class FinanceRuntime:
     latest_brief_cn: dict = field(default_factory=dict)  # CN ResearchBrief dump
     knowledge: Any = None  # FinanceKnowledge (Phase 0.5)
     knowledge_index: Any = None  # KnowledgeIndex | None (fail-closed)
+    # Phase 0.75 (thrust B): on-demand analysis for the conversational agent.
+    feed: Any = None  # DataFeed — real-time-ish quotes + K-line bars
+    fundamentals: Any = None  # FundamentalsProvider — on-demand fundamentals
+    llm_analyst: Any = None  # optional LLMAnalyst voice for /v1/analyze
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
 
 
@@ -220,6 +232,149 @@ def create_app(runtime: FinanceRuntime):
             runtime.ledger, runtime.mode, now=runtime.clock()
         )
         return brief.model_dump(mode="json")
+
+    # --------------------------------------------- on-demand market analysis
+    # Phase 0.75 thrust B: READ/ANALYSIS-ONLY endpoints for the conversational
+    # Hermes agent (and a K-line UI). There is deliberately no order/approve
+    # capability here — order authority stays with ExecutionEngine (Loop.md §3).
+
+    @app.get(f"/{API_VERSION}/quote")
+    def quote(symbol: str = Query(min_length=1, max_length=24)) -> dict:
+        """Latest (delayed) quote for one symbol — current price feedback."""
+        if runtime.feed is None:
+            raise HTTPException(503, "data feed not available (loop idle)")
+        from swing_trader.datafeed import DataFeedError
+
+        try:
+            q = runtime.feed.get_quote(symbol)
+        except DataFeedError as exc:
+            raise HTTPException(404, f"no quote for {symbol!r}: {exc}")
+        return {
+            "symbol": q.symbol,
+            "last": q.last,
+            "bid": q.bid,
+            "ask": q.ask,
+            "volume": q.volume,
+            "as_of": q.ts.isoformat(),
+            "note": MARKET_DATA_NOTE,
+        }
+
+    @app.get(f"/{API_VERSION}/bars")
+    def bars(
+        symbol: str = Query(min_length=1, max_length=24),
+        timeframe: str = Query(default="1d"),
+        limit: int = Query(default=120, ge=1, le=500),
+    ) -> dict:
+        """K-line / candlestick OHLCV bars for one symbol (charting)."""
+        if runtime.feed is None:
+            raise HTTPException(503, "data feed not available (loop idle)")
+        from swing_trader.datafeed import DataFeedError
+
+        try:
+            rows = runtime.feed.get_bars(symbol, timeframe, limit)
+        except (DataFeedError, ValueError) as exc:
+            raise HTTPException(404, f"no bars for {symbol!r}: {exc}")
+        return {
+            "symbol": symbol.upper(),
+            "timeframe": timeframe,
+            "bars": [
+                {
+                    "ts": b.ts.isoformat(),
+                    "open": b.open,
+                    "high": b.high,
+                    "low": b.low,
+                    "close": b.close,
+                    "volume": b.volume,
+                }
+                for b in rows
+            ],
+            "as_of": runtime.clock().isoformat(),
+            "note": MARKET_DATA_NOTE,
+        }
+
+    @app.get(f"/{API_VERSION}/analyze")
+    def analyze(symbol: str = Query(min_length=1, max_length=24)) -> dict:
+        """One-shot multi-agent analysis of one symbol for the chat agent:
+        technical + fundamental + sentiment sub-agents synthesized by the
+        bull/bear debate agent (+ the optional LLM voice). READ-ONLY — it
+        forms a thesis, never a candidate/order (Loop.md §3)."""
+        if runtime.feed is None:
+            raise HTTPException(503, "data feed not available (loop idle)")
+        from swing_trader.analysis import (
+            DebateAgent,
+            FundamentalAgent,
+            SentimentAgent,
+            TechnicalAgent,
+        )
+        from swing_trader.datafeed import DataFeedError
+        from swing_trader.interfaces import NewsItem
+        from swing_trader.monitors import score_headline
+
+        try:
+            rows = runtime.feed.get_bars(symbol, "1d", 120)
+        except (DataFeedError, ValueError) as exc:
+            raise HTTPException(404, f"no data for {symbol!r}: {exc}")
+
+        last: Optional[float] = None
+        try:
+            last = runtime.feed.get_quote(symbol).last
+        except DataFeedError:
+            last = rows[-1].close if rows else None
+
+        news_scored: list[NewsItem] = []
+        try:
+            for n in runtime.feed.get_news(symbol, limit=12):
+                s = n.sentiment if n.sentiment is not None else score_headline(n.headline)
+                news_scored.append(
+                    NewsItem(symbol=n.symbol, ts=n.ts, headline=n.headline,
+                             source=n.source, url=n.url, sentiment=s)
+                )
+        except DataFeedError:
+            pass
+
+        signals = []
+        tech = TechnicalAgent().analyze(symbol, rows)
+        if tech is not None:
+            signals.append(tech)
+        if runtime.fundamentals is not None:
+            fund = FundamentalAgent(runtime.fundamentals).analyze(symbol)
+            if fund is not None:
+                signals.append(fund)
+        senti = SentimentAgent().analyze(symbol, news_scored)
+        if senti is not None:
+            signals.append(senti)
+        if runtime.llm_analyst is not None and tech is not None:
+            llm_sig = runtime.llm_analyst.analyze(
+                symbol, features=tech.features_json,
+                headlines=[n.headline for n in news_scored],
+            )
+            if llm_sig is not None:
+                signals.append(llm_sig)
+
+        verdict = DebateAgent().debate(symbol, signals) if signals else None
+
+        def _sig(s) -> dict:
+            return {
+                "source_agent": s.source_agent,
+                "direction": s.direction.value,
+                "confidence": s.confidence,
+                "thesis": s.thesis,
+                "features": s.features_json,
+            }
+
+        return {
+            "symbol": symbol.upper(),
+            "as_of": runtime.clock().isoformat(),
+            "last": last,
+            "verdict": _sig(verdict) if verdict is not None else None,
+            "signals": [_sig(s) for s in signals],
+            "news": [
+                {"headline": n.headline, "source": n.source, "url": n.url,
+                 "sentiment": n.sentiment}
+                for n in news_scored[:6]
+            ],
+            "note": MARKET_DATA_NOTE,
+        }
 
     @app.get(f"/{API_VERSION}/knowledge/search")
     def knowledge_search(

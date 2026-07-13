@@ -25,6 +25,7 @@ from typing import Callable, Optional
 from swing_trader.analysis import (
     DebateAgent,
     FundamentalAgent,
+    FundamentalsProvider,
     SentimentAgent,
     StaticFundamentals,
     TechnicalAgent,
@@ -169,7 +170,7 @@ class DailyLoop:
         runtime: FinanceRuntime | None = None,
         telegram: TelegramSurfaceAdapter | None = None,
         notify: Callable[[str], None] | None = None,
-        fundamentals: StaticFundamentals | None = None,
+        fundamentals: FundamentalsProvider | None = None,
         decision_core: RuleBasedDecisionCore | None = None,
         llm_analyst=None,  # Optional[swing_trader.llm.LLMAnalyst] — analysis only (§3)
         knowledge=None,  # Optional[FinanceKnowledge] (Phase 0.5 ingestion)

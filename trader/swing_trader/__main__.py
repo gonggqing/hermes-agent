@@ -75,7 +75,15 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     rehydration = rehydrate_from_ledger(broker, ledger, settings.mode)
     print(rehydration.summary(), flush=True)
     feed = YFinanceFeed()
+    # Real fundamentals (Loop.md Phase 0.75 thrust A): yfinance-backed, cached,
+    # fail-None. Feeds the scheduled FundamentalAgent AND on-demand /v1/analyze.
+    from swing_trader.fundamentals import YFinanceFundamentals
+
+    fundamentals = YFinanceFundamentals()
     runtime = FinanceRuntime(ledger=ledger, broker=broker, mode=settings.mode)
+    # On-demand market analysis for the conversational agent (thrust B):
+    runtime.feed = feed
+    runtime.fundamentals = fundamentals
 
     telegram = None
     notify = None
@@ -148,9 +156,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
     runtime.knowledge = knowledge
     runtime.knowledge_index = knowledge_index
+    runtime.llm_analyst = llm_analyst  # optional voice for on-demand /v1/analyze
     loop = DailyLoop(
         feed, broker, ledger, mode=settings.mode,
         runtime=runtime, telegram=telegram, notify=notify,
+        fundamentals=fundamentals,  # real fundamentals for the scheduled loop
         llm_analyst=llm_analyst,
         knowledge=knowledge, knowledge_index=knowledge_index,
     )
