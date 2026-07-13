@@ -4,15 +4,23 @@
 > plan in Loop.md §8, the next phase (refine & complete) is intended for
 > Opus 4.8. **Read `Loop.md` first — it is the single source of truth.**
 
-## Where we are
+## Where we are (updated 2026-07-13)
 
-**Phase 0 is BUILT and at the ⛔ Review Gate.** Every backlog item in
-Loop.md §10 is checked. The human must now review and approve before
-anything advances (Loop.md §0 rule 4).
+**Phases 0 → 0.9 are BUILT.** Phase 0 (paper loop) was approved; since then:
+0.5 (research-first UI + rehydration + knowledge store), 0.5+ (two-session
+CN-morning/US-evening + dual bots), 0.75 (fundamentals, on-demand endpoints,
+finance toolset, K-line skill, earnings, RAG, deeper ingestion), **0.8
+(resilience: dead-man's switch + health/heartbeat + ledger↔broker reconcile +
+feed retry/backoff)**, and **0.9 Portfolio Foundation (auditable multi-account
+US/HK/CN Portfolio Journal — append-only events, instrument search,
+human-confirmed drafts, CSV import, reconciliation, aggregate, Desktop+Web UI)**.
+Still NO live orders — the §3 triple gate is untouched; IBKR account is the
+blocker for Phase 1. See Loop.md §13 for the dated detail.
 
 - All trading code: `trader/` (self-contained package `swing_trader`, zero
   Hermes-internal imports, extractable to its own repo before Phase 1).
-- **623 tests green**: `cd trader && uv run --no-sync pytest`
+- **935 trader tests green** (+15 root finance-tool tests, +81 web tests):
+  `cd trader && uv run --no-sync python -m pytest`
 - RiskEngine 100% branch coverage gate:
   `uv run --no-sync pytest tests/test_risk_engine.py --cov=swing_trader.risk --cov-branch --cov-fail-under=100`
 - Offline E2E demo: `uv run python -m swing_trader simulate --days 22 --crash-day 12`
@@ -82,11 +90,20 @@ maintenance as a recurring engineering task, not a one-time migration:
    - An embedding provider for the knowledge store (current
      `HashingEmbedder` is a documented NON-semantic placeholder).
 
-## Deployment state (2026-07-12 evening — running NOW)
+## Deployment state (updated 2026-07-13 — running NOW)
 
-- Host: `swing_trader serve --check-now` running (nohup, `trader/serve.log`,
-  ledger `trader/trader.db`, port 9319). LLM analyst ENABLED (DeepSeek-v4-flash;
-  GLM5-turbo fallback; keys from `~/.hermes/.env`).
+- Host: **launchd** `com.hermes.finance` runs `swing_trader serve` (KeepAlive +
+  RunAtLoad, `trader/serve.log`, ledger + portfolio DB `trader/trader.db`, port
+  9319). Daily model **MiniMax-M3** (`minimax-cn` provider, `MINIMAX_CN_API_KEY`);
+  subagents **MiniMax-M2.7-highspeed**. Restart to pick up new code:
+  `launchctl kickstart -k gui/$(id -u)/com.hermes.finance`.
+- Two daily sessions (Loop.md §4b): CN morning research (Asia/Shanghai, 09:30→
+  11:30, report-only) + US evening trading (ET, full monitor→decide→push→approve→
+  execute). Dual Telegram bots in one group: reporter (shared gateway token,
+  outbound-only) + gatekeeper (dedicated finance token, interactive approvals +
+  @mention/DM). NOTE: a session MISSED while serve was down is NOT re-run (the
+  runner's watermark = boot time); a manual "run session now" trigger is the next
+  task (#43). `serve --check-now` refreshes data/research only (no candidates).
 - Docker topology (changed 2026-07-12): SINGLE container — the dashboard runs
   INSIDE the gateway container (`HERMES_DASHBOARD=1`, s6-supervised alongside
   `gateway-default`). Required for the dashboard's "Restart Gateway" button,
