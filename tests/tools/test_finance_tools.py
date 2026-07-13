@@ -96,7 +96,7 @@ def test_finance_toolset_registered_and_read_only():
         "get_quote", "get_kline", "analyze_symbol",
         "research_brief", "search_research", "account_view",
         # Phase 0.9 portfolio: read + DRAFT-ONLY (no confirm/place tool).
-        "portfolio_accounts", "portfolio_holdings",
+        "portfolio_accounts", "portfolio_holdings", "portfolio_valuation",
         "draft_portfolio_trade", "draft_close_position",
     }
     # HARD guardrail (Loop.md §3/§8, P0.9 boundary #4/#8): the toolset exposes NO

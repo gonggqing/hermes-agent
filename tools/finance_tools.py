@@ -261,8 +261,10 @@ _SEARCH_RESEARCH_SCHEMA = {
 _ACCOUNT_VIEW_SCHEMA = {
     "name": "account_view",
     "description": (
-        "View the paper trading account: equity, cash, open positions, working orders, "
-        "breaker state, and cumulative stats. READ-ONLY. mode='paper' (default) or 'live'."
+        "View the PAPER TRADING SIMULATION account (the system's own trading loop): "
+        "equity, cash, open positions, working orders, breaker state, cumulative stats. "
+        "This is NOT the user's real holdings — for '我的持仓/portfolio/持仓/盈亏' use "
+        "portfolio_valuation / portfolio_holdings instead. READ-ONLY. mode='paper' (default)."
     ),
     "parameters": {
         "type": "object",
@@ -320,6 +322,13 @@ def _handle_draft_portfolio_trade(args: dict, **kw) -> str:
     if isinstance(ambig, list) and ambig:
         body["ambiguities"] = [str(a)[:200] for a in ambig]
     return _respond(*_finance_post("/v1/portfolio/drafts", body, surface="system"))
+
+
+def _handle_portfolio_valuation(args: dict, **kw) -> str:
+    acct = str(args.get("account_id", "")).strip()
+    if acct:
+        return _respond(*_finance_get(f"/v1/portfolio/accounts/{acct}/valuation"))
+    return _respond(*_finance_get("/v1/portfolio/valuation"))
 
 
 def _handle_draft_close_position(args: dict, **kw) -> str:
@@ -393,6 +402,27 @@ _DRAFT_TRADE_SCHEMA = {
     },
 }
 
+_PORTFOLIO_VALUATION_SCHEMA = {
+    "name": "portfolio_valuation",
+    "description": (
+        "The user's REAL portfolio holdings WITH market value + unrealized P&L "
+        "(现价/市值/盈亏/盈亏%). This is their ACTUAL money across their real "
+        "accounts (e.g. 蚂蚁财富/平安证券) — NOT the paper trading account "
+        "(use account_view for that). Pass account_id for one account, omit for "
+        "all accounts aggregated with per-currency totals. Prices come from live "
+        "quotes or imported/manual marks; some 场外基金 may be unpriced (price/"
+        "market_value/pnl = null — say '未知', never 0). READ-ONLY. Prefer this "
+        "over portfolio_holdings when the user wants value or 盈亏."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "account_id": {"type": "string", "description": "One account id (omit for all accounts)."},
+        },
+        "required": [],
+    },
+}
+
 _DRAFT_CLOSE_SCHEMA = {
     "name": "draft_close_position",
     "description": (
@@ -424,6 +454,7 @@ for _name, _schema, _handler in (
     # Phase 0.9 portfolio — read + DRAFT-ONLY (no confirm/place; human confirms).
     ("portfolio_accounts", _PORTFOLIO_ACCOUNTS_SCHEMA, _handle_portfolio_accounts),
     ("portfolio_holdings", _PORTFOLIO_HOLDINGS_SCHEMA, _handle_portfolio_holdings),
+    ("portfolio_valuation", _PORTFOLIO_VALUATION_SCHEMA, _handle_portfolio_valuation),
     ("draft_portfolio_trade", _DRAFT_TRADE_SCHEMA, _handle_draft_portfolio_trade),
     ("draft_close_position", _DRAFT_CLOSE_SCHEMA, _handle_draft_close_position),
 ):
