@@ -75,6 +75,9 @@ class FinanceRuntime:
     llm_analyst: Any = None  # optional LLMAnalyst voice for /v1/analyze
     # Phase 0.8 (resilience): last HealthStatus the loop assessed at decide time.
     health: Any = None  # swing_trader.health.HealthStatus | None
+    # Phase 0.9 (portfolio): instrument type-ahead + the append-only journal.
+    instrument_search: Any = None  # CachedInstrumentSearch | None
+    portfolio: Any = None  # swing_trader.portfolio_journal.PortfolioJournal | None
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
 
 
@@ -336,6 +339,32 @@ def create_app(runtime: FinanceRuntime):
         result["as_of"] = runtime.clock().isoformat()
         result["note"] = MARKET_DATA_NOTE
         return result
+
+    @app.get(f"/{API_VERSION}/instruments/search")
+    def instruments_search(
+        q: str = Query(min_length=1, max_length=64),
+        market: Optional[str] = Query(default=None),
+        limit: int = Query(default=10, ge=1, le=50),
+    ) -> dict:
+        """Type-ahead instrument search for the Portfolio symbol field (P0.9).
+        Read-only; ``degraded`` flags a source failure (never a silent empty)."""
+        if runtime.instrument_search is None:
+            raise HTTPException(503, "instrument search not available")
+        mkt = None
+        if market is not None:
+            from swing_trader.portfolio import MarketScope
+
+            try:
+                mkt = MarketScope(market.upper())
+            except ValueError:
+                raise HTTPException(422, f"unknown market {market!r}")
+        res = runtime.instrument_search.search(q, market=mkt, limit=limit)
+        return {
+            "query": q,
+            "degraded": res.degraded,
+            "source": res.source,
+            "matches": [m.model_dump(mode="json") for m in res.matches],
+        }
 
     @app.get(f"/{API_VERSION}/knowledge/search")
     def knowledge_search(

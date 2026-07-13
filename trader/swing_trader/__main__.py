@@ -89,6 +89,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     # On-demand market analysis for the conversational agent (thrust B):
     runtime.feed = feed
     runtime.fundamentals = fundamentals
+    # Phase 0.9 (portfolio): instrument type-ahead behind a cached, offline
+    # provider (a live adapter can slot behind the same port later).
+    from swing_trader.instruments import CachedInstrumentSearch, StaticInstrumentProvider
+
+    runtime.instrument_search = CachedInstrumentSearch(StaticInstrumentProvider())
 
     telegram = None
     notify = None

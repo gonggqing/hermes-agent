@@ -70,6 +70,30 @@ class TestReads:
         assert body["breaker"] == "NORMAL"
         assert "health" not in body  # no assessment until the loop runs
 
+    def test_instruments_search(self, tmp_path):
+        from swing_trader.instruments import CachedInstrumentSearch, StaticInstrumentProvider
+
+        ledger = Ledger(url=f"sqlite:///{tmp_path/'i.db'}")
+        runtime = FinanceRuntime(ledger=ledger)
+        runtime.instrument_search = CachedInstrumentSearch(StaticInstrumentProvider())
+        client = TestClient(create_app(runtime))
+
+        body = client.get("/v1/instruments/search", params={"q": "腾讯"}).json()
+        assert body["degraded"] is False
+        assert body["matches"][0]["canonical_symbol"] == "0700.HK"
+        assert body["matches"][0]["exchange"] == "SEHK"
+
+        # market filter + unknown market
+        hk = client.get("/v1/instruments/search", params={"q": "0", "market": "hk"}).json()
+        assert all(m["market"] == "HK" for m in hk["matches"])
+        assert client.get("/v1/instruments/search",
+                          params={"q": "x", "market": "zz"}).status_code == 422
+
+    def test_instruments_search_unavailable_503(self, tmp_path):
+        ledger = Ledger(url=f"sqlite:///{tmp_path/'i2.db'}")
+        client = TestClient(create_app(FinanceRuntime(ledger=ledger)))  # no provider
+        assert client.get("/v1/instruments/search", params={"q": "nv"}).status_code == 503
+
     def test_health_exposes_dead_mans_switch(self, env):
         """Phase 0.8: when the loop has assessed health, /v1/health surfaces the
         dead-man's-switch state + per-check reasons (read-only)."""
