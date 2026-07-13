@@ -96,6 +96,10 @@ class TelegramTransport(Protocol):
         """Acknowledge an inline-button press (optionally with a toast)."""
         ...
 
+    def get_me(self) -> dict:
+        """Return the bot's own identity (getMe): ``{id, username, ...}``."""
+        ...
+
 
 class HttpTransport:
     """Plain Telegram Bot HTTP API transport over an injectable session.
@@ -190,6 +194,9 @@ class HttpTransport:
         if text:
             payload["text"] = text
         self._call("answerCallbackQuery", payload)
+
+    def get_me(self) -> dict:
+        return self._call("getMe", {}) or {}
 
 
 # --------------------------------------------------------------------------- cards

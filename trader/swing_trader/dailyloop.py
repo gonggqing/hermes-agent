@@ -18,6 +18,7 @@ only moves data between those parties; it holds no approval power itself.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Callable, Optional
@@ -76,6 +77,7 @@ class TelegramSurfaceAdapter:
         chat_id: str,
         interactive: bool = True,
         allowed_users: Optional[set[str]] = None,
+        respond_text: Optional[Callable[[str], Optional[str]]] = None,
     ) -> None:
         """``interactive=False`` = OUTBOUND ONLY (cards/reports are sent, but
         poll() is a no-op). Required when the Hermes gateway long-polls
@@ -85,14 +87,30 @@ class TelegramSurfaceAdapter:
 
         ``allowed_users``: Telegram usernames/ids permitted to act (§5.6:
         authenticated actor). Interactive mode with an EMPTY allowlist
-        refuses every action — auth must be explicit, never open."""
+        refuses every action — auth must be explicit, never open.
+
+        ``respond_text``: optional handler ``text -> reply|None`` making the
+        finance bot answer ONLY when directly addressed — a DM, or an @mention
+        of this bot in a group (human directive: the finance bot stays quiet in
+        the group except for confirmations, and replies only when @-mentioned or
+        DMed). Replies are gated by the same allowlist as approvals. When None,
+        the bot never replies to text (confirmations/buttons only)."""
         self._transport = transport
         self._chat_id = chat_id
         self.interactive = interactive
         self._allowed_users = {u.strip().lower().lstrip("@")
                                for u in (allowed_users or set()) if u.strip()}
+        self._respond_text = respond_text
         self._by_short_id: dict[str, str] = {}
         self._offset: Optional[int] = None
+        self._bot_username: Optional[str] = None
+        self._bot_identified = False
+
+    def set_text_responder(
+        self, fn: Optional[Callable[[str], Optional[str]]]
+    ) -> None:
+        """Wire the DM/@mention text responder after construction."""
+        self._respond_text = fn
 
     def _is_authorized(self, sender: dict) -> bool:
         username = str(sender.get("username", "")).lower()
@@ -119,40 +137,90 @@ class TelegramSurfaceAdapter:
             if isinstance(update_id, int):
                 self._offset = update_id + 1
             callback = update.get("callback_query")
-            if not callback:
+            if callback:
+                self._handle_callback(callback, service, now_utc)
                 continue
-            cb_id = str(callback.get("id", ""))
-            try:
-                data = json.loads(callback.get("data", "") or "{}")
-            except json.JSONDecodeError:
-                self._transport.answer_callback(cb_id, "unrecognized action")
-                continue
-            full_id = self._by_short_id.get(str(data.get("id", "")))
-            action = {"ok": "approve", "no": "reject"}.get(data.get("a"))
-            if full_id is None or action is None:
-                if data.get("a") == "edit":
-                    self._transport.answer_callback(
-                        cb_id, "edit via the Finance portal (Desktop/Web)"
-                    )
-                else:
-                    self._transport.answer_callback(cb_id, "unknown candidate")
-                continue
-            sender = callback.get("from", {}) or {}
-            if not self._is_authorized(sender):
-                logger.warning(
-                    "unauthorized telegram action refused",
-                    extra={"sender_id": str(sender.get("id", "?"))},
-                )
+            message = update.get("message")
+            if message:
+                self._handle_message(message)
+
+    def _handle_callback(
+        self, callback: dict, service: ConfirmationService, now_utc: datetime
+    ) -> None:
+        cb_id = str(callback.get("id", ""))
+        try:
+            data = json.loads(callback.get("data", "") or "{}")
+        except json.JSONDecodeError:
+            self._transport.answer_callback(cb_id, "unrecognized action")
+            return
+        full_id = self._by_short_id.get(str(data.get("id", "")))
+        action = {"ok": "approve", "no": "reject"}.get(data.get("a"))
+        if full_id is None or action is None:
+            if data.get("a") == "edit":
                 self._transport.answer_callback(
-                    cb_id, "not authorized for finance approvals"
+                    cb_id, "edit via the Finance portal (Desktop/Web)"
                 )
-                continue
-            actor = f"telegram:{sender.get('username') or sender.get('id') or 'user'}"
-            result = service.act(
-                full_id, action, actor=actor, surface=Surface.TELEGRAM,
-                idempotency_key=f"tg:{cb_id}", now_utc=now_utc,
+            else:
+                self._transport.answer_callback(cb_id, "unknown candidate")
+            return
+        sender = callback.get("from", {}) or {}
+        if not self._is_authorized(sender):
+            logger.warning(
+                "unauthorized telegram action refused",
+                extra={"sender_id": str(sender.get("id", "?"))},
             )
-            self._transport.answer_callback(cb_id, result.message[:180])
+            self._transport.answer_callback(
+                cb_id, "not authorized for finance approvals"
+            )
+            return
+        actor = f"telegram:{sender.get('username') or sender.get('id') or 'user'}"
+        result = service.act(
+            full_id, action, actor=actor, surface=Surface.TELEGRAM,
+            idempotency_key=f"tg:{cb_id}", now_utc=now_utc,
+        )
+        self._transport.answer_callback(cb_id, result.message[:180])
+
+    def _identity(self) -> Optional[str]:
+        """This bot's @username (cached), for @mention detection; None if the
+        transport has no getMe (older mocks) or the call fails."""
+        if not self._bot_identified:
+            self._bot_identified = True
+            getter = getattr(self._transport, "get_me", None)
+            if callable(getter):
+                try:
+                    me = getter() or {}
+                    self._bot_username = str(me.get("username") or "").lower() or None
+                except Exception:  # identity is best-effort
+                    self._bot_username = None
+        return self._bot_username
+
+    def _handle_message(self, message: dict) -> None:
+        """Reply ONLY when directly addressed: a DM, or an @mention of this bot
+        in a group — and only for allowlisted users. Otherwise stay quiet (the
+        finance bot is the confirmation channel, not a group chatterbox)."""
+        if self._respond_text is None:
+            return
+        text = str(message.get("text") or "").strip()
+        if not text:
+            return
+        chat = message.get("chat", {}) or {}
+        is_dm = chat.get("type") == "private"
+        username = self._identity()
+        mentioned = bool(username) and f"@{username}" in text.lower()
+        if not (is_dm or mentioned):
+            return  # group message not addressed to the finance bot
+        if not self._is_authorized(message.get("from", {}) or {}):
+            return  # only allowlisted users get a finance-bot reply
+        if mentioned and username:
+            text = re.sub(rf"@{re.escape(username)}", "", text,
+                          flags=re.IGNORECASE).strip()
+        try:
+            reply = self._respond_text(text)
+        except Exception:
+            logger.exception("finance bot text responder failed")
+            reply = None
+        if reply:
+            self._transport.send_message(str(chat.get("id") or self._chat_id), reply)
 
 
 class DailyLoop:

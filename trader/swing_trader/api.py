@@ -297,84 +297,25 @@ def create_app(runtime: FinanceRuntime):
         """One-shot multi-agent analysis of one symbol for the chat agent:
         technical + fundamental + sentiment sub-agents synthesized by the
         bull/bear debate agent (+ the optional LLM voice). READ-ONLY — it
-        forms a thesis, never a candidate/order (Loop.md §3)."""
+        forms a thesis, never a candidate/order (Loop.md §3). Shares
+        swing_trader.on_demand.analyze_symbol with the finance bot."""
         if runtime.feed is None:
             raise HTTPException(503, "data feed not available (loop idle)")
-        from swing_trader.analysis import (
-            DebateAgent,
-            FundamentalAgent,
-            SentimentAgent,
-            TechnicalAgent,
-        )
         from swing_trader.datafeed import DataFeedError
-        from swing_trader.interfaces import NewsItem
-        from swing_trader.monitors import score_headline
+        from swing_trader.on_demand import analyze_symbol
 
         try:
-            rows = runtime.feed.get_bars(symbol, "1d", 120)
+            result = analyze_symbol(
+                runtime.feed, symbol,
+                fundamentals=runtime.fundamentals,
+                llm_analyst=runtime.llm_analyst,
+                now=runtime.clock(),
+            )
         except (DataFeedError, ValueError) as exc:
             raise HTTPException(404, f"no data for {symbol!r}: {exc}")
-
-        last: Optional[float] = None
-        try:
-            last = runtime.feed.get_quote(symbol).last
-        except DataFeedError:
-            last = rows[-1].close if rows else None
-
-        news_scored: list[NewsItem] = []
-        try:
-            for n in runtime.feed.get_news(symbol, limit=12):
-                s = n.sentiment if n.sentiment is not None else score_headline(n.headline)
-                news_scored.append(
-                    NewsItem(symbol=n.symbol, ts=n.ts, headline=n.headline,
-                             source=n.source, url=n.url, sentiment=s)
-                )
-        except DataFeedError:
-            pass
-
-        signals = []
-        tech = TechnicalAgent().analyze(symbol, rows)
-        if tech is not None:
-            signals.append(tech)
-        if runtime.fundamentals is not None:
-            fund = FundamentalAgent(runtime.fundamentals).analyze(symbol)
-            if fund is not None:
-                signals.append(fund)
-        senti = SentimentAgent().analyze(symbol, news_scored)
-        if senti is not None:
-            signals.append(senti)
-        if runtime.llm_analyst is not None and tech is not None:
-            llm_sig = runtime.llm_analyst.analyze(
-                symbol, features=tech.features_json,
-                headlines=[n.headline for n in news_scored],
-            )
-            if llm_sig is not None:
-                signals.append(llm_sig)
-
-        verdict = DebateAgent().debate(symbol, signals) if signals else None
-
-        def _sig(s) -> dict:
-            return {
-                "source_agent": s.source_agent,
-                "direction": s.direction.value,
-                "confidence": s.confidence,
-                "thesis": s.thesis,
-                "features": s.features_json,
-            }
-
-        return {
-            "symbol": symbol.upper(),
-            "as_of": runtime.clock().isoformat(),
-            "last": last,
-            "verdict": _sig(verdict) if verdict is not None else None,
-            "signals": [_sig(s) for s in signals],
-            "news": [
-                {"headline": n.headline, "source": n.source, "url": n.url,
-                 "sentiment": n.sentiment}
-                for n in news_scored[:6]
-            ],
-            "note": MARKET_DATA_NOTE,
-        }
+        result["as_of"] = runtime.clock().isoformat()
+        result["note"] = MARKET_DATA_NOTE
+        return result
 
     @app.get(f"/{API_VERSION}/knowledge/search")
     def knowledge_search(

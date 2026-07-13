@@ -157,6 +157,35 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     runtime.knowledge = knowledge
     runtime.knowledge_index = knowledge_index
     runtime.llm_analyst = llm_analyst  # optional voice for on-demand /v1/analyze
+
+    # Finance bot (GATEKEEPER) text replies: it stays quiet in the group except
+    # for confirmations, and answers ONLY on a DM or an @mention (human
+    # directive). A mentioned/DMed ticker gets a quick multi-agent read; no
+    # ticker gets brief guidance. Read-only — no order/approve here (Loop.md §3).
+    if telegram is not None:
+        def _finance_responder(text: str):
+            from swing_trader.on_demand import (
+                analyze_symbol, extract_symbols, render_analysis_zh,
+            )
+
+            syms = extract_symbols(text)
+            if not syms:
+                return (
+                    "我是财经确认机器人 📈 —— 发我一个股票代码（如 NVDA、0700.HK、"
+                    "600519.SS）即可获得快速多因子分析。完整对话/分析请 @ 主机器人；"
+                    "下单需在门户人工确认。"
+                )
+            sym = syms[0]
+            try:
+                result = analyze_symbol(
+                    feed, sym, fundamentals=fundamentals,
+                    llm_analyst=llm_analyst, now=runtime.clock(),
+                )
+            except Exception:
+                return f"没找到 {sym} 的行情数据，换个代码试试？"
+            return render_analysis_zh(result)
+
+        telegram.set_text_responder(_finance_responder)
     loop = DailyLoop(
         feed, broker, ledger, mode=settings.mode,
         runtime=runtime, telegram=telegram, notify=notify,
