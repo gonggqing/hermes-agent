@@ -46,7 +46,9 @@ $2,000 sim balance when the user asked about their real 持仓.
    `portfolio_valuation` with that `account_id`.
 2. Present clearly in Chinese, grouped by account, e.g.:
    - a totals line: 总市值 / 总成本 / 总盈亏 (+/−, %) with currency (mostly CNY).
-   - a per-holding table: 名称/代码 · 份额 · 成本 · 现价 · 市值 · 盈亏(%).
+   - a per-holding table: **名称(display_name) + 代码** · 份额 · 成本 · 现价 · 市值 · 盈亏(%).
+     Lead with `display_name` (e.g. 华夏全球科技先锋混合(QDII)A), show the code
+     secondarily — never show only the bare code when a name is available.
 3. **Unknown price is not zero.** When `price`/`market_value`/`unrealized_pnl`
    is `null` (some 场外基金 have no live NAV feed), show **"现价未知"** and exclude
    them from the P&L total — say how many are unpriced. Never invent a number.
