@@ -16,6 +16,8 @@ are new ``CORRECTION`` events (Loop.md P0.9 backlog).
 
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Optional
 
@@ -25,10 +27,12 @@ from swing_trader.log import get_logger
 from swing_trader.portfolio import (
     AccountHoldings,
     AccountType,
+    DraftStatus,
     EventSource,
     EventType,
     MarketScope,
     PortfolioAccount,
+    PortfolioDraft,
     PortfolioEvent,
     ProviderKind,
     derive_holdings,
@@ -36,7 +40,14 @@ from swing_trader.portfolio import (
 
 logger = get_logger(__name__)
 
-__all__ = ["PortfolioAccountRow", "PortfolioEventRow", "PortfolioJournal"]
+__all__ = [
+    "PortfolioAccountRow",
+    "PortfolioAuditEvent",
+    "PortfolioAuditRow",
+    "PortfolioDraftRow",
+    "PortfolioEventRow",
+    "PortfolioJournal",
+]
 
 
 # ------------------------------------------------------------------ helpers
@@ -107,6 +118,74 @@ class PortfolioEventRow(SQLModel, table=True):
     surface: str
     note: str = ""
     created_at: str
+
+
+class PortfolioDraftRow(SQLModel, table=True):
+    """A proposed event awaiting human confirmation (mutable until terminal)."""
+
+    __tablename__ = "portfolio_drafts"
+
+    id: str = Field(primary_key=True)
+    account_id: Optional[str] = Field(default=None, index=True)
+    event_type: str
+    symbol: Optional[str] = None
+    market: Optional[str] = None
+    currency: Optional[str] = None
+    qty: Optional[float] = None
+    price: Optional[float] = None
+    commission: Optional[float] = None
+    amount: Optional[float] = None
+    occurred_at: Optional[str] = None
+    settlement_date: Optional[str] = None
+    source: str
+    external_id: Optional[str] = None
+    note: str = ""
+    status: str = Field(index=True)
+    version: int = 1
+    original_text: str = ""
+    missing: str = "[]"  # JSON TEXT list
+    ambiguities: str = "[]"  # JSON TEXT list
+    created_by: str
+    created_surface: str
+    confirmed_by: Optional[str] = None
+    confirmed_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class PortfolioAuditRow(SQLModel, table=True):
+    """Append-only audit of every draft action + event commit (applied OR
+    refused), with actor/surface/idempotency (Loop.md §3 pattern)."""
+
+    __tablename__ = "portfolio_audit"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    ts: str
+    account_id: str = Field(default="", index=True)
+    draft_id: str = Field(default="", index=True)
+    event_id: str = ""
+    action: str  # draft | edit | reject | expire | confirm | <refused ...>
+    actor: str
+    surface: str
+    version: int = 1
+    idempotency_key: str = Field(default="", index=True)
+    applied: bool = True
+    detail: str = ""
+
+
+@dataclass
+class PortfolioAuditEvent:
+    ts: datetime
+    action: str
+    actor: str
+    surface: str
+    account_id: str = ""
+    draft_id: str = ""
+    event_id: str = ""
+    version: int = 1
+    idempotency_key: str = ""
+    applied: bool = True
+    detail: str = ""
 
 
 # --------------------------------------------------------- schema <-> row
@@ -189,6 +268,100 @@ def _event_from_row(r: PortfolioEventRow) -> PortfolioEvent:
         surface=r.surface,
         note=r.note,
         created_at=_from_iso(r.created_at),
+    )
+
+
+def _draft_to_row(d: PortfolioDraft) -> PortfolioDraftRow:
+    return PortfolioDraftRow(
+        id=d.id,
+        account_id=d.account_id,
+        event_type=d.event_type.value,
+        symbol=d.symbol,
+        market=d.market.value if d.market is not None else None,
+        currency=d.currency,
+        qty=d.qty,
+        price=d.price,
+        commission=d.commission,
+        amount=d.amount,
+        occurred_at=_to_iso(d.occurred_at) if d.occurred_at is not None else None,
+        settlement_date=_to_date(d.settlement_date),
+        source=d.source.value,
+        external_id=d.external_id,
+        note=d.note,
+        status=d.status.value,
+        version=d.version,
+        original_text=d.original_text,
+        missing=json.dumps(d.missing),
+        ambiguities=json.dumps(d.ambiguities),
+        created_by=d.created_by,
+        created_surface=d.created_surface,
+        confirmed_by=d.confirmed_by,
+        confirmed_at=_to_iso(d.confirmed_at) if d.confirmed_at is not None else None,
+        created_at=_to_iso(d.created_at),
+        updated_at=_to_iso(d.updated_at),
+    )
+
+
+def _draft_from_row(r: PortfolioDraftRow) -> PortfolioDraft:
+    return PortfolioDraft(
+        id=r.id,
+        account_id=r.account_id,
+        event_type=EventType(r.event_type),
+        symbol=r.symbol,
+        market=MarketScope(r.market) if r.market is not None else None,
+        currency=r.currency,
+        qty=r.qty,
+        price=r.price,
+        commission=r.commission,
+        amount=r.amount,
+        occurred_at=_from_iso(r.occurred_at) if r.occurred_at else None,
+        settlement_date=_from_date(r.settlement_date),
+        source=EventSource(r.source),
+        external_id=r.external_id,
+        note=r.note,
+        status=DraftStatus(r.status),
+        version=r.version,
+        original_text=r.original_text,
+        missing=json.loads(r.missing),
+        ambiguities=json.loads(r.ambiguities),
+        created_by=r.created_by,
+        created_surface=r.created_surface,
+        confirmed_by=r.confirmed_by,
+        confirmed_at=_from_iso(r.confirmed_at) if r.confirmed_at else None,
+        created_at=_from_iso(r.created_at),
+        updated_at=_from_iso(r.updated_at),
+    )
+
+
+def _audit_to_row(e: PortfolioAuditEvent) -> PortfolioAuditRow:
+    return PortfolioAuditRow(
+        ts=_to_iso(e.ts),
+        account_id=e.account_id,
+        draft_id=e.draft_id,
+        event_id=e.event_id,
+        action=e.action,
+        actor=e.actor,
+        surface=e.surface,
+        version=e.version,
+        idempotency_key=e.idempotency_key,
+        applied=e.applied,
+        detail=e.detail,
+    )
+
+
+def _audit_from_row(r: PortfolioAuditRow) -> PortfolioAuditEvent:
+    return PortfolioAuditEvent(
+        ts=_from_iso(r.ts),
+        action=r.action,
+        actor=r.actor,
+        surface=r.surface,
+        account_id=r.account_id,
+        draft_id=r.draft_id,
+        event_id=r.event_id,
+        version=r.version,
+        idempotency_key=r.idempotency_key,
+        applied=r.applied,
+        detail=r.detail,
     )
 
 
@@ -341,6 +514,67 @@ class PortfolioJournal:
         with Session(self._engine) as session:
             row = session.get(PortfolioEventRow, event_id)
         return _event_from_row(row) if row is not None else None
+
+    # ------------------------------------------------------------- drafts
+
+    def save_draft(self, draft: PortfolioDraft) -> PortfolioDraft:
+        """Upsert a draft by id (drafts are mutable until terminal)."""
+        with Session(self._engine) as session:
+            existing = session.get(PortfolioDraftRow, draft.id)
+            row = _draft_to_row(draft)
+            if existing is not None:
+                session.delete(existing)
+                session.flush()
+            session.add(row)
+            session.commit()
+        return draft
+
+    def get_draft(self, draft_id: str) -> Optional[PortfolioDraft]:
+        with Session(self._engine) as session:
+            row = session.get(PortfolioDraftRow, draft_id)
+        return _draft_from_row(row) if row is not None else None
+
+    def list_drafts(
+        self,
+        account_id: Optional[str] = None,
+        status: Optional[DraftStatus | str] = None,
+    ) -> list[PortfolioDraft]:
+        with Session(self._engine) as session:
+            stmt = select(PortfolioDraftRow)
+            if account_id is not None:
+                stmt = stmt.where(PortfolioDraftRow.account_id == account_id)
+            if status is not None:
+                stmt = stmt.where(PortfolioDraftRow.status == DraftStatus(status).value)
+            rows = session.exec(stmt).all()
+        out = [_draft_from_row(r) for r in rows]
+        out.sort(key=lambda d: d.created_at)
+        return out
+
+    # -------------------------------------------------------------- audit
+
+    def record_audit(self, event: PortfolioAuditEvent) -> None:
+        with Session(self._engine) as session:
+            session.add(_audit_to_row(event))
+            session.commit()
+
+    def get_audit(
+        self,
+        account_id: Optional[str] = None,
+        draft_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> list[PortfolioAuditEvent]:
+        with Session(self._engine) as session:
+            stmt = select(PortfolioAuditRow)
+            if account_id is not None:
+                stmt = stmt.where(PortfolioAuditRow.account_id == account_id)
+            if draft_id is not None:
+                stmt = stmt.where(PortfolioAuditRow.draft_id == draft_id)
+            if idempotency_key is not None:
+                stmt = stmt.where(PortfolioAuditRow.idempotency_key == idempotency_key)
+            rows = session.exec(stmt).all()
+        out = [_audit_from_row(r) for r in rows]
+        out.sort(key=lambda e: e.ts)
+        return out
 
     # ---------------------------------------------------------- holdings
 

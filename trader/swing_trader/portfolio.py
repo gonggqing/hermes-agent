@@ -35,18 +35,26 @@ __all__ = [
     "AccountHoldings",
     "AccountType",
     "CashBalance",
+    "DraftStatus",
     "EventSource",
     "EventType",
     "Holding",
     "MarketScope",
     "PortfolioAccount",
+    "PortfolioDraft",
     "PortfolioEvent",
     "ProviderKind",
     "SecurityType",
+    "SYSTEM_ACTORS",
     "derive_holdings",
+    "draft_missing_fields",
     "new_id",
     "utcnow",
 ]
+
+#: Actor identities that may NEVER finalize a portfolio event (boundary #4:
+#: the LLM/system can DRAFT but a human must confirm). Matched case-insensitively.
+SYSTEM_ACTORS: frozenset[str] = frozenset({"system", "llm", "hermes", "agent", "bot"})
 
 
 def utcnow() -> datetime:
@@ -108,6 +116,13 @@ class SecurityType(str, Enum):
     STOCK = "stock"
     ETF = "etf"
     FUND = "fund"
+
+
+class DraftStatus(str, Enum):
+    DRAFT = "draft"  # awaiting human review
+    CONFIRMED = "confirmed"  # human confirmed -> event appended
+    REJECTED = "rejected"  # human rejected
+    EXPIRED = "expired"  # went stale unconfirmed
 
 
 # --------------------------------------------------------------------------- models
@@ -225,6 +240,96 @@ class PortfolioEvent(BaseModel):
         if et is EventType.CORRECTION and not self.reverses_event_id:
             raise ValueError("correction event requires reverses_event_id")
         return self
+
+
+class PortfolioDraft(BaseModel):
+    """A PROPOSED portfolio event awaiting human confirmation (Loop.md P0.9,
+    boundary #4). Hermes parses a user statement into a draft; free-form
+    conversation can NEVER mutate holdings — only an authenticated human
+    confirmation turns a draft into an append-only :class:`PortfolioEvent`.
+
+    Fields may be partial: ``missing``/``ambiguities`` record what must be
+    clarified before confirmation (never guessed). The draft is a proposed
+    FILLED event; an unfilled ORDER must be flagged in ``ambiguities`` and must
+    not confirm (an order does not change holdings until filled).
+    """
+
+    model_config = ConfigDict(validate_assignment=True)
+
+    id: str = Field(default_factory=new_id)
+    account_id: Optional[str] = None
+    event_type: EventType = EventType.BUY
+    symbol: Optional[str] = None
+    market: Optional[MarketScope] = None
+    currency: Optional[str] = None
+    qty: Optional[float] = Field(default=None, ge=0)
+    price: Optional[float] = Field(default=None, ge=0)
+    commission: Optional[float] = Field(default=None, ge=0)
+    amount: Optional[float] = None
+    occurred_at: Optional[datetime] = None
+    settlement_date: Optional[date] = None
+    source: EventSource = EventSource.MANUAL
+    external_id: Optional[str] = None
+    note: str = ""
+    # -- draft workflow bookkeeping --
+    status: DraftStatus = DraftStatus.DRAFT
+    version: int = 1
+    original_text: str = ""  # the user's utterance (audit + re-parse)
+    missing: list[str] = Field(default_factory=list)
+    ambiguities: list[str] = Field(default_factory=list)
+    created_by: str = "hermes"  # who drafted (LLM or human); NOT the confirmer
+    created_surface: str = "system"
+    confirmed_by: Optional[str] = None
+    confirmed_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+    @field_validator("symbol")
+    @classmethod
+    def _sym(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        v = v.strip()
+        return v.upper() if v else None
+
+    @field_validator("currency")
+    @classmethod
+    def _ccy(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        v = v.strip()
+        return v.upper() if v else None
+
+    @property
+    def needs_clarification(self) -> bool:
+        return bool(self.missing or self.ambiguities)
+
+
+def draft_missing_fields(draft: PortfolioDraft) -> list[str]:
+    """Hard-required fields a draft still lacks (DB-independent). Account
+    existence/ambiguity is checked by the service, which has the journal."""
+    missing: list[str] = []
+    et = draft.event_type
+    if draft.account_id is None:
+        missing.append("account")
+    if draft.currency is None:
+        missing.append("currency")
+    if draft.occurred_at is None:
+        missing.append("time")
+    if et in {EventType.BUY, EventType.SELL, EventType.SPLIT}:
+        if not draft.symbol:
+            missing.append("symbol")
+        if draft.qty is None or draft.qty <= 0:
+            missing.append("quantity")
+    if et in {EventType.DIVIDEND, EventType.FEE, EventType.CASH_TRANSFER}:
+        if draft.amount is None:
+            missing.append("amount")
+    if et is EventType.OPENING_BALANCE:
+        if draft.symbol and (draft.qty is None or draft.qty <= 0):
+            missing.append("quantity")
+        if not draft.symbol and draft.amount is None:
+            missing.append("quantity or amount")
+    return missing
 
 
 # ------------------------------------------------------------------ projection
