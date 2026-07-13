@@ -70,7 +70,8 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
     from swing_trader.rehydrate import rehydrate_from_ledger
 
-    ledger = Ledger(url=f"sqlite:///{args.db or settings.db_path}")
+    db_url = f"sqlite:///{args.db or settings.db_path}"
+    ledger = Ledger(url=db_url)
     broker = PaperBroker(starting_cash=args.starting_cash)
     rehydration = rehydrate_from_ledger(broker, ledger, settings.mode)
     print(rehydration.summary(), flush=True)
@@ -94,6 +95,13 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     from swing_trader.instruments import CachedInstrumentSearch, StaticInstrumentProvider
 
     runtime.instrument_search = CachedInstrumentSearch(StaticInstrumentProvider())
+    # Append-only Portfolio Journal + human-confirmation draft service, sharing
+    # the ledger's DB file but none of its tables (Loop.md P0.9 boundary #1).
+    from swing_trader.portfolio_draft import PortfolioDraftService
+    from swing_trader.portfolio_journal import PortfolioJournal
+
+    runtime.portfolio = PortfolioJournal(url=db_url)
+    runtime.portfolio_drafts = PortfolioDraftService(runtime.portfolio, clock=runtime.clock)
 
     telegram = None
     notify = None

@@ -30,6 +30,7 @@ from swing_trader.confirmation import ConfirmationService, ResultCode, Surface
 from swing_trader.interfaces import BrokerInterface
 from swing_trader.ledger import Ledger
 from swing_trader.log import get_logger
+from swing_trader.portfolio_draft import DraftResultCode
 from swing_trader.reporter import build_account_view
 from swing_trader.schemas import CandidateStatus, Mode
 
@@ -78,6 +79,7 @@ class FinanceRuntime:
     # Phase 0.9 (portfolio): instrument type-ahead + the append-only journal.
     instrument_search: Any = None  # CachedInstrumentSearch | None
     portfolio: Any = None  # swing_trader.portfolio_journal.PortfolioJournal | None
+    portfolio_drafts: Any = None  # swing_trader.portfolio_draft.PortfolioDraftService
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
 
 
@@ -102,6 +104,68 @@ _RESULT_HTTP: dict[ResultCode, int] = {
     ResultCode.INVALID_EDIT: 422,
     ResultCode.INVALID_ACTION: 422,
 }
+
+_DRAFT_HTTP: dict[DraftResultCode, int] = {
+    DraftResultCode.APPLIED: 200,
+    DraftResultCode.REPLAYED: 200,
+    DraftResultCode.INCOMPLETE: 422,
+    DraftResultCode.NOT_HUMAN: 403,
+    DraftResultCode.UNKNOWN_DRAFT: 404,
+    DraftResultCode.TERMINAL: 409,
+    DraftResultCode.VERSION_CONFLICT: 409,
+    DraftResultCode.INVALID_EDIT: 422,
+}
+
+
+# ------------------------------------------------------- Portfolio (P0.9)
+
+
+class PortfolioAccountCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    market_scope: str
+    base_currency: str = Field(min_length=1, max_length=8)
+    provider: str = "manual"
+    account_type: str = "cash"
+    include_in_risk: bool = True
+    note: str = ""
+    actor: str = Field(min_length=1, max_length=200)
+
+
+class PortfolioAccountUpdate(BaseModel):
+    name: Optional[str] = None
+    include_in_risk: Optional[bool] = None
+    note: Optional[str] = None
+    account_type: Optional[str] = None
+    actor: str = Field(min_length=1, max_length=200)
+
+
+class PortfolioDraftCreate(BaseModel):
+    account_id: Optional[str] = None
+    event_type: str = "buy"
+    symbol: Optional[str] = None
+    market: Optional[str] = None
+    currency: Optional[str] = None
+    qty: Optional[float] = None
+    price: Optional[float] = None
+    commission: Optional[float] = None
+    amount: Optional[float] = None
+    occurred_at: Optional[datetime] = None
+    source: str = "manual"
+    external_id: Optional[str] = None
+    note: str = ""
+    original_text: str = ""
+    ambiguities: Optional[list[str]] = None
+    created_by: str = "hermes"
+    surface: Optional[str] = None
+
+
+class PortfolioDraftAction(BaseModel):
+    action: str = Field(pattern="^(edit|reject|confirm)$")
+    actor: str = Field(min_length=1, max_length=200)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    expected_version: Optional[int] = None
+    edits: Optional[dict] = None
+    surface: Optional[str] = None
 
 
 def create_app(runtime: FinanceRuntime):
@@ -456,5 +520,204 @@ def create_app(runtime: FinanceRuntime):
             if result.candidate else None,
         }
         return JSONResponse(payload, status_code=_RESULT_HTTP[result.code])
+
+    # ------------------------------------------------- Portfolio (P0.9)
+
+    def _need_portfolio():
+        if runtime.portfolio is None:
+            raise HTTPException(503, "portfolio journal not available")
+        return runtime.portfolio
+
+    def _need_drafts():
+        if runtime.portfolio_drafts is None:
+            raise HTTPException(503, "portfolio draft service not available")
+        return runtime.portfolio_drafts
+
+    def _resolve_surface(header: Optional[str], body_surface: Optional[str],
+                         default: str = "web") -> str:
+        raw = header or body_surface or default
+        try:
+            return Surface(raw).value
+        except ValueError:
+            raise HTTPException(422, f"unknown surface {raw!r}")
+
+    def _holdings_payload(h) -> dict:
+        return {
+            "account_id": h.account_id,
+            "as_of": h.as_of.isoformat() if h.as_of else None,
+            "n_events": h.n_events,
+            "holdings": [
+                {"symbol": p.symbol,
+                 "market": p.market.value if p.market else None,
+                 "currency": p.currency, "qty": p.qty,
+                 "avg_cost": p.avg_cost, "cost_basis_known": p.cost_basis_known}
+                for p in h.holdings
+            ],
+            "cash": [
+                {"currency": c.currency, "amount": c.amount, "known": c.known}
+                for c in h.cash
+            ],
+        }
+
+    def _audit_payload(e) -> dict:
+        return {
+            "ts": e.ts.isoformat(), "action": e.action, "actor": e.actor,
+            "surface": e.surface, "account_id": e.account_id, "draft_id": e.draft_id,
+            "event_id": e.event_id, "version": e.version,
+            "idempotency_key": e.idempotency_key, "applied": e.applied,
+            "detail": e.detail,
+        }
+
+    @app.get(f"/{API_VERSION}/portfolio/accounts")
+    def portfolio_accounts() -> list[dict]:
+        return [a.model_dump(mode="json") for a in _need_portfolio().list_accounts()]
+
+    @app.get(f"/{API_VERSION}/portfolio/accounts/{{account_id}}")
+    def portfolio_account(account_id: str) -> dict:
+        a = _need_portfolio().get_account(account_id)
+        if a is None:
+            raise HTTPException(404, f"unknown account {account_id!r}")
+        return a.model_dump(mode="json")
+
+    @app.post(f"/{API_VERSION}/portfolio/accounts")
+    def portfolio_account_create(
+        body: PortfolioAccountCreate,
+        x_finance_surface: Optional[str] = Header(default=None),
+    ):
+        from swing_trader.portfolio import MarketScope
+        from swing_trader.portfolio_journal import PortfolioAuditEvent
+
+        pf = _need_portfolio()
+        surface = _resolve_surface(x_finance_surface, None)
+        try:
+            MarketScope(body.market_scope.upper())
+        except ValueError:
+            raise HTTPException(422, f"unknown market {body.market_scope!r}")
+        try:
+            account = pf.create_account(
+                name=body.name, market_scope=body.market_scope.upper(),
+                base_currency=body.base_currency, provider=body.provider,
+                account_type=body.account_type, include_in_risk=body.include_in_risk,
+                note=body.note,
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        pf.record_audit(PortfolioAuditEvent(
+            ts=runtime.clock(), action="account_create", actor=body.actor,
+            surface=surface, account_id=account.id, detail=account.name))
+        return JSONResponse(account.model_dump(mode="json"), status_code=201)
+
+    @app.post(f"/{API_VERSION}/portfolio/accounts/{{account_id}}/update")
+    def portfolio_account_update(
+        account_id: str, body: PortfolioAccountUpdate,
+        x_finance_surface: Optional[str] = Header(default=None),
+    ):
+        from swing_trader.portfolio_journal import PortfolioAuditEvent
+
+        pf = _need_portfolio()
+        surface = _resolve_surface(x_finance_surface, None)
+        try:
+            account = pf.update_account(
+                account_id, name=body.name, include_in_risk=body.include_in_risk,
+                note=body.note, account_type=body.account_type, now=runtime.clock())
+        except ValueError as exc:
+            raise HTTPException(404, str(exc))
+        pf.record_audit(PortfolioAuditEvent(
+            ts=runtime.clock(), action="account_update", actor=body.actor,
+            surface=surface, account_id=account_id, detail="config updated"))
+        return account.model_dump(mode="json")
+
+    @app.get(f"/{API_VERSION}/portfolio/accounts/{{account_id}}/holdings")
+    def portfolio_holdings(account_id: str) -> dict:
+        pf = _need_portfolio()
+        if pf.get_account(account_id) is None:
+            raise HTTPException(404, f"unknown account {account_id!r}")
+        return _holdings_payload(pf.holdings(account_id))
+
+    @app.get(f"/{API_VERSION}/portfolio/accounts/{{account_id}}/events")
+    def portfolio_events(account_id: str,
+                         symbol: Optional[str] = Query(default=None)) -> list[dict]:
+        return [e.model_dump(mode="json")
+                for e in _need_portfolio().get_events(account_id, symbol)]
+
+    @app.get(f"/{API_VERSION}/portfolio/audit")
+    def portfolio_audit(account_id: Optional[str] = Query(default=None),
+                        draft_id: Optional[str] = Query(default=None)) -> list[dict]:
+        return [_audit_payload(e)
+                for e in _need_portfolio().get_audit(account_id, draft_id)]
+
+    @app.get(f"/{API_VERSION}/portfolio/drafts")
+    def portfolio_drafts_list(account_id: Optional[str] = Query(default=None),
+                              status: Optional[str] = Query(default=None)) -> list[dict]:
+        return [d.model_dump(mode="json")
+                for d in _need_drafts().list_drafts(account_id, status)]
+
+    @app.get(f"/{API_VERSION}/portfolio/drafts/{{draft_id}}")
+    def portfolio_draft_get(draft_id: str) -> dict:
+        d = _need_drafts().get_draft(draft_id)
+        if d is None:
+            raise HTTPException(404, f"unknown draft {draft_id!r}")
+        return d.model_dump(mode="json")
+
+    @app.post(f"/{API_VERSION}/portfolio/drafts")
+    def portfolio_draft_create(
+        body: PortfolioDraftCreate,
+        x_finance_surface: Optional[str] = Header(default=None),
+    ):
+        svc = _need_drafts()
+        surface = _resolve_surface(x_finance_surface, body.surface, default="system")
+        try:
+            draft = svc.create_draft(
+                account_id=body.account_id, event_type=body.event_type,
+                symbol=body.symbol, market=body.market, currency=body.currency,
+                qty=body.qty, price=body.price, commission=body.commission,
+                amount=body.amount, occurred_at=body.occurred_at, source=body.source,
+                external_id=body.external_id, note=body.note,
+                original_text=body.original_text, ambiguities=body.ambiguities,
+                created_by=body.created_by, created_surface=surface)
+        except Exception as exc:  # noqa: BLE001 — surface bad draft input as 422
+            raise HTTPException(422, f"invalid draft: {str(exc)[:200]}")
+        return JSONResponse(draft.model_dump(mode="json"), status_code=201)
+
+    @app.post(f"/{API_VERSION}/portfolio/accounts/{{account_id}}/close-draft")
+    def portfolio_close_draft(
+        account_id: str, symbol: str = Query(min_length=1, max_length=24),
+        x_finance_surface: Optional[str] = Header(default=None),
+    ):
+        svc = _need_drafts()
+        surface = _resolve_surface(x_finance_surface, None, default="system")
+        if _need_portfolio().get_account(account_id) is None:
+            raise HTTPException(404, f"unknown account {account_id!r}")
+        draft = svc.propose_close(account_id=account_id, symbol=symbol,
+                                  created_surface=surface)
+        return JSONResponse(draft.model_dump(mode="json"), status_code=201)
+
+    @app.post(f"/{API_VERSION}/portfolio/drafts/{{draft_id}}/action")
+    def portfolio_draft_action(
+        draft_id: str, body: PortfolioDraftAction,
+        x_finance_surface: Optional[str] = Header(default=None),
+    ):
+        svc = _need_drafts()
+        surface = _resolve_surface(x_finance_surface, body.surface)
+        if body.action == "confirm":
+            result = svc.confirm_draft(
+                draft_id, actor=body.actor, surface=surface,
+                idempotency_key=body.idempotency_key,
+                expected_version=body.expected_version, now=runtime.clock())
+        elif body.action == "edit":
+            result = svc.edit_draft(
+                draft_id, actor=body.actor, surface=surface,
+                edits=body.edits or {}, expected_version=body.expected_version)
+        else:  # reject
+            result = svc.reject_draft(
+                draft_id, actor=body.actor, surface=surface,
+                idempotency_key=body.idempotency_key)
+        payload = {
+            "ok": result.ok, "code": result.code.value, "message": result.message,
+            "version": result.version,
+            "draft": result.draft.model_dump(mode="json") if result.draft else None,
+            "event": result.event.model_dump(mode="json") if result.event else None,
+        }
+        return JSONResponse(payload, status_code=_DRAFT_HTTP[result.code])
 
     return app
