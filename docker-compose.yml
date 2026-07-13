@@ -69,6 +69,13 @@ services:
       # my.hermes is a host /etc/hosts alias for 127.0.0.1; declare it so the
       # DNS-rebinding Host-header check accepts it on the loopback bind.
       - HERMES_DASHBOARD_EXTRA_HOSTS=my.hermes
+      # Finance service URL for BOTH the /api/finance/* dashboard proxy and the
+      # general agent's read-only Finance toolset (get_quote / get_kline /
+      # analyze_symbol / research_brief / search_research / account_view). Under
+      # network_mode:host, 127.0.0.1:9319 reaches the host-run Finance service.
+      # Setting this also auto-enables the "finance" toolset (Loop.md §3: the
+      # toolset is read/analysis-only; no order or approval tool exists).
+      - HERMES_FINANCE_SERVICE_URL=http://127.0.0.1:9319
       # To expose the OpenAI-compatible API server beyond localhost,
       # uncomment BOTH lines (API_SERVER_KEY is mandatory for auth):
       # - API_SERVER_HOST=0.0.0.0

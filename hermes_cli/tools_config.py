@@ -78,6 +78,7 @@ CONFIGURABLE_TOOLSETS = [
     ("delegation",      "👥 Task Delegation",           "delegate_task"),
     ("cronjob",         "⏰ Cron Jobs",                 "create/list/update/pause/resume/run, with optional attached skills"),
     ("homeassistant",    "🏠 Home Assistant",           "smart home device control"),
+    ("finance",          "📈 Finance",                  "quote, k-line, multi-agent analysis, research (read-only)"),
     ("spotify",          "🎵 Spotify",                  "playback, search, playlists, library"),
     ("discord",         "💬 Discord (read/participate)", "fetch messages, search members, create thread"),
     ("discord_admin",   "🛡️  Discord Server Admin",    "list channels/roles, pin, assign roles"),
@@ -115,7 +116,7 @@ def gui_toolset_label(label: str) -> str:
 # `hermes tools` → X (Twitter) Search setup walks users through credential
 # setup. The tool's check_fn means the schema still won't appear to the
 # model if the credential later goes missing or expires.
-_DEFAULT_OFF_TOOLSETS = {"homeassistant", "spotify", "discord", "discord_admin", "video", "video_gen", "x_search"}
+_DEFAULT_OFF_TOOLSETS = {"homeassistant", "spotify", "discord", "discord_admin", "video", "video_gen", "x_search", "finance"}
 
 
 def _xai_credentials_present() -> bool:
@@ -1713,6 +1714,11 @@ def _get_platform_tools(
                 default_off.remove(platform)
             if "homeassistant" in default_off and os.getenv("HASS_TOKEN"):
                 default_off.remove("homeassistant")
+            # Finance auto-enables when the Finance service URL is configured
+            # (the gateway container sets HERMES_FINANCE_SERVICE_URL) — mirrors
+            # the HASS_TOKEN rule above. Tools stay read-only (Loop.md §3).
+            if "finance" in default_off and os.getenv("HERMES_FINANCE_SERVICE_URL"):
+                default_off.remove("finance")
             _exempt_explicit_platform_native(
                 default_off, platform, explicitly_configured=explicitly_configured
             )
@@ -1773,6 +1779,10 @@ def _get_platform_tools(
         # regressed after #14798 made cron honor per-platform tool config.
         if "homeassistant" in default_off and os.getenv("HASS_TOKEN"):
             default_off.remove("homeassistant")
+        # Finance auto-enable (mirrors the HASS_TOKEN rule; gateway container
+        # sets HERMES_FINANCE_SERVICE_URL). Read-only tools (Loop.md §3).
+        if "finance" in default_off and os.getenv("HERMES_FINANCE_SERVICE_URL"):
+            default_off.remove("finance")
         # Symmetric carve-out for x_search auto-enable (see the inject
         # block above). Without this, the default_off subtraction would
         # strip the entry we just added.

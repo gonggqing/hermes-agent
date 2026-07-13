@@ -67,6 +67,11 @@ _HERMES_CORE_TOOLS = [
     "cronjob",
     # Home Assistant smart home control (gated on HASS_TOKEN via check_fn)
     "ha_list_entities", "ha_get_state", "ha_list_services", "ha_call_service",
+    # Finance analysis — READ/ANALYSIS-ONLY (gated on HERMES_FINANCE_SERVICE_URL
+    # via check_fn). Quote, K-line, multi-agent analysis, research brief/search,
+    # account view. NO order/approve tool (Loop.md §3/§8 authority split).
+    "get_quote", "get_kline", "analyze_symbol",
+    "research_brief", "search_research", "account_view",
     # Kanban multi-agent coordination — only in schema when the agent is
     # spawned as a kanban worker (HERMES_KANBAN_TASK env set) or the current
     # profile explicitly enables the kanban toolset. Gated via check_fn in
@@ -255,6 +260,20 @@ TOOLSETS = {
         "description": "Home Assistant smart home control and monitoring",
         "tools": ["ha_list_entities", "ha_get_state", "ha_list_services", "ha_call_service"],
         "includes": []
+    },
+
+    "finance": {
+        "description": (
+            "Finance analysis (read-only): real-time-ish quote, K-line/candlestick "
+            "data, one-shot multi-agent symbol analysis, the daily research brief "
+            "(US / China-HK), research knowledge search, and paper account view. "
+            "No order placement or approval — those stay human-only (Loop.md §3)."
+        ),
+        "tools": [
+            "get_quote", "get_kline", "analyze_symbol",
+            "research_brief", "search_research", "account_view",
+        ],
+        "includes": [],
     },
 
     "kanban": {
