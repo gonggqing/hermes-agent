@@ -97,7 +97,10 @@ if [[ "$dry_run" == true ]]; then
 fi
 
 echo "[$(timestamp)] deploy: $reason_text; target=${current_commit:0:12}; uncommitted paths=$dirty_count"
-docker compose up --build -d gateway
+# gateway (dashboard) + finance (swing_trader serve: draft API, Telegram
+# gatekeeper, scheduler) share the hermes-agent image; refresh both so the
+# daily watchdog keeps the containerized Finance service current too.
+docker compose up --build -d gateway finance
 
 for _ in $(seq 1 24); do
   if dashboard_healthy; then

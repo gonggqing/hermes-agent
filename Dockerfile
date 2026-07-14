@@ -191,6 +191,17 @@ COPY apps/shared/ apps/shared/
 RUN cd web && npm run build && \
     cd ../ui-tui && npm run build
 
+# ---------- Finance service (swing_trader) dependency env ----------
+# The `finance` compose service runs `swing_trader serve` from THIS image, so
+# bake its dependency env (fastapi/uvicorn/yfinance/ib_async/qdrant-client/…)
+# into trader/.venv. Deps-only + keyed on trader's lockfiles so a source-only
+# change doesn't re-resolve. .dockerignore excludes .venv, so the source COPY
+# below never clobbers this venv (same trick the root uv sync relies on). The
+# swing_trader package itself is imported at runtime via PYTHONPATH=trader
+# (python -m), so no editable install is needed here.
+COPY trader/pyproject.toml trader/uv.lock trader/
+RUN cd trader && uv sync --frozen --no-install-project
+
 # ---------- Source code ----------
 # .dockerignore excludes node_modules, so the installs above survive.
 # --link decouples this layer from parents for cache purposes; --chmod bakes

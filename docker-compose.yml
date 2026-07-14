@@ -72,7 +72,8 @@ services:
       # Finance service URL for BOTH the /api/finance/* dashboard proxy and the
       # general agent's read-only Finance toolset (get_quote / get_kline /
       # analyze_symbol / research_brief / search_research / account_view). Under
-      # network_mode:host, 127.0.0.1:9319 reaches the host-run Finance service.
+      # network_mode:host, 127.0.0.1:9319 reaches the `finance` service below
+      # (its own container, also host-networked, binding the same loopback).
       # Setting this also auto-enables the "finance" toolset (Loop.md §3: the
       # toolset is read/analysis-only; no order or approval tool exists).
       - HERMES_FINANCE_SERVICE_URL=http://127.0.0.1:9319
@@ -97,6 +98,48 @@ services:
       # - GOOGLE_CHAT_SERVICE_ACCOUNT_JSON=${GOOGLE_CHAT_SERVICE_ACCOUNT_JSON}
       # - GOOGLE_CHAT_ALLOWED_USERS=${GOOGLE_CHAT_ALLOWED_USERS}
     command: ["gateway", "run"]
+
+  # ── Finance service (swing_trader) ──────────────────────────────────────────
+  # The trading loop (Loop.md §5.6/§5.9): the daily scheduler, the Portfolio
+  # draft API on :9319, the interactive Telegram gatekeeper bot (in-Telegram
+  # draft confirm, P0.9 boundary #4), and the CN/KR/US research sessions. Runs
+  # as its OWN container (own process) so heavy trading work never blocks the
+  # dashboard event loop and there is exactly one server-authoritative
+  # confirmation state machine — the gateway proxies /api/finance/* to it at
+  # 127.0.0.1:9319 (both host-networked, same loopback).
+  #
+  # It deliberately BYPASSES the s6 entrypoint (which would start a second
+  # dashboard on :9119) and runs the baked trader/.venv python directly;
+  # `restart: unless-stopped` is the supervisor for this single-process
+  # container. CWD is the writable /opt/data volume, so the SQLite DB, the .env
+  # secrets, the kill-switch flag, and the embedded knowledge store all live on
+  # the durable mount — never the sealed, read-only /opt/hermes tree.
+  # PYTHONPATH makes the swing_trader package importable via `python -m`.
+  #
+  # This replaces the former host launchd job (com.hermes.finance); running
+  # both would put two consumers on one Telegram bot token (409) and two
+  # writers on one SQLite DB. The live portfolio DB was migrated from
+  # trader/trader.db to ~/.hermes/trader.db (the /opt/data mount).
+  finance:
+    build: .
+    image: hermes-agent
+    container_name: hermes-finance
+    restart: unless-stopped
+    network_mode: host
+    working_dir: /opt/data
+    user: "${HERMES_UID:-10000}:${HERMES_GID:-10000}"
+    env_file:
+      - ${HOME}/.hermes/.env
+    volumes:
+      - ~/.hermes:/opt/data
+    environment:
+      - PYTHONPATH=/opt/hermes/trader
+      - HERMES_HOME=/opt/data
+    entrypoint:
+      - /opt/hermes/trader/.venv/bin/python
+      - -m
+      - swing_trader
+    command: ["serve", "--db", "/opt/data/trader.db", "--port", "9319"]
 
   # NOTE: the dashboard deliberately has NO separate service. It runs inside
   # the gateway container (HERMES_DASHBOARD=1 above) so the dashboard's

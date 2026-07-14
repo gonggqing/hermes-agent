@@ -2207,7 +2207,7 @@ function DraftsView({
                 key={draft.id}
                 draft={draft}
                 busy={busyKey !== null && busyKey.startsWith(`${draft.id}:`)}
-                onAct={(dr, action, edits) => void act(dr, action, edits)}
+                onAct={(dr, action, edits) => act(dr, action, edits)}
                 ft={ft}
               />
             ))}
