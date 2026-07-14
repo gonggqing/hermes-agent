@@ -88,7 +88,7 @@ describe("parseTradeForm", () => {
 describe("parseDraftEdits", () => {
   it("returns an empty edits object when nothing is touched", () => {
     const res = parseDraftEdits(
-      { qty: "", price: "", commission: "", note: "" },
+      { qty: "", price: "", commission: "", note: "", occurredAt: "" },
       ft,
     );
     expect(res).toEqual({});
@@ -96,7 +96,7 @@ describe("parseDraftEdits", () => {
 
   it("rejects an invalid price", () => {
     const res = parseDraftEdits(
-      { qty: "", price: "-3", commission: "", note: "" },
+      { qty: "", price: "-3", commission: "", note: "", occurredAt: "" },
       ft,
     );
     expect(res).toBe(ft.portfolio.draftsView.errPrice);
