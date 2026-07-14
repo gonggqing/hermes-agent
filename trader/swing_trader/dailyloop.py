@@ -558,6 +558,12 @@ class DailyLoop:
         if self.runtime is not None:
             self.runtime.market = self._market.model_dump(mode="json")
         self._ingest_news()
+        # Publish the core market/portfolio/news snapshot BEFORE optional
+        # Yahoo earnings/fundamentals enrichment. Those endpoints are much
+        # slower and occasionally hang; they must not leave the Finance desk
+        # blank after a restart. A second publish below replaces this
+        # preliminary snapshot once enrichment finishes.
+        self._publish_brief()
         self._compute_earnings()
         self._ingest_research()
         self._publish_brief()

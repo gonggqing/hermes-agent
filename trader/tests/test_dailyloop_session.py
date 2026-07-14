@@ -104,6 +104,18 @@ class TestRunSessionNow:
 
 
 class TestResearchRefresh:
+    def test_core_brief_publishes_before_optional_enrichment(self, loop_env):
+        loop, _, _, _ = loop_env
+        calls = []
+        loop._ingest_news = lambda: calls.append("news")
+        loop._compute_earnings = lambda: calls.append("earnings")
+        loop._ingest_research = lambda: calls.append("research")
+        loop._publish_brief = lambda: calls.append("publish")
+
+        loop.on_monitor()
+
+        assert calls == ["news", "publish", "earnings", "research", "publish"]
+
     def test_us_brief_is_archived_when_published(self, loop_env):
         loop, runtime, _, _ = loop_env
         saved = []
