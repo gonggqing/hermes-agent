@@ -171,7 +171,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         paper_account = runtime.portfolio.ensure_default_paper_account()
         logger.info(
             "default paper portfolio account ready",
-            extra={"account_id": paper_account.id, "name": paper_account.name},
+            extra={"account_id": paper_account.id, "account_name": paper_account.name},
         )
     runtime.portfolio_drafts = PortfolioDraftService(runtime.portfolio, clock=runtime.clock)
     # Durable research-brief history (own DB file, own MetaData — never the
