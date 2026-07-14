@@ -17,6 +17,7 @@ are new ``CORRECTION`` events (Loop.md P0.9 backlog).
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Optional
@@ -52,7 +53,20 @@ __all__ = [
     "PortfolioEventRow",
     "PortfolioJournal",
     "PortfolioMarkRow",
+    "PortfolioStateConflict",
 ]
+
+
+class PortfolioStateConflict(RuntimeError):
+    """The portfolio changed after a guarded operation was proposed."""
+
+
+_LOT_EVENT_VALUES = {
+    EventType.OPENING_BALANCE.value,
+    EventType.BUY.value,
+    EventType.SELL.value,
+    EventType.SPLIT.value,
+}
 
 
 # ------------------------------------------------------------------ helpers
@@ -413,6 +427,10 @@ class PortfolioJournal:
     """
 
     def __init__(self, url: str = "sqlite:///portfolio.db") -> None:
+        # The Finance service has API and Telegram writer threads sharing one
+        # journal.  Serialize event writes so a guarded re-statement cannot
+        # race a normal trade append between its version check and commit.
+        self._write_lock = threading.RLock()
         self._engine = create_engine(url)
         SQLModel.metadata.create_all(self._engine)
         self._migrate_add_missing_columns()
@@ -527,39 +545,136 @@ class PortfolioJournal:
         replayed commit or a duplicate broker execution never double-counts,
         P0.9 backlog). The account must exist.
         """
-        with Session(self._engine) as session:
-            if session.get(PortfolioAccountRow, event.account_id) is None:
-                raise ValueError(f"unknown account id: {event.account_id}")
+        with self._write_lock:
+            with Session(self._engine) as session:
+                if session.get(PortfolioAccountRow, event.account_id) is None:
+                    raise ValueError(f"unknown account id: {event.account_id}")
 
+                existing = self._find_existing_event_row(session, event)
+                if existing is not None:
+                    return _event_from_row(existing), False
+
+                self._validate_reversal(session, event)
+                self._validate_symbol_currency(session, event)
+                session.add(_event_to_row(event))
+                session.commit()
+        return event, True
+
+    def append_restate_batch(
+        self,
+        events: list[PortfolioEvent],
+        *,
+        source_account_id: str,
+        symbol: str,
+        expected_lot_ids: set[str],
+    ) -> list[tuple[PortfolioEvent, bool]]:
+        """Atomically append one guarded holding re-statement.
+
+        The complete batch (reversals, cash compensation, corrected opening
+        lot) commits or rolls back together.  Stable per-draft event keys make
+        a retry after the batch committed replay-safe, while the source lot-id
+        guard rejects a second draft or any trade recorded after proposal.
+        """
+        if not events:
+            raise ValueError("restate batch must not be empty")
+        symbol = symbol.strip().upper()
+        with self._write_lock:
+            with Session(self._engine) as session:
+                existing = [self._find_existing_event_row(session, e) for e in events]
+                if all(row is not None for row in existing):
+                    return [(_event_from_row(row), False) for row in existing]
+                if any(row is not None for row in existing):
+                    raise PortfolioStateConflict(
+                        "incomplete prior re-statement batch; manual review required"
+                    )
+
+                active_ids = {
+                    row.id for row in self._active_lot_rows(
+                        session, source_account_id, symbol
+                    )
+                }
+                if active_ids != expected_lot_ids:
+                    raise PortfolioStateConflict(
+                        "持仓在更正卡片生成后已变化，请重新生成卡片"
+                    )
+
+                for event in events:
+                    if session.get(PortfolioAccountRow, event.account_id) is None:
+                        raise ValueError(f"unknown account id: {event.account_id}")
+                    self._validate_reversal(session, event)
+                    self._validate_symbol_currency(session, event)
+                    session.add(_event_to_row(event))
+                session.commit()
+        return [(event, True) for event in events]
+
+    @staticmethod
+    def _find_existing_event_row(
+        session: Session, event: PortfolioEvent
+    ) -> Optional[PortfolioEventRow]:
+        existing = session.exec(
+            select(PortfolioEventRow).where(
+                PortfolioEventRow.account_id == event.account_id,
+                PortfolioEventRow.idempotency_key == event.idempotency_key,
+            )
+        ).first()
+        if existing is None and event.external_id is not None:
             existing = session.exec(
                 select(PortfolioEventRow).where(
                     PortfolioEventRow.account_id == event.account_id,
-                    PortfolioEventRow.idempotency_key == event.idempotency_key,
+                    PortfolioEventRow.external_id == event.external_id,
                 )
             ).first()
-            if existing is None and event.external_id is not None:
-                existing = session.exec(
-                    select(PortfolioEventRow).where(
-                        PortfolioEventRow.account_id == event.account_id,
-                        PortfolioEventRow.external_id == event.external_id,
-                    )
-                ).first()
-            if existing is not None:
-                return _event_from_row(existing), False
+        return existing
 
-            # Guard compensating events: the reversed event must exist and
-            # belong to the same account (append-only integrity).
-            if event.reverses_event_id is not None:
-                target = session.get(PortfolioEventRow, event.reverses_event_id)
-                if target is None or target.account_id != event.account_id:
-                    raise ValueError(
-                        f"reverses_event_id {event.reverses_event_id} not found "
-                        f"in account {event.account_id}"
-                    )
+    @staticmethod
+    def _active_lot_rows(
+        session: Session, account_id: str, symbol: str
+    ) -> list[PortfolioEventRow]:
+        rows = session.exec(
+            select(PortfolioEventRow).where(
+                PortfolioEventRow.account_id == account_id,
+                PortfolioEventRow.symbol == symbol,
+            )
+        ).all()
+        reversed_ids = {
+            row.reverses_event_id
+            for row in rows
+            if row.event_type == EventType.CORRECTION.value
+            and row.reverses_event_id is not None
+        }
+        return [
+            row for row in rows
+            if row.event_type in _LOT_EVENT_VALUES and row.id not in reversed_ids
+        ]
 
-            session.add(_event_to_row(event))
-            session.commit()
-        return event, True
+    @staticmethod
+    def _validate_reversal(session: Session, event: PortfolioEvent) -> None:
+        if event.reverses_event_id is None:
+            return
+        target = session.get(PortfolioEventRow, event.reverses_event_id)
+        if target is None or target.account_id != event.account_id:
+            raise ValueError(
+                f"reverses_event_id {event.reverses_event_id} not found "
+                f"in account {event.account_id}"
+            )
+
+    @classmethod
+    def _validate_symbol_currency(
+        cls, session: Session, event: PortfolioEvent
+    ) -> None:
+        """One canonical currency per account+symbol lot history."""
+        if not event.symbol or event.event_type.value not in _LOT_EVENT_VALUES:
+            return
+        currencies = {
+            row.currency for row in cls._active_lot_rows(
+                session, event.account_id, event.symbol
+            )
+        }
+        if currencies and event.currency not in currencies:
+            raise ValueError(
+                f"{event.symbol} already uses currency "
+                f"{', '.join(sorted(currencies))}; mixed-currency lots are not allowed"
+            )
 
     def get_events(
         self,

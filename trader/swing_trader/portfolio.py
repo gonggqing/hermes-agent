@@ -280,7 +280,9 @@ class PortfolioDraft(BaseModel):
     # it reverses the symbol's current lot events in ``from_account_id`` and
     # records the corrected OPENING_BALANCE (this draft's fields), keeping cash
     # unchanged via a compensating cash entry (append-only, boundary #4). Shape:
-    # {"from_account_id": str, "field": "cost|qty|account", "current": {...}}.
+    # {"from_account_id": str, "field": "cost|qty|account", "current": {...},
+    #  "source_event_ids": [str, ...]}.  The event ids are an optimistic
+    #  version: confirmation expires the card if the source lot changed.
     restate: Optional[dict] = None
     # -- draft workflow bookkeeping --
     status: DraftStatus = DraftStatus.DRAFT

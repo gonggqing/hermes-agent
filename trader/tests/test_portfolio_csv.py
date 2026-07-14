@@ -99,3 +99,17 @@ class TestCommit:
     def test_events_tagged_source_csv(self, journal, account):
         commit_csv(journal, account.id, GOOD_CSV, actor="g", surface="web")
         assert all(e.source.value == "csv" for e in journal.get_events(account.id))
+
+    def test_same_date_buy_sell_preserves_csv_row_order(self, journal, account):
+        csv = (
+            "date,event_type,symbol,market,currency,qty,price\n"
+            "2026-07-01,buy,CCC,US,USD,1000,1\n"
+            "2026-07-01,sell,CCC,US,USD,400,2\n"
+        )
+        commit_csv(journal, account.id, csv, actor="g", surface="web")
+
+        events = journal.get_events(account.id, "CCC")
+        assert events[0].created_at < events[1].created_at
+        (pos,) = journal.holdings(account.id).holdings
+        assert pos.qty == pytest.approx(600)
+        assert pos.avg_cost == pytest.approx(1.0)

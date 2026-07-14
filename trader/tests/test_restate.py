@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from swing_trader.portfolio import EventType, MarketScope, PortfolioEvent
+from swing_trader.portfolio import DraftStatus, EventType, MarketScope, PortfolioEvent
 from swing_trader.portfolio_draft import DraftResultCode, PortfolioDraftService
 from swing_trader.portfolio_journal import PortfolioJournal
 
@@ -119,3 +119,80 @@ def test_restate_confirm_is_idempotent(env):
     c2 = svc.confirm_draft(r.draft.id, actor="gongqing", surface="telegram", idempotency_key=k)
     assert c1.ok and c2.ok and c2.code is DraftResultCode.REPLAYED
     assert _pos(j, a.id, "159518.SZ").avg_cost == pytest.approx(1.20)  # applied once
+
+
+def test_symbol_lot_rejects_mixed_currency(env):
+    j, a, _, _ = env
+    with pytest.raises(ValueError, match="mixed-currency lots are not allowed"):
+        j.append_event(_ev(
+            account_id=a.id,
+            event_type=EventType.BUY,
+            symbol="159518.SZ",
+            market=MarketScope.CN,
+            currency="USD",
+            qty=1,
+            price=1,
+            idempotency_key="mixed-currency",
+        ))
+
+
+def test_two_account_move_drafts_cannot_double_target(env):
+    j, a, b, svc = env
+    first = svc.propose_restate(
+        account_id=a.id, symbol="159518.SZ", field="account",
+        target_account_id=b.id,
+    )
+    second = svc.propose_restate(
+        account_id=a.id, symbol="159518.SZ", field="account",
+        target_account_id=b.id,
+    )
+
+    applied = svc.confirm_draft(
+        first.draft.id, actor="gongqing", surface="telegram",
+        idempotency_key="move-first",
+    )
+    stale = svc.confirm_draft(
+        second.draft.id, actor="gongqing", surface="telegram",
+        idempotency_key="move-second",
+    )
+
+    assert applied.ok
+    assert not stale.ok and stale.code is DraftResultCode.VERSION_CONFLICT
+    assert stale.draft.status is DraftStatus.EXPIRED
+    assert _pos(j, a.id, "159518.SZ") is None
+    assert _pos(j, b.id, "159518.SZ").qty == pytest.approx(1200)
+
+
+def test_account_move_retry_after_status_write_failure_is_single_apply(
+    env, monkeypatch,
+):
+    j, a, b, svc = env
+    proposed = svc.propose_restate(
+        account_id=a.id, symbol="159518.SZ", field="account",
+        target_account_id=b.id,
+    )
+    original_save = j.save_draft
+
+    def fail_confirmed_save(draft):
+        if draft.status is DraftStatus.CONFIRMED:
+            raise RuntimeError("simulated status write failure")
+        return original_save(draft)
+
+    monkeypatch.setattr(j, "save_draft", fail_confirmed_save)
+    with pytest.raises(RuntimeError, match="simulated status write failure"):
+        svc.confirm_draft(
+            proposed.draft.id, actor="gongqing", surface="telegram",
+            idempotency_key="move-attempt-1",
+        )
+
+    # The atomic event batch committed, but the draft is still pending.
+    assert _pos(j, b.id, "159518.SZ").qty == pytest.approx(1200)
+    assert svc.get_draft(proposed.draft.id).status is DraftStatus.DRAFT
+
+    monkeypatch.setattr(j, "save_draft", original_save)
+    replay = svc.confirm_draft(
+        proposed.draft.id, actor="gongqing", surface="telegram",
+        idempotency_key="move-attempt-2",
+    )
+    assert replay.ok
+    assert _pos(j, b.id, "159518.SZ").qty == pytest.approx(1200)

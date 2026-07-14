@@ -20,7 +20,7 @@ import csv
 import hashlib
 import io
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from swing_trader.log import get_logger
@@ -190,7 +190,7 @@ def commit_csv(
 
     result = CsvCommitResult()
     now = datetime.now(timezone.utc)
-    for row in preview.rows:
+    for row_index, row in enumerate(preview.rows):
         if row.errors:
             result.n_skipped += 1
             continue
@@ -200,7 +200,11 @@ def commit_csv(
         event = PortfolioEvent(
             account_id=account_id, source=EventSource.CSV,
             idempotency_key=row.idempotency_key, actor=actor, surface=surface,
-            created_at=now, **row.fields,
+            # Preserve source-file order when multiple events share the same
+            # occurred_at (common for date-only broker exports).  A single
+            # batch timestamp made BUY/SELL ties fall through to random UUID
+            # ordering in derive_holdings, which could corrupt average cost.
+            created_at=now + timedelta(microseconds=row_index), **row.fields,
         )
         stored, created = journal.append_event(event)
         if created:
