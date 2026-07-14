@@ -127,6 +127,38 @@ class TestIncompleteBlocksConfirm:
         (pos,) = journal.holdings(account.id).holdings
         assert pos.avg_cost is None  # never guessed
 
+    def test_sell_without_exact_holding_is_refused_at_journal_boundary(self, setup):
+        journal, account, svc, _, _ = setup
+        draft = svc.create_draft(
+            account_id=account.id, event_type=EventType.SELL,
+            symbol="017470.SZ", market=MarketScope.CN, currency="CNY",
+            qty=400, price=3.5, occurred_at=NOW,
+        )
+        result = svc.confirm_draft(
+            draft.id, actor="gongqing", surface="web", idempotency_key="bad-sell"
+        )
+        assert not result.ok and result.code is DraftResultCode.INCOMPLETE
+        assert "当前无持仓" in result.message
+        assert journal.holdings(account.id).holdings == []
+
+    def test_sell_more_than_current_holding_is_refused(self, setup):
+        journal, account, svc, _, _ = setup
+        buy = _complete_buy(svc, account.id, qty=3)
+        svc.confirm_draft(
+            buy.id, actor="gongqing", surface="web", idempotency_key="seed-sell"
+        )
+        sell = svc.create_draft(
+            account_id=account.id, event_type=EventType.SELL, symbol="NVDA",
+            market=MarketScope.US, currency="USD", qty=4, price=220,
+            occurred_at=NOW,
+        )
+        result = svc.confirm_draft(
+            sell.id, actor="gongqing", surface="web", idempotency_key="oversell"
+        )
+        assert not result.ok and result.code is DraftResultCode.INCOMPLETE
+        assert "超过当前持仓 3" in result.message
+        assert journal.holdings(account.id).holdings[0].qty == 3
+
 
 # --------------------------------------------------------- idempotency/version
 

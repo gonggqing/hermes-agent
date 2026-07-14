@@ -55,6 +55,7 @@ class ParsedTrade:
 
     event_type: str                 # "buy" | "sell"
     symbol: str                     # normalized (uppercase, exchange-suffixed)
+    raw_symbol: str                 # exactly as typed before suffix inference
     qty: Optional[float]
     price: Optional[float]
     ambiguities: list = field(default_factory=list)
@@ -72,17 +73,28 @@ def find_symbol(text: str) -> Optional[str]:
 
 
 def _find_symbol(text: str) -> Optional[str]:
+    found = _find_symbol_parts(text)
+    return found[0] if found else None
+
+
+def _find_symbol_parts(text: str) -> Optional[tuple[str, str]]:
+    """Return ``(normalized, raw)`` so portfolio resolution can prefer an
+    existing bare fund code over a mechanically inferred exchange suffix."""
     m = _SYM_HK.search(text)
     if m:
-        return m.group(1).upper()
+        symbol = m.group(1).upper()
+        return symbol, symbol
     m = _SYM_CN.search(text)
     if m:
         code, suffix = m.group(1), m.group(2)
-        return f"{code}{(suffix or _infer_cn_suffix(code)).upper()}"
+        raw = f"{code}{(suffix or '').upper()}"
+        normalized = f"{code}{(suffix or _infer_cn_suffix(code)).upper()}"
+        return normalized, raw
     for m in _SYM_US.finditer(text):
         tok = m.group(1).upper()
         if tok not in _US_STOPWORDS:
-            return f"{tok}{(m.group(2) or '').upper()}"
+            symbol = f"{tok}{(m.group(2) or '').upper()}"
+            return symbol, symbol
     return None
 
 
@@ -99,10 +111,11 @@ def parse_trade(text: str) -> Optional[ParsedTrade]:
     direction is taken from an explicit keyword, defaulting to BUY (flagged)."""
     if not text:
         return None
-    symbol = _find_symbol(text)
+    found = _find_symbol_parts(text)
     qm = _QTY.search(text)
-    if symbol is None or qm is None:
+    if found is None or qm is None:
         return None
+    symbol, raw_symbol = found
 
     qty = float(qm.group(1))
     pm = _PRICE.search(text)
@@ -119,6 +132,7 @@ def parse_trade(text: str) -> Optional[ParsedTrade]:
     if price is None:
         ambiguities.append("未识别成交价（价格留空，可在门户补）")
     return ParsedTrade(
-        event_type=event_type, symbol=symbol, qty=qty, price=price,
+        event_type=event_type, symbol=symbol, raw_symbol=raw_symbol,
+        qty=qty, price=price,
         ambiguities=ambiguities,
     )

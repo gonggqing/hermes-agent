@@ -555,6 +555,7 @@ class PortfolioJournal:
                     return _event_from_row(existing), False
 
                 self._validate_reversal(session, event)
+                self._validate_sell_position(session, event)
                 self._validate_symbol_currency(session, event)
                 session.add(_event_to_row(event))
                 session.commit()
@@ -656,6 +657,36 @@ class PortfolioJournal:
             raise ValueError(
                 f"reverses_event_id {event.reverses_event_id} not found "
                 f"in account {event.account_id}"
+            )
+
+    @staticmethod
+    def _validate_sell_position(session: Session, event: PortfolioEvent) -> None:
+        """Cash accounts cannot append a SELL without sufficient holdings.
+
+        This is a journal-boundary invariant, not merely a parser check: every
+        confirmation surface and CSV import is protected from creating a
+        synthetic negative position.
+        """
+        if event.event_type is not EventType.SELL or not event.symbol:
+            return
+        rows = session.exec(
+            select(PortfolioEventRow).where(
+                PortfolioEventRow.account_id == event.account_id
+            )
+        ).all()
+        current = derive_holdings(
+            event.account_id, [_event_from_row(row) for row in rows]
+        )
+        held = next(
+            (h for h in current.holdings if h.symbol == event.symbol), None
+        )
+        if held is None or held.qty <= 1e-9:
+            raise PortfolioStateConflict(
+                f"{event.symbol} 当前无持仓，不能卖出"
+            )
+        if event.qty > held.qty + 1e-9:
+            raise PortfolioStateConflict(
+                f"{event.symbol} 卖出数量 {event.qty:g} 超过当前持仓 {held.qty:g}"
             )
 
     @classmethod

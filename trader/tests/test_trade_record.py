@@ -40,6 +40,12 @@ def env(tmp_path):
         market="CN", currency="CNY", qty=400, price=1.2115, occurred_at=NOW)
     drafts.confirm_draft(seed.id, actor="gongqing", surface="web",
                          idempotency_key="seed-1")
+    fund = drafts.create_draft(
+        account_id=mayi.id, event_type="opening_balance", symbol="017470",
+        market="CN", currency="CNY", qty=2433.93, price=2.5274,
+        occurred_at=NOW)
+    drafts.confirm_draft(fund.id, actor="gongqing", surface="web",
+                         idempotency_key="seed-fund")
     return make_trade_recorder(_RT(journal, drafts)), journal, pingan, mayi
 
 
@@ -61,6 +67,34 @@ def test_account_name_hint_wins(env):
     draft, label, _ = record("蚂蚁财富 买入 000001 100股 成交价12")
     assert draft.account_id == mayi.id and label == "蚂蚁财富"
     assert draft.symbol == "000001.SZ" and draft.event_type is EventType.BUY
+
+
+def test_bare_fund_sell_uses_exact_existing_holding(env):
+    record, _, _, mayi = env
+    draft, label, ack = record("蚂蚁财富，017470，以成交价3.500卖了400份")
+
+    assert draft.account_id == mayi.id and label == "蚂蚁财富"
+    assert draft.symbol == "017470"
+    assert draft.event_type is EventType.SELL
+    assert draft.market is MarketScope.CN and draft.currency == "CNY"
+    assert not draft.needs_clarification
+    assert "017470 400股 @ 3.5" in ack
+
+
+def test_explicit_account_cannot_bypass_unheld_sell_check(env):
+    record, _, _, mayi = env
+    draft, label, _ = record("蚂蚁财富，017471，以成交价3.500卖了400份")
+
+    assert draft.account_id == mayi.id and label == "蚂蚁财富"
+    assert draft.needs_clarification
+    assert any("未持有 017471" in a for a in draft.ambiguities)
+
+
+def test_oversell_is_flagged_before_card_confirmation(env):
+    record, _, _, _ = env
+    draft, _, _ = record("蚂蚁财富，017470，以成交价3.500卖了3000份")
+    assert draft.symbol == "017470"
+    assert any("超过当前持仓" in a for a in draft.ambiguities)
 
 
 def test_new_symbol_two_accounts_flags_account(env):

@@ -506,7 +506,14 @@ class PortfolioDraftService:
                 note=draft.note,
                 created_at=now,
             )
-            stored, _created = self._journal.append_event(event)
+            try:
+                stored, _created = self._journal.append_event(event)
+            except PortfolioStateConflict as exc:
+                return self._refuse(
+                    draft, DraftResultCode.INCOMPLETE, actor, surface,
+                    action="confirm", detail=str(exc),
+                    idempotency_key=idempotency_key,
+                )
         confirmed = draft.model_copy(update={
             "status": DraftStatus.CONFIRMED, "confirmed_by": actor,
             "confirmed_at": now, "updated_at": now,

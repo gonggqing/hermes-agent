@@ -41,39 +41,77 @@ def _name_keywords(name: str) -> list[str]:
     return kws
 
 
-def _holds(journal: Any, account_id: str, symbol: str) -> bool:
+def _matching_holdings(journal: Any, account_id: str, parsed: ParsedTrade) -> list:
+    """Resolve the typed code against one account's actual holdings.
+
+    Exact input wins (``017470`` stays the bare mutual-fund code), then the
+    inferred exchange form (``159813`` -> ``159813.SZ``).  Base-code fallback
+    is allowed only when the user did not type an explicit suffix.
+    """
     try:
-        return any(
-            h.symbol == symbol.upper()
-            for h in journal.holdings(account_id).holdings
-        )
+        holdings = journal.holdings(account_id).holdings
     except Exception:  # a holdings read must not break recording
-        return False
+        return []
+    raw = parsed.raw_symbol.upper()
+    normalized = parsed.symbol.upper()
+    exact = [h for h in holdings if h.symbol == raw]
+    if exact:
+        return exact
+    inferred = [h for h in holdings if h.symbol == normalized]
+    if inferred:
+        return inferred
+    if "." in raw:
+        return []
+    return [h for h in holdings if h.symbol.split(".", 1)[0] == raw]
 
 
 def resolve_account(journal: Any, parsed: ParsedTrade, text: str):
-    """Pick the account for a parsed trade. Returns ``(account_or_None, label,
-    ambiguities)``. Order: explicit name hint → held in exactly one account →
-    the only account → give up (flag it, draft stays INCOMPLETE)."""
+    """Resolve account AND canonical held symbol together.
+
+    Returns ``(account_or_None, label, ambiguities, holding_or_None)``.  SELL
+    never falls back to an unheld explicit account; BUY may still target a new
+    instrument in an explicitly named (or sole) account.
+    """
     accounts = journal.list_accounts()
     if not accounts:
-        return None, "", ["尚无账户，请先在门户创建账户"]
+        return None, "", ["尚无账户，请先在门户创建账户"], None
 
     lowered = text.lower()
     for a in accounts:  # 1) explicit account nickname in the message
         if any(kw and kw.lower() in lowered for kw in _name_keywords(a.name)):
-            return a, a.name, []
+            matches = _matching_holdings(journal, a.id, parsed)
+            if len(matches) == 1:
+                return a, a.name, [], matches[0]
+            if len(matches) > 1:
+                return (a, a.name,
+                        [f"{parsed.raw_symbol} 匹配到多个持仓代码，请写完整代码"],
+                        None)
+            if parsed.event_type == "sell":
+                return (a, a.name,
+                        [f"{a.name} 当前未持有 {parsed.raw_symbol}，不能卖出"],
+                        None)
+            return a, a.name, [], None
 
-    holders = [a for a in accounts if _holds(journal, a.id, parsed.symbol)]
-    if len(holders) == 1:  # 2) the symbol is held in exactly one account
-        return holders[0], holders[0].name, []
-    if len(holders) > 1:
-        return None, "", [f"{parsed.symbol} 在多个账户持有，请指明账户"]
+    held = [
+        (a, h)
+        for a in accounts
+        for h in _matching_holdings(journal, a.id, parsed)
+    ]
+    if len(held) == 1:  # 2) the typed/inferred code resolves uniquely
+        account, holding = held[0]
+        return account, account.name, [], holding
+    if len(held) > 1:
+        return (None, "",
+                [f"{parsed.raw_symbol} 匹配到多个持仓，请指明账户和完整代码"],
+                None)
+
+    if parsed.event_type == "sell":
+        return (None, "", [f"当前未持有 {parsed.raw_symbol}，不能卖出"], None)
 
     if len(accounts) == 1:  # 3) only one account exists
-        return accounts[0], accounts[0].name, []
+        return accounts[0], accounts[0].name, [], None
 
-    return None, "", ["请指明账户（消息未写明，且该标的当前无持仓）"]
+    return None, "", ["请指明账户（消息未写明，且该标的当前无持仓）"], None
 
 
 def _ack(parsed: ParsedTrade, label: str) -> str:
@@ -96,8 +134,17 @@ def make_trade_recorder(runtime: Any) -> Callable[[str], Optional[tuple]]:
         drafts = runtime.portfolio_drafts
         if journal is None or drafts is None:
             return None
-        account, label, acc_amb = resolve_account(journal, parsed, text)
-        market, currency = _market_currency(parsed.symbol)
+        account, label, acc_amb, holding = resolve_account(journal, parsed, text)
+        if holding is not None:
+            parsed.symbol = holding.symbol
+            market = holding.market.value if holding.market is not None else "CN"
+            currency = holding.currency
+            if parsed.event_type == "sell" and parsed.qty > holding.qty:
+                acc_amb.append(
+                    f"卖出数量 {parsed.qty:g} 超过当前持仓 {holding.qty:g}"
+                )
+        else:
+            market, currency = _market_currency(parsed.symbol)
         draft = drafts.create_draft(
             account_id=account.id if account is not None else None,
             event_type=parsed.event_type,

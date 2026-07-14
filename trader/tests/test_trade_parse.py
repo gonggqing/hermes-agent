@@ -19,7 +19,14 @@ def test_buy_with_chengjiaojia():
 def test_buy_with_chengben():
     p = parse_trade("159518 成本 1.1332，1200 股")
     assert p.event_type == "buy" and p.symbol == "159518.SZ"  # 1xxxxx -> Shenzhen
+    assert p.raw_symbol == "159518"
     assert p.qty == 1200 and p.price == 1.1332
+
+
+def test_bare_fund_code_is_retained_for_portfolio_resolution():
+    p = parse_trade("蚂蚁财富，017470，以成交价3.500卖了400份")
+    assert p.symbol == "017470.SZ"  # fallback for a genuinely new instrument
+    assert p.raw_symbol == "017470"  # existing portfolio may canonically be bare
 
 
 def test_sell_with_at_price():
