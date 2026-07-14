@@ -31,6 +31,7 @@ from swing_trader.telegram_gateway import (
     HttpTransport,
     build_keyboard,
     render_card,
+    render_candidate_action_reply,
 )
 
 UTC = timezone.utc
@@ -267,14 +268,14 @@ class TestCard:
         c = make_candidate()
         card = render_card(c)
         assert "NVDA" in card
-        assert "BUY" in card
+        assert "买入" in card
         assert "10" in card
         assert "LMT" in card
         assert "GTC" in card
-        assert "limit=100" in card
-        assert "stop=-" in card
-        assert "tp=120" in card
-        assert "sl=92" in card
+        assert "限价 100" in card
+        assert "止损 -" in card
+        assert "止盈 120" in card
+        assert "保护止损 92" in card
         assert "72%" in card
         assert c.rationale in card
         assert c.risk_note in card
@@ -301,7 +302,31 @@ class TestCard:
     def test_keyboard_single_row_approve_edit_reject(self) -> None:
         keyboard = build_keyboard(make_candidate())
         labels = [b["text"] for b in keyboard["inline_keyboard"][0]]
-        assert labels == ["Approve", "Edit", "Reject"]
+        assert labels == ["✅ 批准", "✏️ 修改", "❌ 拒绝"]
+
+    def test_action_replies_distinguish_approval_edit_and_rejection(self) -> None:
+        c = make_candidate()
+        approved = render_candidate_action_reply(
+            c,
+            "approve",
+            account_label="IBHK Paper（模拟盘）",
+            reason_zh="趋势与基本面共同支持。",
+        )
+        assert "已批准" in approved and "尚未挂单" in approved
+        assert "IBHK Paper" in approved and "限价 100" in approved
+        assert "趋势与基本面共同支持" in approved
+        rejected = render_candidate_action_reply(
+            c,
+            "reject",
+            account_label="IBHK Paper（模拟盘）",
+        )
+        assert "已拒绝" in rejected and "不会提交" in rejected
+        edited = render_candidate_action_reply(
+            c,
+            "edit",
+            account_label="IBHK Paper（模拟盘）",
+        )
+        assert "需要修改" in edited and "没有批准" in edited
 
 
 # -------------------------------------------------------------------- window

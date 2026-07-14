@@ -167,6 +167,12 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     from swing_trader.portfolio_journal import PortfolioJournal
 
     runtime.portfolio = PortfolioJournal(url=db_url)
+    if broker.get_account().mode.value == "paper":
+        paper_account = runtime.portfolio.ensure_default_paper_account()
+        logger.info(
+            "default paper portfolio account ready",
+            extra={"account_id": paper_account.id, "name": paper_account.name},
+        )
     runtime.portfolio_drafts = PortfolioDraftService(runtime.portfolio, clock=runtime.clock)
     # Durable research-brief history (own DB file, own MetaData — never the
     # ledger's tables): archives each published brief and hydrates the volatile
@@ -248,21 +254,30 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         def notify(text: str) -> None:
             report_transport.send_message(chat_id, text)
 
-        logger.info("reporter bot attached (outbound-only)",
-                    extra={"using_shared": bool(shared_token)})
+        logger.info(
+            "reporter bot attached (outbound-only)", extra={"using_shared": bool(shared_token)}
+        )
     else:
         logger.warning("no reporter bot configured; reports go to logs only")
 
     if chat_id and dedicated_token:
         approval_transport = HttpTransport(SecretStr(dedicated_token))
         telegram = TelegramSurfaceAdapter(
-            approval_transport, chat_id, interactive=True, allowed_users=allowed,
+            approval_transport,
+            chat_id,
+            interactive=True,
+            allowed_users=allowed,
+            candidate_account_label=(
+                "IBHK Paper（模拟盘）" if settings.mode.value == "paper" else "IBKR（实盘）"
+            ),
         )
         # Let tapped draft cards confirm/reject real-holdings drafts IN Telegram
         # (Loop.md P0.9 boundary #4: authenticated human confirms, LLM never).
         telegram.set_draft_service(runtime.portfolio_drafts)
-        logger.info("finance gatekeeper bot attached (interactive approvals)",
-                    extra={"n_allowed_users": len(allowed)})
+        logger.info(
+            "finance gatekeeper bot attached (interactive approvals)",
+            extra={"n_allowed_users": len(allowed)},
+        )
     else:
         logger.warning("no dedicated finance bot; approvals via portal only")
 
@@ -291,6 +306,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         logger.info("llm analyst enabled", extra={"model": llm_settings.model})
     else:
         logger.info("no LLM key found; rule-based analysis only")
+
+    if telegram is not None and llm_settings is not None:
+        from swing_trader.candidate_reply import CandidateReasonSummarizer
+
+        telegram.set_candidate_reasoner(CandidateReasonSummarizer(llm_settings).summarize)
 
     runtime.knowledge = knowledge
     runtime.knowledge_index = knowledge_index
@@ -408,8 +428,12 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 if tgt is None:
                     return f"没找到目标账户「{value}」。"
                 r = drafts.propose_restate(
-                    account_id=from_acct.id, symbol=symbol, field="account",
-                    target_account_id=tgt.id, original_text=text)
+                    account_id=from_acct.id,
+                    symbol=symbol,
+                    field="account",
+                    target_account_id=tgt.id,
+                    original_text=text,
+                )
                 label = tgt.name
             else:
                 try:
@@ -417,8 +441,12 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 except ValueError:
                     return f"没看懂数值 {value!r}。"
                 r = drafts.propose_restate(
-                    account_id=from_acct.id, symbol=symbol, field=field,
-                    value=num, original_text=text)
+                    account_id=from_acct.id,
+                    symbol=symbol,
+                    field=field,
+                    value=num,
+                    original_text=text,
+                )
                 label = from_acct.name
             if not r.ok:
                 return r.message  # refusal (未知价格 / 数量<=0 / 目标账户无效 …)

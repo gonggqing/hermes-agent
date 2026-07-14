@@ -59,6 +59,7 @@ from swing_trader.telegram_gateway import (
     build_draft_keyboard,
     build_keyboard,
     render_card,
+    render_candidate_action_reply,
     render_draft_card,
 )
 from swing_trader import watchlist as watchlist_mod
@@ -84,6 +85,7 @@ class TelegramSurfaceAdapter:
         interactive: bool = True,
         allowed_users: Optional[set[str]] = None,
         respond_text: Optional[Callable[[str], Optional[str]]] = None,
+        candidate_account_label: str = "IBHK Paper（模拟盘）",
     ) -> None:
         """``interactive=False`` = OUTBOUND ONLY (cards/reports are sent, but
         poll() is a no-op). Required when the Hermes gateway long-polls
@@ -104,9 +106,12 @@ class TelegramSurfaceAdapter:
         self._transport = transport
         self._chat_id = chat_id
         self.interactive = interactive
-        self._allowed_users = {u.strip().lower().lstrip("@")
-                               for u in (allowed_users or set()) if u.strip()}
+        self._allowed_users = {
+            u.strip().lower().lstrip("@") for u in (allowed_users or set()) if u.strip()
+        }
         self._respond_text = respond_text
+        self._candidate_account_label = candidate_account_label
+        self._candidate_reasoner: Optional[Callable[[CandidateOrder], Optional[str]]] = None
         self._by_short_id: dict[str, str] = {}
         self._offset: Optional[int] = None
         self._bot_username: Optional[str] = None
@@ -150,16 +155,19 @@ class TelegramSurfaceAdapter:
             return
         try:
             setter([{"command": c, "description": d} for c, d in menu])
-            logger.info("finance bot command menu registered",
-                        extra={"n_commands": len(menu)})
+            logger.info("finance bot command menu registered", extra={"n_commands": len(menu)})
         except Exception:
             logger.warning("failed to register finance bot command menu")
 
-    def set_text_responder(
-        self, fn: Optional[Callable[[str], Optional[str]]]
-    ) -> None:
+    def set_text_responder(self, fn: Optional[Callable[[str], Optional[str]]]) -> None:
         """Wire the DM/@mention text responder after construction."""
         self._respond_text = fn
+
+    def set_candidate_reasoner(
+        self, fn: Optional[Callable[[CandidateOrder], Optional[str]]]
+    ) -> None:
+        """Optional fast-LLM evidence summarizer for Chinese outcome replies."""
+        self._candidate_reasoner = fn
 
     def set_draft_service(self, service: Any) -> None:
         """Wire the PortfolioDraftService so tapped draft cards can confirm /
@@ -194,11 +202,14 @@ class TelegramSurfaceAdapter:
                 render_draft_card(draft, account_label),
                 reply_markup=build_draft_keyboard(draft),
             )
-            logger.info("portfolio draft card pushed to telegram",
-                        extra={"draft_id": draft.id, "symbol": draft.symbol})
+            logger.info(
+                "portfolio draft card pushed to telegram",
+                extra={"draft_id": draft.id, "symbol": draft.symbol},
+            )
         except Exception:  # best-effort: never break the draft-create request
-            logger.warning("failed to push telegram draft card",
-                           extra={"draft_id": getattr(draft, "id", "?")})
+            logger.warning(
+                "failed to push telegram draft card", extra={"draft_id": getattr(draft, "id", "?")}
+            )
 
     def set_trade_recorder(self, fn: Optional[Callable[[str], Any]]) -> None:
         """Wire the DM trade-record parser: ``text -> (draft, account_label, ack)``
@@ -222,9 +233,41 @@ class TelegramSurfaceAdapter:
                 self._chat_id, render_card(cand), reply_markup=build_keyboard(cand)
             )
 
-    def poll(
-        self, service: Optional[ConfirmationService], now_utc: datetime
-    ) -> None:
+    def push_execution_outcome(self, report) -> None:
+        """Persist the post-cutoff broker outcome in Chinese.
+
+        Approval and submission are different states. This message is emitted
+        only after ExecutionEngine returns and still never calls a resting order
+        a fill.
+        """
+        lines: list[str] = []
+        if report.placed:
+            lines.append(f"📨 已向 {self._candidate_account_label} 提交挂单")
+            for order in report.placed:
+                px = order.limit if order.limit is not None else order.stop
+                side = "买入" if order.side is Side.BUY else "卖出"
+                lines.append(
+                    f"{side} {order.symbol} {order.qty:g} 股 · "
+                    f"{order.order_type.value} · 价格 {px:g}"
+                    if px is not None
+                    else f"{side} {order.symbol} {order.qty:g} 股 · {order.order_type.value}"
+                )
+            lines.append("状态：订单已提交/挂起，尚不代表已经成交。")
+        for candidate, reason in report.skipped:
+            lines.append(f"⚠️ {candidate.symbol} 未提交：{reason}")
+        for order, reason in report.rejected:
+            lines.append(f"⛔ {order.symbol} 被券商拒绝：{reason}")
+        if lines:
+            self._send_status(self._chat_id, "\n".join(lines))
+
+    def _send_status(self, chat_id: str, text: str) -> None:
+        """Best-effort status delivery; never roll back a settled action."""
+        try:
+            self._transport.send_message(chat_id, text)
+        except Exception:
+            logger.warning("failed to send telegram candidate status")
+
+    def poll(self, service: Optional[ConfirmationService], now_utc: datetime) -> None:
         # ``service`` may be None before the daily decide phase — draft
         # callbacks don't need it, and candidate callbacks find no registered
         # id and are answered without touching it (see on_confirm_poll).
@@ -260,7 +303,7 @@ class TelegramSurfaceAdapter:
             )
             return
         full_id = self._by_short_id.get(str(data.get("id", "")))
-        action = {"ok": "approve", "no": "reject"}.get(data.get("a"))
+        action = {"ok": "approve", "no": "reject", "edit": "edit"}.get(data.get("a"))
         if full_id is None or action is None:
             if data.get("a") == "edit":
                 self._transport.answer_callback(
@@ -275,16 +318,68 @@ class TelegramSurfaceAdapter:
                 "unauthorized telegram action refused",
                 extra={"sender_id": str(sender.get("id", "?"))},
             )
-            self._transport.answer_callback(
-                cb_id, "not authorized for finance approvals"
+            self._transport.answer_callback(cb_id, "你没有财经确认权限")
+            return
+        target = str(((callback.get("message") or {}).get("chat") or {}).get("id") or self._chat_id)
+        if action == "edit":
+            candidate_entry = service.get(full_id) if service is not None else None
+            if candidate_entry is None:
+                self._transport.answer_callback(cb_id, "候选单未知或已失效")
+                return
+            candidate = candidate_entry[0]
+            self._transport.answer_callback(cb_id, "请到 Finance Portal 修改")
+            self._send_status(
+                target,
+                render_candidate_action_reply(
+                    candidate,
+                    "edit",
+                    account_label=self._candidate_account_label,
+                ),
             )
+            return
+        if service is None:
+            self._transport.answer_callback(cb_id, "当前没有可处理的候选单")
             return
         actor = f"telegram:{sender.get('username') or sender.get('id') or 'user'}"
         result = service.act(
-            full_id, action, actor=actor, surface=Surface.TELEGRAM,
-            idempotency_key=f"tg:{cb_id}", now_utc=now_utc,
+            full_id,
+            action,
+            actor=actor,
+            surface=Surface.TELEGRAM,
+            idempotency_key=f"tg:{cb_id}",
+            now_utc=now_utc,
         )
-        self._transport.answer_callback(cb_id, result.message[:180])
+        if not result.ok or result.candidate is None:
+            failure = {
+                "window_closed": "确认窗口已关闭",
+                "terminal": "该候选单已处理",
+                "unknown_candidate": "候选单未知或已失效",
+                "version_conflict": "候选单已更新，请刷新后重试",
+            }.get(result.code.value, "操作未生效")
+            self._transport.answer_callback(cb_id, failure)
+            self._send_status(target, f"⚠️ {failure}。没有挂单，也没有成交。")
+            return
+        self._transport.answer_callback(
+            cb_id, "已批准，等待提交" if action == "approve" else "已拒绝"
+        )
+        reason_zh = None
+        if self._candidate_reasoner is not None:
+            try:
+                reason_zh = self._candidate_reasoner(result.candidate)
+            except Exception:
+                logger.warning(
+                    "candidate reasoner failed",
+                    extra={"candidate_id": result.candidate.id},
+                )
+        self._send_status(
+            target,
+            render_candidate_action_reply(
+                result.candidate,
+                action,
+                account_label=self._candidate_account_label,
+                reason_zh=reason_zh,
+            ),
+        )
 
     def _handle_draft_callback(
         self, cb_id: str, data: dict, sender: dict, now_utc: datetime
@@ -450,8 +545,7 @@ class TelegramSurfaceAdapter:
                     self._transport.send_message(chat_id, rec)
                     return
                 draft, account_label, ack = rec
-                self.push_draft_card(draft, account_label=account_label,
-                                     chat_id=chat_id)
+                self.push_draft_card(draft, account_label=account_label, chat_id=chat_id)
                 if ack:
                     self._transport.send_message(chat_id, ack)
                 return
@@ -703,6 +797,8 @@ class DailyLoop:
             except DataFeedError:
                 pass  # execution treats a missing quote conservatively
         report = self.execution.execute(approved, quotes, now)
+        if self.telegram is not None:
+            self.telegram.push_execution_outcome(report)
         self._entries_placed_today = sum(
             1 for o in report.placed if o.side is Side.BUY
         )

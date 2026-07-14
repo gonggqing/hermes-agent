@@ -411,6 +411,8 @@ export interface FinanceTranslations {
     selectHint: string;
     noAccounts: string;
     includeInRisk: string; // "In risk" badge
+    environmentLive: string;
+    environmentPaper: string;
     // Enum labels (web has no finance.enums catalog — localized here).
     markets: { US: string; HK: string; CN: string };
     providers: { manual: string; ibkr: string };
@@ -452,6 +454,9 @@ export interface FinanceTranslations {
       baseCurrencyPlaceholder: string;
       provider: string;
       accountType: string;
+      environment: string;
+      environmentLive: string;
+      environmentPaper: string;
       includeInRisk: string;
       includeInRiskHint: string;
       note: string;
@@ -640,6 +645,9 @@ export interface FinanceTranslations {
       title: string;
       name: string;
       accountType: string;
+      environment: string;
+      environmentLive: string;
+      environmentPaper: string;
       includeInRisk: string;
       note: string;
       save: string;

@@ -922,6 +922,10 @@ export default function FinancePage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   // Paper/live override. `null` follows the service /health.mode.
   const [modeOverride, setModeOverride] = useState<FinanceMode | null>(null);
+  // Holdings account scope is not the trading service mode. Default to live
+  // money so the page never opens on a simulation by accident.
+  const [holdingsEnvironment, setHoldingsEnvironment] =
+    useState<FinanceMode>("live");
   // Local (non-URL) selections for the Queue and Portfolio views.
   const [queueSel, setQueueSel] = useState<string | null>(null);
   const [portfolioSel, setPortfolioSel] = useState<string>("account");
@@ -1084,7 +1088,14 @@ export default function FinancePage() {
   // Single paper/live toggle: flip to the other mode as an explicit override.
   // Filter-only — it re-scopes reads, never re-modes an action (Loop.md §3).
   const toggleMode = () =>
-    setModeOverride(effectiveMode === "paper" ? "live" : "paper");
+    activeTab === "holdings"
+      ? setHoldingsEnvironment(
+          holdingsEnvironment === "paper" ? "live" : "paper",
+        )
+      : setModeOverride(effectiveMode === "paper" ? "live" : "paper");
+
+  const displayedMode =
+    activeTab === "holdings" ? holdingsEnvironment : effectiveMode;
 
   const bottomBar = (
     <FinanceBottomBar
@@ -1093,7 +1104,7 @@ export default function FinancePage() {
       lastUpdated={lastUpdated}
       loading={loading}
       onRefresh={refresh}
-      mode={effectiveMode}
+      mode={displayedMode}
       serviceMode={serviceMode}
       onToggleMode={toggleMode}
     />
@@ -1184,7 +1195,12 @@ export default function FinancePage() {
         />
       )}
 
-      {activeTab === "holdings" && <PortfolioManager />}
+      {activeTab === "holdings" && (
+        <PortfolioManager
+          key={holdingsEnvironment}
+          environment={holdingsEnvironment}
+        />
+      )}
 
       {bottomBar}
 

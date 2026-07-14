@@ -19,9 +19,10 @@ IN_WINDOW = datetime(2026, 7, 13, 15, 45, tzinfo=timezone.utc)
 
 class MockTransport:
     def __init__(self):
-        self.queue, self.answered, self._mid = [], [], 0
+        self.queue, self.answered, self.sent, self._mid = [], [], [], 0
 
     def send_message(self, chat_id, text, reply_markup=None):
+        self.sent.append((chat_id, text, reply_markup))
         self._mid += 1
         return self._mid
 
@@ -81,7 +82,7 @@ def test_unknown_user_refused(tmp_path):
     transport.queue.append(callback(c, {"id": 999, "username": "stranger"}))
     adapter.poll(service, IN_WINDOW)
     assert service.get(c.id)[0].status is CandidateStatus.PUSHED  # unchanged
-    assert any("not authorized" in t for _, t in transport.answered)
+    assert any("没有财经确认权限" in t for _, t in transport.answered)
     # no audit row was written for the unauthorized attempt at adapter level,
     # and the candidate has no approve entry
     assert not [a for a in ledger.get_audit(candidate_id=c.id)
@@ -94,6 +95,32 @@ def test_empty_allowlist_refuses_everyone(tmp_path):
     transport.queue.append(callback(c, {"id": 1, "username": "gongqing"}))
     adapter.poll(service, IN_WINDOW)
     assert service.get(c.id)[0].status is CandidateStatus.PUSHED
+
+
+def test_approval_posts_persistent_chinese_status(tmp_path):
+    _, service, transport, adapter, c = setup(tmp_path, {"gongqing"})
+    adapter.set_candidate_reasoner(lambda _: "趋势、估值与风控均支持该候选单。")
+    transport.queue.append(callback(c, {"id": 1, "username": "gongqing"}))
+    adapter.poll(service, IN_WINDOW)
+    reply = transport.sent[-1][1]
+    assert "已批准" in reply
+    assert "等待确认窗口结束后提交" in reply
+    assert "IBHK Paper（模拟盘）" in reply
+    assert "尚未挂单、也尚未成交" in reply
+    assert "趋势、估值与风控" in reply
+
+
+def test_edit_posts_portal_instruction_without_approval(tmp_path):
+    _, service, transport, adapter, c = setup(tmp_path, {"gongqing"})
+    edit = callback(c, {"id": 1, "username": "gongqing"})
+    edit["callback_query"]["data"] = json.dumps(
+        {"id": c.id[:16], "a": "edit"}, separators=(",", ":")
+    )
+    transport.queue.append(edit)
+    adapter.poll(service, IN_WINDOW)
+    assert service.get(c.id)[0].status is CandidateStatus.PUSHED
+    assert "Finance Portal" in transport.sent[-1][1]
+    assert "没有批准" in transport.sent[-1][1]
 
 
 def test_outbound_only_never_reads_updates(tmp_path):

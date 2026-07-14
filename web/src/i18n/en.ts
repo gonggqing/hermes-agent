@@ -385,8 +385,10 @@ export const financeEn: FinanceTranslations = {
       "Could not load the portfolio. The Finance service may be offline — refresh to retry.",
     selectHint: "Select an account to view its holdings, or add one.",
     noAccounts:
-      "No accounts yet. Add your first real account to start tracking holdings.",
+      "No accounts in this view yet. Add an account to start tracking holdings.",
     includeInRisk: "in risk",
+    environmentLive: "Live",
+    environmentPaper: "Paper",
     markets: { US: "US", HK: "Hong Kong", CN: "China" },
     providers: { manual: "Manual", ibkr: "IBKR" },
     accountTypes: { cash: "Cash", margin: "Margin" },
@@ -425,6 +427,9 @@ export const financeEn: FinanceTranslations = {
       baseCurrencyPlaceholder: "e.g. USD",
       provider: "Provider",
       accountType: "Account type",
+      environment: "Account environment",
+      environmentLive: "Live money",
+      environmentPaper: "Paper simulation",
       includeInRisk: "Include in risk aggregation",
       includeInRiskHint:
         "Count this account's positions toward portfolio-wide risk.",
@@ -619,6 +624,9 @@ export const financeEn: FinanceTranslations = {
       title: "Account settings",
       name: "Account name",
       accountType: "Account type",
+      environment: "Account environment",
+      environmentLive: "Live money",
+      environmentPaper: "Paper simulation",
       includeInRisk: "Include in risk aggregation",
       note: "Note",
       save: "Save changes",
@@ -1121,13 +1129,15 @@ export const en: Translations = {
     showValue: "Show real value",
     hideValue: "Hide value",
     customTitle: "Custom Keys",
-    customHint: "Arbitrary environment variables stored in your .env that Hermes doesn't recognise. Use these to inject env vars for skills, MCP servers, or your own tooling.",
+    customHint:
+      "Arbitrary environment variables stored in your .env that Hermes doesn't recognise. Use these to inject env vars for skills, MCP servers, or your own tooling.",
     customConfigured: "{count} custom key{s} set",
     addCustomKey: "Add a custom key",
     customKeyName: "Variable name",
     customKeyNamePlaceholder: "e.g. MY_SERVICE_API_KEY",
     add: "Add",
-    invalidKeyName: "Use letters, numbers and underscores only (must start with a letter or underscore).",
+    invalidKeyName:
+      "Use letters, numbers and underscores only (must start with a letter or underscore).",
   },
 
   oauth: {

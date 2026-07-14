@@ -30,6 +30,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import {
   type FinanceAccountType,
+  type FinanceAccountEnvironment,
   type FinanceDraftActionPayload,
   type FinanceImportPreview,
   type FinanceInstrumentMatch,
@@ -114,6 +115,7 @@ const TRADE_EVENT_TYPES = ['buy', 'sell', 'dividend', 'deposit', 'withdrawal', '
 
 const MARKET_OPTIONS: FinancePortfolioMarket[] = ['US', 'HK', 'CN']
 const ACCOUNT_TYPE_OPTIONS: FinanceAccountType[] = ['cash', 'margin']
+const ACCOUNT_ENVIRONMENT_OPTIONS: FinanceAccountEnvironment[] = ['live', 'paper']
 const PROVIDER_OPTIONS = ['manual', 'ibkr'] as const
 const CURRENCY_OPTIONS = ['USD', 'HKD', 'CNY', 'EUR', 'GBP', 'JPY'] as const
 
@@ -131,15 +133,23 @@ function usePortfolioDrafts(enabled: boolean) {
   })
 }
 
-export function FinanceHoldingsView({ enabled }: { enabled: boolean }) {
+export function FinanceHoldingsView({
+  bottomBar,
+  enabled,
+  environment
+}: {
+  bottomBar?: ReactNode
+  enabled: boolean
+  environment: FinanceAccountEnvironment
+}) {
   const { t } = useI18n()
   const copy = t.finance.holdings
   const queryClient = useQueryClient()
 
   const accountsQuery = useQuery({
     enabled,
-    queryFn: getPortfolioAccounts,
-    queryKey: financeKey('portfolio', 'accounts'),
+    queryFn: () => getPortfolioAccounts(environment),
+    queryKey: financeKey('portfolio', 'accounts', environment),
     retry: 1
   })
 
@@ -230,9 +240,9 @@ export function FinanceHoldingsView({ enabled }: { enabled: boolean }) {
           </FinanceListGroup>
         </ListColumn>
 
-        <DetailColumn>
+        <DetailColumn actionBar={bottomBar}>
           {selected === 'aggregate' ? (
-            <AggregateSection enabled={enabled} />
+            <AggregateSection enabled={enabled} environment={environment} />
           ) : selected === 'drafts' ? (
             <DraftsSection enabled={enabled} />
           ) : selectedAccount ? (
@@ -250,7 +260,12 @@ export function FinanceHoldingsView({ enabled }: { enabled: boolean }) {
         </DetailColumn>
       </MasterDetail>
 
-      <AddAccountDialog onClose={() => setAddOpen(false)} onDone={invalidate} open={addOpen} />
+      <AddAccountDialog
+        environment={environment}
+        onClose={() => setAddOpen(false)}
+        onDone={invalidate}
+        open={addOpen}
+      />
       <EditAccountDialog account={editing} onClose={() => setEditing(null)} onDone={invalidate} />
       <RecordTradeDialog account={trading} onClose={() => setTrading(null)} onDone={invalidate} />
       <ImportDialog account={importing} onClose={() => setImporting(null)} onDone={invalidate} />
@@ -538,7 +553,7 @@ function EditMarkDialog({
 
 // ── Aggregate roll-up (all accounts) ─────────────────────────────────────────
 
-function AggregateSection({ enabled }: { enabled: boolean }) {
+function AggregateSection({ enabled, environment }: { enabled: boolean; environment: FinanceAccountEnvironment }) {
   const { t } = useI18n()
   const copy = t.finance.holdings
   const [riskOnly, setRiskOnly] = useState(false)
@@ -546,8 +561,8 @@ function AggregateSection({ enabled }: { enabled: boolean }) {
 
   const valuationQuery = useQuery({
     enabled,
-    queryFn: () => getPortfolioValuation({ includeInRiskOnly: riskOnly }),
-    queryKey: financeKey('portfolio', 'valuation', 'aggregate', riskOnly ? 'risk' : 'all'),
+    queryFn: () => getPortfolioValuation({ environment, includeInRiskOnly: riskOnly }),
+    queryKey: financeKey('portfolio', 'valuation', 'aggregate', environment, riskOnly ? 'risk' : 'all'),
     retry: 1
   })
 
@@ -612,6 +627,7 @@ function AccountDetail({
   const { t } = useI18n()
   const copy = t.finance.holdings
   const [tab, setTab] = useState<AccountTab>('holdings')
+  const brokerManaged = account.environment === 'paper' && account.provider === 'ibkr'
 
   return (
     <section className="space-y-3">
@@ -622,21 +638,26 @@ function AccountDetail({
             <FinancePill variant="outline">{enumLabel(t.finance.enums.market, account.market_scope)}</FinancePill>
             <FinancePill variant="muted">{enumLabel(t.finance.enums.provider, account.provider)}</FinancePill>
             <FinancePill variant="muted">{enumLabel(t.finance.enums.accountType, account.account_type)}</FinancePill>
-            {account.include_in_risk && (
-              <FinancePill variant="default">{copy.fieldIncludeInRisk}</FinancePill>
-            )}
+            <FinancePill variant={account.environment === 'live' ? 'warn' : 'outline'}>
+              {account.environment === 'live' ? copy.environmentLive : copy.environmentPaper}
+            </FinancePill>
+            {account.include_in_risk && <FinancePill variant="default">{copy.fieldIncludeInRisk}</FinancePill>}
           </div>
           {account.note ? <p className="text-[0.7rem] text-muted-foreground/80">{account.note}</p> : null}
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-          <Button onClick={onRecordTrade} size="xs">
-            <Plus className="size-3" />
-            {copy.recordTrade}
-          </Button>
-          <Button onClick={onImport} size="xs" variant="outline">
-            <Upload className="size-3" />
-            {copy.importCsv}
-          </Button>
+          {!brokerManaged && (
+            <>
+              <Button onClick={onRecordTrade} size="xs">
+                <Plus className="size-3" />
+                {copy.recordTrade}
+              </Button>
+              <Button onClick={onImport} size="xs" variant="outline">
+                <Upload className="size-3" />
+                {copy.importCsv}
+              </Button>
+            </>
+          )}
           <Button aria-label={copy.editAccount} onClick={onEdit} size="xs" variant="ghost">
             <Pencil className="size-3" />
             {copy.editAccount}
@@ -1099,7 +1120,17 @@ function Field({ children, htmlFor, label }: { children: ReactNode; htmlFor?: st
 
 // ── Add account dialog ───────────────────────────────────────────────────────
 
-function AddAccountDialog({ onClose, onDone, open }: { onClose: () => void; onDone: () => void; open: boolean }) {
+function AddAccountDialog({
+  environment,
+  onClose,
+  onDone,
+  open
+}: {
+  environment: FinanceAccountEnvironment
+  onClose: () => void
+  onDone: () => void
+  open: boolean
+}) {
   const { t } = useI18n()
   const copy = t.finance.holdings
   const [name, setName] = useState('')
@@ -1107,6 +1138,7 @@ function AddAccountDialog({ onClose, onDone, open }: { onClose: () => void; onDo
   const [currency, setCurrency] = useState('USD')
   const [provider, setProvider] = useState<string>('manual')
   const [accountType, setAccountType] = useState<FinanceAccountType>('cash')
+  const [accountEnvironment, setAccountEnvironment] = useState<FinanceAccountEnvironment>(environment)
   const [includeInRisk, setIncludeInRisk] = useState(true)
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
@@ -1118,16 +1150,18 @@ function AddAccountDialog({ onClose, onDone, open }: { onClose: () => void; onDo
       setCurrency('USD')
       setProvider('manual')
       setAccountType('cash')
+      setAccountEnvironment(environment)
       setIncludeInRisk(true)
       setNote('')
       setError('')
     }
-  }, [open])
+  }, [environment, open])
 
   const mutation = useMutation({
     mutationFn: () =>
       postPortfolioAccount({
         account_type: accountType,
+        environment: accountEnvironment,
         actor: FINANCE_ACTOR,
         base_currency: currency,
         include_in_risk: includeInRisk,
@@ -1242,6 +1276,24 @@ function AddAccountDialog({ onClose, onDone, open }: { onClose: () => void; onDo
                 </SelectContent>
               </Select>
             </Field>
+
+            <Field label={copy.fieldEnvironment}>
+              <Select
+                onValueChange={next => setAccountEnvironment(next as FinanceAccountEnvironment)}
+                value={accountEnvironment}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ACCOUNT_ENVIRONMENT_OPTIONS.map(option => (
+                    <SelectItem key={option} value={option}>
+                      {option === 'live' ? copy.environmentLive : copy.environmentPaper}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
           </div>
 
           <label className="flex items-center justify-between gap-2 rounded-md border border-(--ui-stroke-tertiary) px-2.5 py-2">
@@ -1293,6 +1345,7 @@ function EditAccountDialog({
   const open = account !== null
   const [name, setName] = useState('')
   const [accountType, setAccountType] = useState<FinanceAccountType>('cash')
+  const [accountEnvironment, setAccountEnvironment] = useState<FinanceAccountEnvironment>('live')
   const [includeInRisk, setIncludeInRisk] = useState(true)
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
@@ -1301,6 +1354,7 @@ function EditAccountDialog({
     if (account) {
       setName(account.name)
       setAccountType(account.account_type)
+      setAccountEnvironment(account.environment)
       setIncludeInRisk(account.include_in_risk)
       setNote(account.note)
       setError('')
@@ -1315,6 +1369,7 @@ function EditAccountDialog({
 
       return postPortfolioAccountUpdate(account.id, {
         account_type: accountType,
+        environment: accountEnvironment,
         actor: FINANCE_ACTOR,
         include_in_risk: includeInRisk,
         name: name.trim(),
@@ -1364,6 +1419,25 @@ function EditAccountDialog({
                 {ACCOUNT_TYPE_OPTIONS.map(option => (
                   <SelectItem key={option} value={option}>
                     {enumLabel(t.finance.enums.accountType, option)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+
+          <Field label={copy.fieldEnvironment}>
+            <Select
+              disabled={account?.id === 'ibkr-paper-default'}
+              onValueChange={next => setAccountEnvironment(next as FinanceAccountEnvironment)}
+              value={accountEnvironment}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ACCOUNT_ENVIRONMENT_OPTIONS.map(option => (
+                  <SelectItem key={option} value={option}>
+                    {option === 'live' ? copy.environmentLive : copy.environmentPaper}
                   </SelectItem>
                 ))}
               </SelectContent>

@@ -43,6 +43,9 @@ export function FinanceView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...
   const [tab, setTab] = useRouteEnumParam('tab', TABS, 'research')
   // null = follow the service's own mode from /health; set = explicit override.
   const [modeOverride, setModeOverride] = useState<FinanceMode | null>(null)
+  // Portfolio account scope is independent from the trading service mode.
+  // Default to real money so opening Holdings never lands on a simulation.
+  const [portfolioEnvironment, setPortfolioEnvironment] = useState<FinanceMode>('live')
 
   const healthQuery = useQuery({
     queryFn: getFinanceHealth,
@@ -57,6 +60,7 @@ export function FinanceView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...
   const offline = healthQuery.isError
   const online = Boolean(health) && !offline
   const mode: FinanceMode = modeOverride ?? health?.mode ?? 'paper'
+  const displayedMode = tab === 'portfolio' ? portfolioEnvironment : mode
 
   // Shared with the queue tab (same query key → one fetch) so the tab badge
   // and the list never disagree.
@@ -73,10 +77,10 @@ export function FinanceView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...
   const bottomBar = (
     <FinanceBottomBar
       health={health}
-      mode={mode}
-      modeOverride={modeOverride}
+      mode={displayedMode}
+      modeOverride={tab === 'portfolio' ? portfolioEnvironment : modeOverride}
       offline={offline}
-      onModeChange={setModeOverride}
+      onModeChange={tab === 'portfolio' ? setPortfolioEnvironment : setModeOverride}
       onRefresh={refreshAll}
     />
   )
@@ -122,7 +126,9 @@ export function FinanceView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...
               <FinanceResearchView bottomBar={bottomBar} enabled={online} onOpenQueue={() => setTab('queue')} />
             )}
             {tab === 'queue' && <FinanceQueueView bottomBar={bottomBar} enabled={online} />}
-            {tab === 'portfolio' && <FinancePortfolioView bottomBar={bottomBar} enabled={online} mode={mode} />}
+            {tab === 'portfolio' && (
+              <FinancePortfolioView bottomBar={bottomBar} enabled={online} mode={portfolioEnvironment} />
+            )}
           </div>
         </div>
       )}

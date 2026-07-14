@@ -1901,6 +1901,8 @@ export type FinancePortfolioMarket = 'CN' | 'HK' | 'US'
 
 export type FinanceAccountType = 'cash' | 'margin'
 
+export type FinanceAccountEnvironment = 'live' | 'paper'
+
 // Terminal draft lifecycle (human-confirmation surface).
 export type FinanceDraftStatus = 'confirmed' | 'draft' | 'expired' | 'rejected'
 
@@ -1910,6 +1912,7 @@ export interface FinancePortfolioAccount {
   provider: string
   market_scope: FinancePortfolioMarket
   account_type: FinanceAccountType
+  environment: FinanceAccountEnvironment
   base_currency: string
   include_in_risk: boolean
   note: string
@@ -2160,6 +2163,7 @@ export interface FinanceAccountCreatePayload {
   base_currency: string
   provider?: string
   account_type?: FinanceAccountType
+  environment?: FinanceAccountEnvironment
   include_in_risk?: boolean
   note?: string
   actor: string
@@ -2170,6 +2174,7 @@ export interface FinanceAccountUpdatePayload {
   include_in_risk?: boolean
   note?: string
   account_type?: FinanceAccountType
+  environment?: FinanceAccountEnvironment
   actor: string
 }
 
@@ -2210,8 +2215,12 @@ export interface FinanceDraftActionResult {
   event: FinancePortfolioEvent | null
 }
 
-export function getPortfolioAccounts(): Promise<FinancePortfolioAccount[]> {
-  return window.hermesDesktop.api<FinancePortfolioAccount[]>({ path: '/api/finance/v1/portfolio/accounts' })
+export function getPortfolioAccounts(
+  environment?: FinanceAccountEnvironment
+): Promise<FinancePortfolioAccount[]> {
+  return window.hermesDesktop.api<FinancePortfolioAccount[]>({
+    path: `/api/finance/v1/portfolio/accounts${financeQuery({ environment })}`
+  })
 }
 
 export function getPortfolioAccount(id: string): Promise<FinancePortfolioAccount> {
@@ -2257,9 +2266,14 @@ export function getPortfolioReconcile(id: string): Promise<FinanceReconcile> {
   })
 }
 
-export function getPortfolioAggregate(opts: { includeInRiskOnly?: boolean } = {}): Promise<FinanceAggregateResponse> {
+export function getPortfolioAggregate(
+  opts: { environment?: FinanceAccountEnvironment; includeInRiskOnly?: boolean } = {}
+): Promise<FinanceAggregateResponse> {
   return window.hermesDesktop.api<FinanceAggregateResponse>({
-    path: `/api/finance/v1/portfolio/aggregate${financeQuery({ include_in_risk_only: opts.includeInRiskOnly })}`
+    path: `/api/finance/v1/portfolio/aggregate${financeQuery({
+      environment: opts.environment,
+      include_in_risk_only: opts.includeInRiskOnly
+    })}`
   })
 }
 
@@ -2268,7 +2282,11 @@ export function getPortfolioAggregate(opts: { includeInRiskOnly?: boolean } = {}
 // the accounts rolled up in `accounts`). `includeInRiskOnly` only applies to the
 // aggregate — the service ignores it on the per-account path.
 export function getPortfolioValuation(
-  opts: { accountId?: string; includeInRiskOnly?: boolean } = {}
+  opts: {
+    accountId?: string
+    environment?: FinanceAccountEnvironment
+    includeInRiskOnly?: boolean
+  } = {}
 ): Promise<FinanceValuationResponse> {
   if (opts.accountId) {
     return window.hermesDesktop.api<FinanceValuationResponse>({
@@ -2277,7 +2295,10 @@ export function getPortfolioValuation(
   }
 
   return window.hermesDesktop.api<FinanceValuationResponse>({
-    path: `/api/finance/v1/portfolio/valuation${financeQuery({ include_in_risk_only: opts.includeInRiskOnly })}`
+    path: `/api/finance/v1/portfolio/valuation${financeQuery({
+      environment: opts.environment,
+      include_in_risk_only: opts.includeInRiskOnly
+    })}`
   })
 }
 

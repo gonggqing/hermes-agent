@@ -1483,8 +1483,10 @@ export const api = {
   // never "system"/"hermes"). All routes proxy to the Finance service's
   // /v1/portfolio/* (trader/swing_trader/api.py); read calls throw when the
   // service is offline so the Portfolio tab renders its offline/error note.
-  financePortfolioAccounts: () =>
-    fetchJSON<FinancePortfolioAccount[]>("/api/finance/v1/portfolio/accounts"),
+  financePortfolioAccounts: (environment?: FinanceMode) =>
+    fetchJSON<FinancePortfolioAccount[]>(
+      `/api/finance/v1/portfolio/accounts${financeQuery({ environment })}`,
+    ),
   financePortfolioAccount: (id: string) =>
     fetchJSON<FinancePortfolioAccount>(
       `/api/finance/v1/portfolio/accounts/${encodeURIComponent(id)}`,
@@ -1501,10 +1503,14 @@ export const api = {
     fetchJSON<FinancePortfolioReconcile>(
       `/api/finance/v1/portfolio/accounts/${encodeURIComponent(id)}/reconcile`,
     ),
-  financePortfolioAggregate: (includeInRiskOnly?: boolean) =>
+  financePortfolioAggregate: (
+    includeInRiskOnly?: boolean,
+    environment?: FinanceMode,
+  ) =>
     fetchJSON<FinancePortfolioAggregate>(
       `/api/finance/v1/portfolio/aggregate${financeQuery({
         include_in_risk_only: includeInRiskOnly || undefined,
+        environment,
       })}`,
     ),
   /**
@@ -1515,12 +1521,17 @@ export const api = {
    * Reader — throws when the Finance service is offline so the tab shows its
    * offline/error note.
    */
-  financePortfolioValuation: (accountId?: string, includeInRiskOnly?: boolean) =>
+  financePortfolioValuation: (
+    accountId?: string,
+    includeInRiskOnly?: boolean,
+    environment?: FinanceMode,
+  ) =>
     fetchJSON<FinancePortfolioValuation>(
       accountId
         ? `/api/finance/v1/portfolio/accounts/${encodeURIComponent(accountId)}/valuation`
         : `/api/finance/v1/portfolio/valuation${financeQuery({
             include_in_risk_only: includeInRiskOnly || undefined,
+            environment,
           })}`,
     ),
   financePortfolioAudit: (accountId?: string) =>
@@ -3489,6 +3500,7 @@ export interface FinancePortfolioAccount {
   provider: string;
   market_scope: FinancePortfolioMarket;
   account_type: FinancePortfolioAccountType;
+  environment: FinanceMode;
   base_currency: string;
   include_in_risk: boolean;
   note: string;
@@ -3742,6 +3754,7 @@ export interface FinancePortfolioAccountCreate {
   base_currency: string;
   provider?: FinancePortfolioProvider;
   account_type?: FinancePortfolioAccountType;
+  environment?: FinanceMode;
   include_in_risk?: boolean;
   note?: string;
   actor: string;
@@ -3752,6 +3765,7 @@ export interface FinancePortfolioAccountUpdate {
   include_in_risk?: boolean;
   note?: string;
   account_type?: FinancePortfolioAccountType;
+  environment?: FinanceMode;
   actor: string;
 }
 

@@ -53,6 +53,7 @@ __all__ = [
     "build_draft_keyboard",
     "build_keyboard",
     "render_card",
+    "render_candidate_action_reply",
     "render_draft_card",
 ]
 
@@ -214,29 +215,84 @@ def _fmt_px(v: Optional[float]) -> str:
 
 
 def render_card(c: CandidateOrder) -> str:
-    """Concise plain-text confirmation card (Loop.md §5.6)."""
+    """Concise Chinese confirmation card (Loop.md §5.6)."""
     rationale = c.rationale
     if len(rationale) > RATIONALE_MAX_CHARS:
         rationale = rationale[:RATIONALE_MAX_CHARS] + "..."
+    side = "买入" if c.side.value == "BUY" else "卖出"
     lines = [
-        f"{c.symbol} {c.side.value} {c.qty:g} {c.order_type.value} ({c.tif.value})",
+        "📌 待确认交易",
+        f"{c.symbol} · {side} {c.qty:g} · {c.order_type.value}（{c.tif.value}）",
         (
-            f"limit={_fmt_px(c.limit)} stop={_fmt_px(c.stop)} "
-            f"tp={_fmt_px(c.tp)} sl={_fmt_px(c.sl)}"
+            f"限价 {_fmt_px(c.limit)} · 止损 {_fmt_px(c.stop)} · "
+            f"止盈 {_fmt_px(c.tp)} · 保护止损 {_fmt_px(c.sl)}"
         ),
-        f"confidence: {round(c.confidence * 100)}%",
-        f"rationale: {rationale}",
+        f"信心 {round(c.confidence * 100)}%",
+        f"研究依据：{rationale}",
     ]
     if c.risk_note:
-        lines.append(f"risk: {c.risk_note}")
+        lines.append(f"风控：{c.risk_note}")
     return "\n".join(lines)
+
+
+def render_candidate_action_reply(
+    c: CandidateOrder,
+    action: str,
+    *,
+    account_label: str,
+    reason_zh: Optional[str] = None,
+) -> str:
+    """Persistent Chinese outcome after a candidate button is pressed.
+
+    State and prices are deterministic; an optional fast LLM may summarize only
+    the rationale. This prevents a fluent response from inventing execution.
+    """
+    side = "买入" if c.side.value == "BUY" else "卖出"
+    price = c.limit if c.limit is not None else c.ref_px
+    price_text = _fmt_px(price)
+    reason = reason_zh or "技术面、基本面与风险检查共同形成该候选单；详细依据见上方卡片。"
+    protection = []
+    if c.stop is not None:
+        protection.append(f"止损 {c.stop:g}")
+    if c.tp is not None:
+        protection.append(f"止盈 {c.tp:g}")
+    if c.sl is not None:
+        protection.append(f"保护止损 {c.sl:g}")
+    protection_text = " · ".join(protection)
+
+    if action == "approve":
+        lines = [
+            "✅ 已批准，等待确认窗口结束后提交",
+            f"计划：{side} {c.symbol} {c.qty:g} 股，限价 {price_text}",
+            f"账户：{account_label}",
+            f"原因：{reason}",
+        ]
+        if protection_text:
+            lines.append(f"保护：{protection_text}")
+        lines.append("状态：当前仅为已批准，尚未挂单、也尚未成交。")
+        return "\n".join(lines)
+    if action == "reject":
+        return "\n".join(
+            [
+                "❌ 已拒绝，不会提交该订单",
+                f"候选：{side} {c.symbol} {c.qty:g} 股，限价 {price_text}",
+                f"原始原因：{reason}",
+                "状态：候选单已关闭，不会占用模拟账户资金。",
+            ]
+        )
+    return "\n".join(
+        [
+            "✏️ 需要修改候选单",
+            f"当前：{side} {c.symbol} {c.qty:g} 股，限价 {price_text}",
+            "请在 Finance Portal 的 Queue 中修改数量、限价、止损或止盈；修改后会重新经过风控。",
+            "状态：本次点击没有批准、没有挂单、也没有成交。",
+        ]
+    )
 
 
 def _callback_data(c: CandidateOrder, action: str) -> str:
     """Compact JSON callback payload; must stay <= 64 bytes (Telegram cap)."""
-    return json.dumps(
-        {"id": c.id[:CALLBACK_ID_LEN], "a": action}, separators=(",", ":")
-    )
+    return json.dumps({"id": c.id[:CALLBACK_ID_LEN], "a": action}, separators=(",", ":"))
 
 
 def build_keyboard(c: CandidateOrder) -> dict:
@@ -244,9 +300,9 @@ def build_keyboard(c: CandidateOrder) -> dict:
     return {
         "inline_keyboard": [
             [
-                {"text": "Approve", "callback_data": _callback_data(c, "ok")},
-                {"text": "Edit", "callback_data": _callback_data(c, "edit")},
-                {"text": "Reject", "callback_data": _callback_data(c, "no")},
+                {"text": "✅ 批准", "callback_data": _callback_data(c, "ok")},
+                {"text": "✏️ 修改", "callback_data": _callback_data(c, "edit")},
+                {"text": "❌ 拒绝", "callback_data": _callback_data(c, "no")},
             ]
         ]
     }
@@ -287,11 +343,14 @@ def _render_restate_card(draft: Any, account_label: str, name_for) -> str:
     name = name_for(draft.symbol) if draft.symbol else ""
     lines = [f"📝 更正持仓：{sym}" + (f"（{name}）" if name else "")]
     if field == "cost":
-        lines.append(f"成本：{_fmt_cost(cur.get('avg_cost'))} → {_fmt_cost(draft.price)}"
-                     f"（数量 {draft.qty:g} 不变）")
+        lines.append(
+            f"成本：{_fmt_cost(cur.get('avg_cost'))} → {_fmt_cost(draft.price)}"
+            f"（数量 {draft.qty:g} 不变）"
+        )
     elif field == "qty":
-        lines.append(f"数量：{cur.get('qty')} → {draft.qty:g}"
-                     f"（成本 {_fmt_cost(draft.price)} 不变）")
+        lines.append(
+            f"数量：{cur.get('qty')} → {draft.qty:g}（成本 {_fmt_cost(draft.price)} 不变）"
+        )
     elif field == "account":
         lines.append(f"移到账户：{account_label or draft.account_id}（数量/成本不变）")
     lines.append("💵 现金不变 · 撤销原记录 + 记正确值（保留审计）")

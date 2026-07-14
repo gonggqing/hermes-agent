@@ -16,6 +16,7 @@ import pytest
 
 from swing_trader.ledger import Ledger
 from swing_trader.portfolio import (
+    AccountEnvironment,
     AccountType,
     EventSource,
     EventType,
@@ -24,7 +25,7 @@ from swing_trader.portfolio import (
     ProviderKind,
     derive_holdings,
 )
-from swing_trader.portfolio_journal import PortfolioJournal
+from swing_trader.portfolio_journal import DEFAULT_PAPER_ACCOUNT_ID, PortfolioJournal
 from swing_trader.schemas import Mode
 
 T0 = datetime(2026, 7, 1, 14, 30, tzinfo=timezone.utc)
@@ -53,18 +54,39 @@ def test_migration_adds_missing_column(tmp_path):
     con.execute("ALTER TABLE portfolio_drafts DROP COLUMN reverses_event_id")
     con.commit()
     con.close()
+
     def cols():
-        return [r[1] for r in sqlite3.connect(dbfile).execute(
-            "PRAGMA table_info(portfolio_drafts)")]
+        return [
+            r[1] for r in sqlite3.connect(dbfile).execute("PRAGMA table_info(portfolio_drafts)")
+        ]
 
     assert "reverses_event_id" not in cols()  # old schema
     PortfolioJournal(url=url)  # re-open → migration runs
     assert "reverses_event_id" in cols()  # column restored
 
 
+def test_migration_marks_existing_accounts_live(tmp_path):
+    import sqlite3
+
+    dbfile = tmp_path / "old-accounts.db"
+    url = f"sqlite:///{dbfile}"
+    journal = PortfolioJournal(url=url)
+    account = journal.create_account(name="蚂蚁财富", market_scope="CN", base_currency="CNY")
+    con = sqlite3.connect(dbfile)
+    con.execute("DROP INDEX ix_portfolio_accounts_environment")
+    con.execute("ALTER TABLE portfolio_accounts DROP COLUMN environment")
+    con.commit()
+    con.close()
+
+    reopened = PortfolioJournal(url=url)
+    assert reopened.get_account(account.id).environment is AccountEnvironment.LIVE
+
+
 def _us_account(journal: PortfolioJournal):
     return journal.create_account(
-        name="IBKR US", market_scope=MarketScope.US, base_currency="USD",
+        name="IBKR US",
+        market_scope=MarketScope.US,
+        base_currency="USD",
         provider=ProviderKind.MANUAL,
     )
 
@@ -123,6 +145,15 @@ class TestAccounts:
         a = journal.create_account(name="A", market_scope="HK", base_currency="hkd")
         assert a.base_currency == "HKD"
         assert a.market_scope is MarketScope.HK
+
+    def test_default_paper_account_is_stable_and_unique(self, journal):
+        first = journal.ensure_default_paper_account()
+        second = journal.ensure_default_paper_account()
+        assert first.id == second.id == DEFAULT_PAPER_ACCOUNT_ID
+        assert first.name == "IBHK Paper"
+        assert first.provider is ProviderKind.IBKR
+        assert first.environment is AccountEnvironment.PAPER
+        assert len(journal.list_accounts(environment="paper")) == 1
 
 
 # ------------------------------------------------------------ append-only
@@ -400,89 +431,200 @@ class TestNoLedgerContamination:
 class TestValidation:
     def test_buy_requires_symbol(self):
         with pytest.raises(ValueError, match="requires a symbol"):
-            PortfolioEvent(account_id="a", event_type=EventType.BUY, currency="USD",
-                           qty=10, price=100.0, occurred_at=T0, idempotency_key="k",
-                           actor="x", surface="web")
+            PortfolioEvent(
+                account_id="a",
+                event_type=EventType.BUY,
+                currency="USD",
+                qty=10,
+                price=100.0,
+                occurred_at=T0,
+                idempotency_key="k",
+                actor="x",
+                surface="web",
+            )
 
     def test_correction_requires_reverses_id(self):
         with pytest.raises(ValueError, match="reverses_event_id"):
-            PortfolioEvent(account_id="a", event_type=EventType.CORRECTION,
-                           currency="USD", occurred_at=T0, idempotency_key="k",
-                           actor="x", surface="web")
+            PortfolioEvent(
+                account_id="a",
+                event_type=EventType.CORRECTION,
+                currency="USD",
+                occurred_at=T0,
+                idempotency_key="k",
+                actor="x",
+                surface="web",
+            )
 
     def test_cash_event_requires_amount(self):
         with pytest.raises(ValueError, match="cash amount"):
-            PortfolioEvent(account_id="a", event_type=EventType.CASH_TRANSFER,
-                           currency="USD", occurred_at=T0, idempotency_key="k",
-                           actor="x", surface="web")
+            PortfolioEvent(
+                account_id="a",
+                event_type=EventType.CASH_TRANSFER,
+                currency="USD",
+                occurred_at=T0,
+                idempotency_key="k",
+                actor="x",
+                surface="web",
+            )
 
     def test_negative_qty_rejected(self):
         with pytest.raises(ValueError, match="magnitude"):
-            PortfolioEvent(account_id="a", event_type=EventType.BUY, symbol="NVDA",
-                           currency="USD", qty=-5, price=10.0, occurred_at=T0,
-                           idempotency_key="k", actor="x", surface="web")
+            PortfolioEvent(
+                account_id="a",
+                event_type=EventType.BUY,
+                symbol="NVDA",
+                currency="USD",
+                qty=-5,
+                price=10.0,
+                occurred_at=T0,
+                idempotency_key="k",
+                actor="x",
+                surface="web",
+            )
 
     def test_naive_timestamp_rejected(self):
         with pytest.raises(ValueError, match="timezone-aware"):
-            PortfolioEvent(account_id="a", event_type=EventType.BUY, symbol="NVDA",
-                           currency="USD", qty=5, price=10.0,
-                           occurred_at=datetime(2026, 7, 1, 12, 0),
-                           idempotency_key="k", actor="x", surface="web")
+            PortfolioEvent(
+                account_id="a",
+                event_type=EventType.BUY,
+                symbol="NVDA",
+                currency="USD",
+                qty=5,
+                price=10.0,
+                occurred_at=datetime(2026, 7, 1, 12, 0),
+                idempotency_key="k",
+                actor="x",
+                surface="web",
+            )
 
     def test_symbol_and_currency_normalised(self):
-        e = PortfolioEvent(account_id="a", event_type=EventType.BUY, symbol=" nvda ",
-                           currency="usd", qty=5, price=10.0, occurred_at=T0,
-                           idempotency_key="k", actor="x", surface="web")
+        e = PortfolioEvent(
+            account_id="a",
+            event_type=EventType.BUY,
+            symbol=" nvda ",
+            currency="usd",
+            qty=5,
+            price=10.0,
+            occurred_at=T0,
+            idempotency_key="k",
+            actor="x",
+            surface="web",
+        )
         assert e.symbol == "NVDA" and e.currency == "USD"
 
     def test_settlement_date_roundtrips(self, journal):
         a = _us_account(journal)
-        ev, _ = journal.append_event(_event(a.id, settlement_date=date(2026, 7, 3),
-                                            idempotency_key="s"))
+        ev, _ = journal.append_event(
+            _event(a.id, settlement_date=date(2026, 7, 3), idempotency_key="s")
+        )
         assert journal.get_event(ev.id).settlement_date == date(2026, 7, 3)
 
     def test_zero_qty_buy_rejected(self):
         with pytest.raises(ValueError, match="qty > 0"):
-            PortfolioEvent(account_id="a", event_type=EventType.BUY, symbol="NVDA",
-                           currency="USD", qty=0, price=10.0, occurred_at=T0,
-                           idempotency_key="k", actor="x", surface="web")
+            PortfolioEvent(
+                account_id="a",
+                event_type=EventType.BUY,
+                symbol="NVDA",
+                currency="USD",
+                qty=0,
+                price=10.0,
+                occurred_at=T0,
+                idempotency_key="k",
+                actor="x",
+                surface="web",
+            )
 
     def test_opening_share_lot_zero_qty_rejected(self):
         with pytest.raises(ValueError, match="qty > 0"):
-            PortfolioEvent(account_id="a", event_type=EventType.OPENING_BALANCE,
-                           symbol="NVDA", currency="USD", qty=0, price=10.0,
-                           occurred_at=T0, idempotency_key="k", actor="x", surface="web")
+            PortfolioEvent(
+                account_id="a",
+                event_type=EventType.OPENING_BALANCE,
+                symbol="NVDA",
+                currency="USD",
+                qty=0,
+                price=10.0,
+                occurred_at=T0,
+                idempotency_key="k",
+                actor="x",
+                surface="web",
+            )
 
     def test_opening_balance_without_symbol_or_amount_rejected(self):
         with pytest.raises(ValueError, match="symbol\\+qty .* or an amount"):
-            PortfolioEvent(account_id="a", event_type=EventType.OPENING_BALANCE,
-                           currency="USD", qty=0, occurred_at=T0,
-                           idempotency_key="k", actor="x", surface="web")
+            PortfolioEvent(
+                account_id="a",
+                event_type=EventType.OPENING_BALANCE,
+                currency="USD",
+                qty=0,
+                occurred_at=T0,
+                idempotency_key="k",
+                actor="x",
+                surface="web",
+            )
 
 
 class TestProjectionEdges:
     def test_split_with_no_prior_lot_is_noop(self, journal):
         a = _us_account(journal)
-        journal.append_event(_event(a.id, event_type=EventType.SPLIT, symbol="AMD",
-                                    qty=2.0, price=None, idempotency_key="s"))
+        journal.append_event(
+            _event(
+                a.id,
+                event_type=EventType.SPLIT,
+                symbol="AMD",
+                qty=2.0,
+                price=None,
+                idempotency_key="s",
+            )
+        )
         assert journal.holdings(a.id).holdings == []
 
     def test_sell_on_unknown_cost_lot_stays_unknown(self, journal):
         a = _us_account(journal)
-        journal.append_event(_event(a.id, event_type=EventType.OPENING_BALANCE,
-                                    qty=10, price=None, idempotency_key="open"))
-        journal.append_event(_event(a.id, event_type=EventType.SELL, qty=4, price=None,
-                                    occurred_at=_dt(2), idempotency_key="s"))
+        journal.append_event(
+            _event(
+                a.id,
+                event_type=EventType.OPENING_BALANCE,
+                qty=10,
+                price=None,
+                idempotency_key="open",
+            )
+        )
+        journal.append_event(
+            _event(
+                a.id,
+                event_type=EventType.SELL,
+                qty=4,
+                price=None,
+                occurred_at=_dt(2),
+                idempotency_key="s",
+            )
+        )
         (pos,) = journal.holdings(a.id).holdings
         assert pos.qty == 6.0 and pos.avg_cost is None and pos.cost_basis_known is False
 
     def test_market_backfilled_from_later_event(self, journal):
         a = _us_account(journal)
-        journal.append_event(_event(a.id, event_type=EventType.OPENING_BALANCE,
-                                    qty=10, price=90.0, market=None, idempotency_key="o"))
-        journal.append_event(_event(a.id, event_type=EventType.BUY, qty=5, price=100.0,
-                                    market=MarketScope.US, occurred_at=_dt(2),
-                                    idempotency_key="b"))
+        journal.append_event(
+            _event(
+                a.id,
+                event_type=EventType.OPENING_BALANCE,
+                qty=10,
+                price=90.0,
+                market=None,
+                idempotency_key="o",
+            )
+        )
+        journal.append_event(
+            _event(
+                a.id,
+                event_type=EventType.BUY,
+                qty=5,
+                price=100.0,
+                market=MarketScope.US,
+                occurred_at=_dt(2),
+                idempotency_key="b",
+            )
+        )
         (pos,) = journal.holdings(a.id).holdings
         assert pos.market is MarketScope.US
 

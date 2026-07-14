@@ -149,6 +149,7 @@ class PortfolioAccountCreate(BaseModel):
     base_currency: str = Field(min_length=1, max_length=8)
     provider: str = "manual"
     account_type: str = "cash"
+    environment: str = "live"
     include_in_risk: bool = True
     note: str = ""
     actor: str = Field(min_length=1, max_length=200)
@@ -159,6 +160,7 @@ class PortfolioAccountUpdate(BaseModel):
     include_in_risk: Optional[bool] = None
     note: Optional[str] = None
     account_type: Optional[str] = None
+    environment: Optional[str] = None
     actor: str = Field(min_length=1, max_length=200)
 
 
@@ -794,30 +796,138 @@ def create_app(runtime: FinanceRuntime):
             "as_of": h.as_of.isoformat() if h.as_of else None,
             "n_events": h.n_events,
             "holdings": [
-                {"symbol": p.symbol, "display_name": names.get(p.symbol),
-                 "market": p.market.value if p.market else None,
-                 "currency": p.currency, "qty": p.qty,
-                 "avg_cost": p.avg_cost, "cost_basis_known": p.cost_basis_known}
+                {
+                    "symbol": p.symbol,
+                    "display_name": names.get(p.symbol),
+                    "market": p.market.value if p.market else None,
+                    "currency": p.currency,
+                    "qty": p.qty,
+                    "avg_cost": p.avg_cost,
+                    "cost_basis_known": p.cost_basis_known,
+                }
                 for p in h.holdings
             ],
             "cash": [
-                {"currency": c.currency, "amount": c.amount, "known": c.known}
-                for c in h.cash
+                {"currency": c.currency, "amount": c.amount, "known": c.known} for c in h.cash
             ],
         }
 
+    def _portfolio_environment(raw: Optional[str]):
+        from swing_trader.portfolio import AccountEnvironment
+
+        try:
+            return AccountEnvironment(raw) if raw is not None else None
+        except ValueError:
+            raise HTTPException(422, f"unknown account environment {raw!r}")
+
+    def _is_default_paper_account(account) -> bool:
+        from swing_trader.portfolio import AccountEnvironment
+        from swing_trader.portfolio_journal import DEFAULT_PAPER_ACCOUNT_ID
+
+        return (
+            account.id == DEFAULT_PAPER_ACCOUNT_ID
+            and account.environment is AccountEnvironment.PAPER
+        )
+
+    def _account_holdings(account):
+        """Return the authority-owned holdings projection for one account.
+
+        Manual/live accounts derive from the append-only PortfolioJournal. The
+        stable IBHK Paper account projects PaperBroker/Ledger state directly so
+        simulated fills survive rebuilds without being copied into the human
+        portfolio journal.
+        """
+        if not _is_default_paper_account(account) or runtime.broker is None:
+            return _need_portfolio().holdings(account.id)
+
+        from swing_trader.portfolio import AccountHoldings, CashBalance, Holding, MarketScope
+
+        def market_for(symbol: str) -> MarketScope:
+            upper = symbol.upper()
+            if upper.endswith(".HK"):
+                return MarketScope.HK
+            if upper.endswith((".SS", ".SZ")):
+                return MarketScope.CN
+            return MarketScope.US
+
+        positions = runtime.broker.get_positions()
+        snapshot = runtime.broker.get_account()
+        fills = runtime.ledger.get_fills(Mode.PAPER)
+        as_of = max((fill.ts for fill in fills), default=runtime.clock())
+        return AccountHoldings(
+            account_id=account.id,
+            holdings=[
+                Holding(
+                    symbol=position.symbol,
+                    market=market_for(position.symbol),
+                    currency=account.base_currency,
+                    qty=position.qty,
+                    avg_cost=position.avg_px,
+                    cost_basis_known=True,
+                )
+                for position in positions
+                if abs(position.qty) > 1e-9
+            ],
+            cash=[
+                CashBalance(
+                    currency=account.base_currency,
+                    amount=snapshot.cash,
+                    known=True,
+                )
+            ],
+            as_of=as_of,
+            n_events=len(fills),
+        )
+
+    def _portfolio_aggregate(environment=None, *, include_in_risk_only=False):
+        from swing_trader.portfolio import aggregate_holdings
+
+        accounts = _need_portfolio().list_accounts(environment=environment)
+        if include_in_risk_only:
+            accounts = [account for account in accounts if account.include_in_risk]
+        return aggregate_holdings([(account, _account_holdings(account)) for account in accounts])
+
+    def _valuation_marks(account=None):
+        """Overlay PaperBroker marks without persisting them as manual facts."""
+        marks = _need_portfolio().get_marks()
+        if account is None or not _is_default_paper_account(account) or runtime.broker is None:
+            return marks
+        from swing_trader.portfolio_journal import Mark
+
+        now = runtime.clock()
+        for position in runtime.broker.get_positions():
+            if position.mkt_px is not None:
+                marks[position.symbol] = Mark(
+                    position.symbol,
+                    position.mkt_px,
+                    account.base_currency,
+                    now,
+                    "live",
+                    "paper-broker",
+                )
+        return marks
+
     def _audit_payload(e) -> dict:
         return {
-            "ts": e.ts.isoformat(), "action": e.action, "actor": e.actor,
-            "surface": e.surface, "account_id": e.account_id, "draft_id": e.draft_id,
-            "event_id": e.event_id, "version": e.version,
-            "idempotency_key": e.idempotency_key, "applied": e.applied,
+            "ts": e.ts.isoformat(),
+            "action": e.action,
+            "actor": e.actor,
+            "surface": e.surface,
+            "account_id": e.account_id,
+            "draft_id": e.draft_id,
+            "event_id": e.event_id,
+            "version": e.version,
+            "idempotency_key": e.idempotency_key,
+            "applied": e.applied,
             "detail": e.detail,
         }
 
     @app.get(f"/{API_VERSION}/portfolio/accounts")
-    def portfolio_accounts() -> list[dict]:
-        return [a.model_dump(mode="json") for a in _need_portfolio().list_accounts()]
+    def portfolio_accounts(
+        environment: Optional[str] = Query(default=None),
+    ) -> list[dict]:
+        env = _portfolio_environment(environment)
+        return [a.model_dump(mode="json") for a in _need_portfolio().list_accounts(environment=env)]
 
     @app.get(f"/{API_VERSION}/portfolio/accounts/{{account_id}}")
     def portfolio_account(account_id: str) -> dict:
@@ -842,21 +952,33 @@ def create_app(runtime: FinanceRuntime):
             raise HTTPException(422, f"unknown market {body.market_scope!r}")
         try:
             account = pf.create_account(
-                name=body.name, market_scope=body.market_scope.upper(),
-                base_currency=body.base_currency, provider=body.provider,
-                account_type=body.account_type, include_in_risk=body.include_in_risk,
+                name=body.name,
+                market_scope=body.market_scope.upper(),
+                base_currency=body.base_currency,
+                provider=body.provider,
+                account_type=body.account_type,
+                environment=body.environment,
+                include_in_risk=body.include_in_risk,
                 note=body.note,
             )
         except ValueError as exc:
             raise HTTPException(422, str(exc))
-        pf.record_audit(PortfolioAuditEvent(
-            ts=runtime.clock(), action="account_create", actor=body.actor,
-            surface=surface, account_id=account.id, detail=account.name))
+        pf.record_audit(
+            PortfolioAuditEvent(
+                ts=runtime.clock(),
+                action="account_create",
+                actor=body.actor,
+                surface=surface,
+                account_id=account.id,
+                detail=account.name,
+            )
+        )
         return JSONResponse(account.model_dump(mode="json"), status_code=201)
 
     @app.post(f"/{API_VERSION}/portfolio/accounts/{{account_id}}/update")
     def portfolio_account_update(
-        account_id: str, body: PortfolioAccountUpdate,
+        account_id: str,
+        body: PortfolioAccountUpdate,
         x_finance_surface: Optional[str] = Header(default=None),
     ):
         from swing_trader.portfolio_journal import PortfolioAuditEvent
@@ -865,13 +987,27 @@ def create_app(runtime: FinanceRuntime):
         surface = _resolve_surface(x_finance_surface, None)
         try:
             account = pf.update_account(
-                account_id, name=body.name, include_in_risk=body.include_in_risk,
-                note=body.note, account_type=body.account_type, now=runtime.clock())
+                account_id,
+                name=body.name,
+                include_in_risk=body.include_in_risk,
+                note=body.note,
+                account_type=body.account_type,
+                environment=body.environment,
+                now=runtime.clock(),
+            )
         except ValueError as exc:
-            raise HTTPException(404, str(exc))
-        pf.record_audit(PortfolioAuditEvent(
-            ts=runtime.clock(), action="account_update", actor=body.actor,
-            surface=surface, account_id=account_id, detail="config updated"))
+            status = 404 if "unknown account id" in str(exc) else 422
+            raise HTTPException(status, str(exc))
+        pf.record_audit(
+            PortfolioAuditEvent(
+                ts=runtime.clock(),
+                action="account_update",
+                actor=body.actor,
+                surface=surface,
+                account_id=account_id,
+                detail="config updated",
+            )
+        )
         return account.model_dump(mode="json")
 
     @app.get(f"/{API_VERSION}/portfolio/accounts/{{account_id}}/holdings")
@@ -879,25 +1015,27 @@ def create_app(runtime: FinanceRuntime):
         pf = _need_portfolio()
         if pf.get_account(account_id) is None:
             raise HTTPException(404, f"unknown account {account_id!r}")
-        return _holdings_payload(pf.holdings(account_id), _symbol_names(account_id))
+        account = pf.get_account(account_id)
+        return _holdings_payload(_account_holdings(account), _symbol_names(account_id))
 
     @app.get(f"/{API_VERSION}/portfolio/accounts/{{account_id}}/events")
-    def portfolio_events(account_id: str,
-                         symbol: Optional[str] = Query(default=None)) -> list[dict]:
-        return [e.model_dump(mode="json")
-                for e in _need_portfolio().get_events(account_id, symbol)]
+    def portfolio_events(
+        account_id: str, symbol: Optional[str] = Query(default=None)
+    ) -> list[dict]:
+        return [e.model_dump(mode="json") for e in _need_portfolio().get_events(account_id, symbol)]
 
     @app.get(f"/{API_VERSION}/portfolio/audit")
-    def portfolio_audit(account_id: Optional[str] = Query(default=None),
-                        draft_id: Optional[str] = Query(default=None)) -> list[dict]:
-        return [_audit_payload(e)
-                for e in _need_portfolio().get_audit(account_id, draft_id)]
+    def portfolio_audit(
+        account_id: Optional[str] = Query(default=None),
+        draft_id: Optional[str] = Query(default=None),
+    ) -> list[dict]:
+        return [_audit_payload(e) for e in _need_portfolio().get_audit(account_id, draft_id)]
 
     @app.get(f"/{API_VERSION}/portfolio/drafts")
-    def portfolio_drafts_list(account_id: Optional[str] = Query(default=None),
-                              status: Optional[str] = Query(default=None)) -> list[dict]:
-        return [d.model_dump(mode="json")
-                for d in _need_drafts().list_drafts(account_id, status)]
+    def portfolio_drafts_list(
+        account_id: Optional[str] = Query(default=None), status: Optional[str] = Query(default=None)
+    ) -> list[dict]:
+        return [d.model_dump(mode="json") for d in _need_drafts().list_drafts(account_id, status)]
 
     @app.get(f"/{API_VERSION}/portfolio/drafts/{{draft_id}}")
     def portfolio_draft_get(draft_id: str) -> dict:
@@ -915,14 +1053,25 @@ def create_app(runtime: FinanceRuntime):
         surface = _resolve_surface(x_finance_surface, body.surface, default="system")
         try:
             draft = svc.create_draft(
-                account_id=body.account_id, event_type=body.event_type,
-                symbol=body.symbol, market=body.market, currency=body.currency,
-                qty=body.qty, price=body.price, commission=body.commission,
-                amount=body.amount, occurred_at=body.occurred_at, source=body.source,
-                external_id=body.external_id, reverses_event_id=body.reverses_event_id,
-                note=body.note, original_text=body.original_text,
+                account_id=body.account_id,
+                event_type=body.event_type,
+                symbol=body.symbol,
+                market=body.market,
+                currency=body.currency,
+                qty=body.qty,
+                price=body.price,
+                commission=body.commission,
+                amount=body.amount,
+                occurred_at=body.occurred_at,
+                source=body.source,
+                external_id=body.external_id,
+                reverses_event_id=body.reverses_event_id,
+                note=body.note,
+                original_text=body.original_text,
                 ambiguities=body.ambiguities,
-                created_by=body.created_by, created_surface=surface)
+                created_by=body.created_by,
+                created_surface=surface,
+            )
         except Exception as exc:  # noqa: BLE001 — surface bad draft input as 422
             raise HTTPException(422, f"invalid draft: {str(exc)[:200]}")
         _push_draft_to_telegram(draft)
@@ -930,21 +1079,22 @@ def create_app(runtime: FinanceRuntime):
 
     @app.post(f"/{API_VERSION}/portfolio/accounts/{{account_id}}/close-draft")
     def portfolio_close_draft(
-        account_id: str, symbol: str = Query(min_length=1, max_length=24),
+        account_id: str,
+        symbol: str = Query(min_length=1, max_length=24),
         x_finance_surface: Optional[str] = Header(default=None),
     ):
         svc = _need_drafts()
         surface = _resolve_surface(x_finance_surface, None, default="system")
         if _need_portfolio().get_account(account_id) is None:
             raise HTTPException(404, f"unknown account {account_id!r}")
-        draft = svc.propose_close(account_id=account_id, symbol=symbol,
-                                  created_surface=surface)
+        draft = svc.propose_close(account_id=account_id, symbol=symbol, created_surface=surface)
         _push_draft_to_telegram(draft)
         return JSONResponse(draft.model_dump(mode="json"), status_code=201)
 
     @app.post(f"/{API_VERSION}/portfolio/accounts/{{account_id}}/correct-draft")
     def portfolio_correct_draft(
-        account_id: str, event_id: str = Query(min_length=1),
+        account_id: str,
+        event_id: str = Query(min_length=1),
         x_finance_surface: Optional[str] = Header(default=None),
     ):
         """Draft the UNDO of a prior event (append-only 'delete' via a
@@ -953,8 +1103,9 @@ def create_app(runtime: FinanceRuntime):
         surface = _resolve_surface(x_finance_surface, None, default="system")
         if _need_portfolio().get_account(account_id) is None:
             raise HTTPException(404, f"unknown account {account_id!r}")
-        draft = svc.propose_correction(account_id=account_id, event_id=event_id,
-                                       created_surface=surface)
+        draft = svc.propose_correction(
+            account_id=account_id, event_id=event_id, created_surface=surface
+        )
         if draft is None:
             raise HTTPException(404, f"unknown event {event_id!r} in this account")
         _push_draft_to_telegram(draft)
@@ -989,22 +1140,31 @@ def create_app(runtime: FinanceRuntime):
         return JSONResponse(payload, status_code=_DRAFT_HTTP[result.code])
 
     @app.get(f"/{API_VERSION}/portfolio/aggregate")
-    def portfolio_aggregate(include_in_risk_only: bool = Query(default=False)) -> dict:
-        pf = _need_portfolio()
-        agg = pf.aggregate(include_in_risk_only=include_in_risk_only)
+    def portfolio_aggregate(
+        include_in_risk_only: bool = Query(default=False),
+        environment: Optional[str] = Query(default=None),
+    ) -> dict:
+        agg = _portfolio_aggregate(
+            _portfolio_environment(environment),
+            include_in_risk_only=include_in_risk_only,
+        )
         return {
             "accounts": agg.accounts,
             "as_of": agg.as_of.isoformat() if agg.as_of else None,
             "holdings": [
-                {"symbol": h.symbol,
-                 "market": h.market.value if h.market else None,
-                 "currency": h.currency, "qty": h.qty, "avg_cost": h.avg_cost,
-                 "cost_basis_known": h.cost_basis_known, "accounts": h.accounts}
+                {
+                    "symbol": h.symbol,
+                    "market": h.market.value if h.market else None,
+                    "currency": h.currency,
+                    "qty": h.qty,
+                    "avg_cost": h.avg_cost,
+                    "cost_basis_known": h.cost_basis_known,
+                    "accounts": h.accounts,
+                }
                 for h in agg.holdings
             ],
             "cash": [
-                {"currency": c.currency, "amount": c.amount, "known": c.known}
-                for c in agg.cash
+                {"currency": c.currency, "amount": c.amount, "known": c.known} for c in agg.cash
             ],
         }
 
@@ -1018,15 +1178,26 @@ def create_app(runtime: FinanceRuntime):
             raise HTTPException(404, f"unknown account {account_id!r}")
         # Phase 0.9: no IBKR snapshot per portfolio account yet → the account's
         # own record is authoritative (manual/imported); wired once IBKR lands.
-        res = reconcile_portfolio_account(account, pf.holdings(account_id),
-                                          broker_positions=None, now=runtime.clock())
+        broker_positions = (
+            runtime.broker.get_positions()
+            if _is_default_paper_account(account) and runtime.broker is not None
+            else None
+        )
+        res = reconcile_portfolio_account(
+            account,
+            _account_holdings(account),
+            broker_positions=broker_positions,
+            now=runtime.clock(),
+        )
         return {
-            "account_id": res.account_id, "ok": res.ok, "authority": res.authority,
-            "summary": res.summary(), "note": res.note,
+            "account_id": res.account_id,
+            "ok": res.ok,
+            "authority": res.authority,
+            "summary": res.summary(),
+            "note": res.note,
             "as_of": res.as_of.isoformat() if res.as_of else None,
             "drifts": [
-                {"symbol": d.symbol, "portfolio_qty": d.portfolio_qty,
-                 "broker_qty": d.broker_qty}
+                {"symbol": d.symbol, "portfolio_qty": d.portfolio_qty, "broker_qty": d.broker_qty}
                 for d in res.drifts
             ],
         }
@@ -1041,22 +1212,32 @@ def create_app(runtime: FinanceRuntime):
         pv = parse_csv(body.csv, account_id, pf)
         return {
             "header_error": pv.header_error,
-            "n_valid": pv.n_valid, "n_invalid": pv.n_invalid,
-            "n_duplicate": pv.n_duplicate, "committable": pv.committable,
+            "n_valid": pv.n_valid,
+            "n_invalid": pv.n_invalid,
+            "n_duplicate": pv.n_duplicate,
+            "committable": pv.committable,
             "rows": [
-                {"line": r.line, "duplicate": r.duplicate, "errors": r.errors,
-                 "ok": r.ok,
-                 "event_type": r.fields.get("event_type").value if r.fields.get("event_type") else None,
-                 "symbol": r.fields.get("symbol"),
-                 "qty": r.fields.get("qty"), "price": r.fields.get("price"),
-                 "amount": r.fields.get("amount")}
+                {
+                    "line": r.line,
+                    "duplicate": r.duplicate,
+                    "errors": r.errors,
+                    "ok": r.ok,
+                    "event_type": r.fields.get("event_type").value
+                    if r.fields.get("event_type")
+                    else None,
+                    "symbol": r.fields.get("symbol"),
+                    "qty": r.fields.get("qty"),
+                    "price": r.fields.get("price"),
+                    "amount": r.fields.get("amount"),
+                }
                 for r in pv.rows
             ],
         }
 
     @app.post(f"/{API_VERSION}/portfolio/accounts/{{account_id}}/import/commit")
     def portfolio_import_commit(
-        account_id: str, body: PortfolioImportRequest,
+        account_id: str,
+        body: PortfolioImportRequest,
         x_finance_surface: Optional[str] = Header(default=None),
     ) -> dict:
         from swing_trader.portfolio_csv import commit_csv
@@ -1066,41 +1247,61 @@ def create_app(runtime: FinanceRuntime):
         if not body.actor:
             raise HTTPException(422, "actor is required to commit an import")
         try:
-            res = commit_csv(runtime.portfolio, account_id, body.csv,
-                             actor=body.actor, surface=surface)
+            res = commit_csv(
+                runtime.portfolio, account_id, body.csv, actor=body.actor, surface=surface
+            )
         except ValueError as exc:
             raise HTTPException(422, str(exc))
         return {
-            "n_committed": res.n_committed, "n_duplicate": res.n_duplicate,
-            "n_skipped": res.n_skipped, "event_ids": res.event_ids,
+            "n_committed": res.n_committed,
+            "n_duplicate": res.n_duplicate,
+            "n_skipped": res.n_skipped,
+            "event_ids": res.event_ids,
         }
 
     # ---- valuation (market value + P&L) ----
 
-    def _valued_payload(vp, accounts_map: Optional[dict] = None,
-                        names: Optional[dict] = None) -> dict:
+    def _valued_payload(
+        vp, accounts_map: Optional[dict] = None, names: Optional[dict] = None
+    ) -> dict:
         names = names or {}
         return {
             "as_of": vp.as_of.isoformat() if vp.as_of else None,
             "totals": [
-                {"currency": t.currency, "market_value": t.market_value,
-                 "holdings_value": t.holdings_value, "cash": t.cash, "cost": t.cost,
-                 "unrealized_pnl": t.unrealized_pnl, "pnl_pct": t.pnl_pct,
-                 "n_priced": t.n_priced, "n_unpriced": t.n_unpriced}
+                {
+                    "currency": t.currency,
+                    "market_value": t.market_value,
+                    "holdings_value": t.holdings_value,
+                    "cash": t.cash,
+                    "cost": t.cost,
+                    "unrealized_pnl": t.unrealized_pnl,
+                    "pnl_pct": t.pnl_pct,
+                    "n_priced": t.n_priced,
+                    "n_unpriced": t.n_unpriced,
+                }
                 for t in vp.totals
             ],
             "holdings": [
-                {"symbol": h.symbol, "display_name": names.get(h.symbol),
-                 "market": h.market.value if h.market else None,
-                 "currency": h.currency, "qty": h.qty, "avg_cost": h.avg_cost,
-                 "cost_basis_known": h.cost_basis_known, "price": h.price,
-                 "price_as_of": h.price_as_of.isoformat() if h.price_as_of else None,
-                 "price_source": h.price_source, "market_value": h.market_value,
-                 "cost": h.cost, "unrealized_pnl": h.unrealized_pnl,
-                 "pnl_pct": h.pnl_pct,
-                 "accounts": h.accounts,
-                 "account_names": [accounts_map.get(a, a) for a in h.accounts]
-                 if accounts_map else []}
+                {
+                    "symbol": h.symbol,
+                    "display_name": names.get(h.symbol),
+                    "market": h.market.value if h.market else None,
+                    "currency": h.currency,
+                    "qty": h.qty,
+                    "avg_cost": h.avg_cost,
+                    "cost_basis_known": h.cost_basis_known,
+                    "price": h.price,
+                    "price_as_of": h.price_as_of.isoformat() if h.price_as_of else None,
+                    "price_source": h.price_source,
+                    "market_value": h.market_value,
+                    "cost": h.cost,
+                    "unrealized_pnl": h.unrealized_pnl,
+                    "pnl_pct": h.pnl_pct,
+                    "accounts": h.accounts,
+                    "account_names": [accounts_map.get(a, a) for a in h.accounts]
+                    if accounts_map
+                    else [],
+                }
                 for h in vp.holdings
             ],
         }
@@ -1112,20 +1313,34 @@ def create_app(runtime: FinanceRuntime):
         pf = _need_portfolio()
         if pf.get_account(account_id) is None:
             raise HTTPException(404, f"unknown account {account_id!r}")
-        vp = value_account(pf.holdings(account_id), pf.get_marks())
+        account = pf.get_account(account_id)
+        vp = value_account(_account_holdings(account), _valuation_marks(account))
         return _valued_payload(vp, names=_symbol_names(account_id))
 
     @app.get(f"/{API_VERSION}/portfolio/valuation")
-    def portfolio_valuation_all(include_in_risk_only: bool = Query(default=False)) -> dict:
+    def portfolio_valuation_all(
+        include_in_risk_only: bool = Query(default=False),
+        environment: Optional[str] = Query(default=None),
+    ) -> dict:
         from swing_trader.valuation import value_aggregate
 
         pf = _need_portfolio()
-        names = {a.id: a.name for a in pf.list_accounts()}
-        vp = value_aggregate(pf.aggregate(include_in_risk_only=include_in_risk_only),
-                             pf.get_marks())
+        env = _portfolio_environment(environment)
+        selected_accounts = pf.list_accounts(environment=env)
+        names = {a.id: a.name for a in selected_accounts}
+        aggregate = _portfolio_aggregate(
+            env,
+            include_in_risk_only=include_in_risk_only,
+        )
+        marks = pf.get_marks()
+        for account in selected_accounts:
+            marks.update(_valuation_marks(account))
+        vp = value_aggregate(aggregate, marks)
         out = _valued_payload(vp, accounts_map=names, names=_symbol_names())
-        out["accounts"] = [{"id": a, "name": names.get(a, a)}
-                           for a in {acc for h in vp.holdings for acc in h.accounts}]
+        out["accounts"] = [
+            {"id": a, "name": names.get(a, a)}
+            for a in {acc for h in vp.holdings for acc in h.accounts}
+        ]
         return out
 
     @app.post(f"/{API_VERSION}/portfolio/marks")

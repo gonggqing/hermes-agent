@@ -1567,6 +1567,9 @@ export interface Translations {
       subnavAria: string
       subnavPaper: string
       subnavReal: string
+      paperAccountName: string
+      environmentLive: string
+      environmentPaper: string
       // Sidebar groups + special rows.
       groupPortfolio: string
       groupAccounts: string
@@ -1643,6 +1646,7 @@ export interface Translations {
       fieldBaseCurrency: string
       fieldProvider: string
       fieldAccountType: string
+      fieldEnvironment: string
       fieldIncludeInRisk: string
       includeInRiskHint: string
       fieldNote: string

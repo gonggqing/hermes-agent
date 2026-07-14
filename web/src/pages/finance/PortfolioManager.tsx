@@ -30,6 +30,7 @@ import { api } from "@/lib/api";
 import type {
   FinanceImportPreview,
   FinanceInstrumentMatch,
+  FinanceMode,
   FinancePortfolioAccount,
   FinancePortfolioDraft,
   FinancePortfolioDraftActionOutcome,
@@ -445,11 +446,13 @@ function TotalsSummary({
 
 function ValuationView({
   accountId,
+  environment,
   reloadToken,
   showToast,
   ft,
 }: {
   accountId?: string;
+  environment: FinanceMode;
   reloadToken: number;
   showToast: ShowToast;
   ft: FinanceTranslations;
@@ -471,7 +474,11 @@ function ValuationView({
   useEffect(() => {
     let cancelled = false;
     api
-      .financePortfolioValuation(accountId, isAggregate ? riskOnly : undefined)
+      .financePortfolioValuation(
+        accountId,
+        isAggregate ? riskOnly : undefined,
+        environment,
+      )
       .then((d) => {
         if (!cancelled) {
           setData(d);
@@ -487,7 +494,7 @@ function ValuationView({
     return () => {
       cancelled = true;
     };
-  }, [accountId, isAggregate, riskOnly, reloadToken, localReload]);
+  }, [accountId, environment, isAggregate, riskOnly, reloadToken, localReload]);
 
   const reload = () => setLocalReload((n) => n + 1);
 
@@ -1445,6 +1452,9 @@ function SettingsForm({
   const s = ft.portfolio.settings;
   const [name, setName] = useState(account.name);
   const [accountType, setAccountType] = useState(account.account_type);
+  const [environment, setEnvironment] = useState<FinanceMode>(
+    account.environment,
+  );
   const [includeInRisk, setIncludeInRisk] = useState(account.include_in_risk);
   const [note, setNote] = useState(account.note);
   const [saving, setSaving] = useState(false);
@@ -1455,6 +1465,7 @@ function SettingsForm({
       const res = await api.financePortfolioUpdateAccount(account.id, {
         name: name.trim() || account.name,
         account_type: accountType,
+        environment,
         include_in_risk: includeInRisk,
         note: note.trim(),
         actor: FINANCE_ACTOR,
@@ -1501,6 +1512,16 @@ function SettingsForm({
                 {accountTypeLabel(a, ft)}
               </SelectOption>
             ))}
+          </Select>
+        </Field>
+        <Field label={s.environment}>
+          <Select
+            disabled={account.id === "ibkr-paper-default"}
+            value={environment}
+            onValueChange={(v) => setEnvironment(v as FinanceMode)}
+          >
+            <SelectOption value="live">{s.environmentLive}</SelectOption>
+            <SelectOption value="paper">{s.environmentPaper}</SelectOption>
           </Select>
         </Field>
         <label className="flex items-center gap-2 font-mondwest normal-case text-sm text-foreground">
@@ -1562,6 +1583,11 @@ function AccountDetail({
   const [localBump, setLocalBump] = useState(0);
   const token = reloadToken + localBump;
   const p = ft.portfolio;
+  const brokerManaged =
+    account.environment === "paper" && account.provider === "ibkr";
+  const visibleTabs = brokerManaged
+    ? ACCOUNT_TABS.filter((item) => item !== "record" && item !== "import")
+    : ACCOUNT_TABS;
 
   // A local mutation (record trade / import) refreshes this account's data;
   // onChanged also refreshes the account list + aggregate at the top.
@@ -1576,9 +1602,18 @@ function AccountDetail({
         <CardHeader>
           <div className="flex flex-wrap items-center gap-2">
             <CardTitle className="text-base">{account.name}</CardTitle>
-            <Badge tone="outline">{marketLabel(account.market_scope, ft)}</Badge>
+            <Badge tone="outline">
+              {marketLabel(account.market_scope, ft)}
+            </Badge>
             <Badge tone="secondary">
               {accountTypeLabel(account.account_type, ft)}
+            </Badge>
+            <Badge
+              tone={account.environment === "live" ? "warning" : "outline"}
+            >
+              {account.environment === "live"
+                ? p.environmentLive
+                : p.environmentPaper}
             </Badge>
             {account.include_in_risk && (
               <Badge tone="success">{p.includeInRisk}</Badge>
@@ -1593,7 +1628,7 @@ function AccountDetail({
       <Segmented<AccountTab>
         value={tab}
         onChange={setTab}
-        options={ACCOUNT_TABS.map((t) => ({
+        options={visibleTabs.map((t) => ({
           value: t,
           label: p.tabs[t],
         }))}
@@ -1602,6 +1637,7 @@ function AccountDetail({
       {tab === "holdings" && (
         <ValuationView
           accountId={account.id}
+          environment={account.environment}
           reloadToken={token}
           showToast={showToast}
           ft={ft}
@@ -1644,11 +1680,13 @@ function AccountDetail({
 // ── Add-account form ─────────────────────────────────────────────────────
 
 function AddAccountForm({
+  environment: initialEnvironment,
   onCreated,
   showToast,
   ft,
 }: {
   onCreated: (account: FinancePortfolioAccount) => void;
+  environment: FinanceMode;
   showToast: ShowToast;
   ft: FinanceTranslations;
 }) {
@@ -1658,6 +1696,8 @@ function AddAccountForm({
   const [baseCurrency, setBaseCurrency] = useState("USD");
   const [provider, setProvider] = useState("manual");
   const [accountType, setAccountType] = useState("cash");
+  const [environment, setEnvironment] =
+    useState<FinanceMode>(initialEnvironment);
   const [includeInRisk, setIncludeInRisk] = useState(true);
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -1681,6 +1721,7 @@ function AddAccountForm({
         base_currency: baseCurrency.trim().toUpperCase(),
         provider: provider as "manual" | "ibkr",
         account_type: accountType as "cash" | "margin",
+        environment,
         include_in_risk: includeInRisk,
         note: note.trim(),
         actor: FINANCE_ACTOR,
@@ -1747,6 +1788,15 @@ function AddAccountForm({
                   {accountTypeLabel(a, ft)}
                 </SelectOption>
               ))}
+            </Select>
+          </Field>
+          <Field label={f.environment}>
+            <Select
+              value={environment}
+              onValueChange={(v) => setEnvironment(v as FinanceMode)}
+            >
+              <SelectOption value="live">{f.environmentLive}</SelectOption>
+              <SelectOption value="paper">{f.environmentPaper}</SelectOption>
             </Select>
           </Field>
           <Field label={f.note}>
@@ -2226,7 +2276,11 @@ const SEL_DRAFTS = "drafts";
 const SEL_ADD = "add";
 const ACCT_PREFIX = "acct:";
 
-export function PortfolioManager() {
+export function PortfolioManager({
+  environment,
+}: {
+  environment: FinanceMode;
+}) {
   const { toast, showToast } = useToast();
   const ft = useFinanceT();
   const [accounts, setAccounts] = useState<FinancePortfolioAccount[] | null>(
@@ -2243,14 +2297,14 @@ export function PortfolioManager() {
   // spinner and every state update happens in an async callback.
   const load = useCallback(() => {
     api
-      .financePortfolioAccounts()
+      .financePortfolioAccounts(environment)
       .then((rows) => {
         setAccounts(rows);
         setError(false);
       })
       .catch(() => setError(true))
       .finally(() => setLoading(false));
-  }, []);
+  }, [environment]);
 
   useEffect(() => {
     load();
@@ -2327,6 +2381,7 @@ export function PortfolioManager() {
   } else if (selected === SEL_ADD) {
     detail = (
       <AddAccountForm
+        environment={environment}
         showToast={showToast}
         ft={ft}
         onCreated={(account) => {
@@ -2369,7 +2424,12 @@ export function PortfolioManager() {
     );
   } else {
     detail = (
-      <ValuationView reloadToken={reloadToken} showToast={showToast} ft={ft} />
+      <ValuationView
+        environment={environment}
+        reloadToken={reloadToken}
+        showToast={showToast}
+        ft={ft}
+      />
     );
   }
 

@@ -28,6 +28,7 @@ from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 from swing_trader.log import get_logger
 from swing_trader.portfolio import (
+    AccountEnvironment,
     AccountHoldings,
     AccountType,
     DraftStatus,
@@ -45,6 +46,7 @@ from swing_trader.portfolio import (
 logger = get_logger(__name__)
 
 __all__ = [
+    "DEFAULT_PAPER_ACCOUNT_ID",
     "Mark",
     "PortfolioAccountRow",
     "PortfolioAuditEvent",
@@ -55,6 +57,8 @@ __all__ = [
     "PortfolioMarkRow",
     "PortfolioStateConflict",
 ]
+
+DEFAULT_PAPER_ACCOUNT_ID = "ibkr-paper-default"
 
 
 class PortfolioStateConflict(RuntimeError):
@@ -104,6 +108,7 @@ class PortfolioAccountRow(SQLModel, table=True):
     provider: str = Field(index=True)
     market_scope: str = Field(index=True)
     account_type: str
+    environment: str = Field(default=AccountEnvironment.LIVE.value, index=True)
     base_currency: str
     include_in_risk: bool = True
     note: str = ""
@@ -244,6 +249,7 @@ def _account_to_row(a: PortfolioAccount) -> PortfolioAccountRow:
         provider=a.provider.value,
         market_scope=a.market_scope.value,
         account_type=a.account_type.value,
+        environment=a.environment.value,
         base_currency=a.base_currency,
         include_in_risk=a.include_in_risk,
         note=a.note,
@@ -259,6 +265,7 @@ def _account_from_row(r: PortfolioAccountRow) -> PortfolioAccount:
         provider=ProviderKind(r.provider),
         market_scope=MarketScope(r.market_scope),
         account_type=AccountType(r.account_type),
+        environment=AccountEnvironment(r.environment),
         base_currency=r.base_currency,
         include_in_risk=r.include_in_risk,
         note=r.note,
@@ -452,19 +459,40 @@ class PortfolioJournal:
             for col in table.columns:
                 if col.name in existing or col.primary_key:
                     continue
+                # Account environment was introduced after real-account
+                # tracking shipped. Existing rows are real money by definition,
+                # so this additive migration has an explicit safe default.
+                if table.name == "portfolio_accounts" and col.name == "environment":
+                    with self._engine.begin() as conn:
+                        conn.execute(
+                            text(
+                                'ALTER TABLE "portfolio_accounts" ADD COLUMN '
+                                "\"environment\" VARCHAR NOT NULL DEFAULT 'live'"
+                            )
+                        )
+                    logger.warning(
+                        "added account environment column",
+                        extra={"default": AccountEnvironment.LIVE.value},
+                    )
+                    continue
                 # SQLite ADD COLUMN can't add a NOT NULL column without a
                 # constant default; only auto-add nullable columns (all the
                 # optional model fields are), else surface the gap loudly.
                 if not col.nullable and col.default is None and col.server_default is None:
-                    logger.error("cannot auto-add NOT NULL column",
-                                 extra={"table": table.name, "column": col.name})
+                    logger.error(
+                        "cannot auto-add NOT NULL column",
+                        extra={"table": table.name, "column": col.name},
+                    )
                     continue
                 coltype = col.type.compile(self._engine.dialect)
                 with self._engine.begin() as conn:
-                    conn.execute(text(
-                        f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {coltype}'))
-                logger.warning("added missing column (schema catch-up)",
-                               extra={"table": table.name, "column": col.name})
+                    conn.execute(
+                        text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {coltype}')
+                    )
+                logger.warning(
+                    "added missing column (schema catch-up)",
+                    extra={"table": table.name, "column": col.name},
+                )
 
     # ----------------------------------------------------------- accounts
 
@@ -476,6 +504,7 @@ class PortfolioJournal:
         base_currency: str,
         provider: ProviderKind | str = ProviderKind.MANUAL,
         account_type: AccountType | str = AccountType.CASH,
+        environment: AccountEnvironment | str = AccountEnvironment.LIVE,
         include_in_risk: bool = True,
         note: str = "",
     ) -> PortfolioAccount:
@@ -485,6 +514,7 @@ class PortfolioJournal:
             base_currency=base_currency,
             provider=ProviderKind(provider),
             account_type=AccountType(account_type),
+            environment=AccountEnvironment(environment),
             include_in_risk=include_in_risk,
             note=note,
         )
@@ -493,10 +523,15 @@ class PortfolioJournal:
             session.commit()
         return account
 
-    def list_accounts(self) -> list[PortfolioAccount]:
+    def list_accounts(
+        self, environment: Optional[AccountEnvironment | str] = None
+    ) -> list[PortfolioAccount]:
         with Session(self._engine) as session:
             rows = session.exec(select(PortfolioAccountRow)).all()
         out = [_account_from_row(r) for r in rows]
+        if environment is not None:
+            wanted = AccountEnvironment(environment)
+            out = [account for account in out if account.environment is wanted]
         out.sort(key=lambda a: a.created_at)
         return out
 
@@ -513,6 +548,7 @@ class PortfolioJournal:
         include_in_risk: Optional[bool] = None,
         note: Optional[str] = None,
         account_type: Optional[AccountType | str] = None,
+        environment: Optional[AccountEnvironment | str] = None,
         now: Optional[datetime] = None,
     ) -> PortfolioAccount:
         """Mutate account CONFIG (not history). Bumps ``updated_at``."""
@@ -528,11 +564,48 @@ class PortfolioJournal:
                 row.note = note
             if account_type is not None:
                 row.account_type = AccountType(account_type).value
+            if environment is not None:
+                if (
+                    account_id == DEFAULT_PAPER_ACCOUNT_ID
+                    and AccountEnvironment(environment) is not AccountEnvironment.PAPER
+                ):
+                    raise ValueError("the system IBHK Paper account must remain paper")
+                row.environment = AccountEnvironment(environment).value
             row.updated_at = _to_iso(now or datetime.now(timezone.utc))
             session.add(row)
             session.commit()
             session.refresh(row)
             return _account_from_row(row)
+
+    def ensure_default_paper_account(self) -> PortfolioAccount:
+        """Create the stable, system-known IBKR paper account once.
+
+        The account row stores presentation/config only. Its holdings are
+        projected from PaperBroker by the API, never duplicated into this
+        journal's manual event stream.
+        """
+        existing = self.get_account(DEFAULT_PAPER_ACCOUNT_ID)
+        if existing is not None:
+            return existing
+        account = PortfolioAccount(
+            id=DEFAULT_PAPER_ACCOUNT_ID,
+            name="IBHK Paper",
+            provider=ProviderKind.IBKR,
+            market_scope=MarketScope.US,
+            account_type=AccountType.CASH,
+            environment=AccountEnvironment.PAPER,
+            base_currency="USD",
+            include_in_risk=True,
+            note="System-managed paper account; positions come from PaperBroker.",
+        )
+        with self._write_lock:
+            with Session(self._engine) as session:
+                row = session.get(PortfolioAccountRow, DEFAULT_PAPER_ACCOUNT_ID)
+                if row is None:
+                    session.add(_account_to_row(account))
+                    session.commit()
+                    return account
+                return _account_from_row(row)
 
     # ------------------------------------------------------------- events
 
@@ -590,14 +663,10 @@ class PortfolioJournal:
                     )
 
                 active_ids = {
-                    row.id for row in self._active_lot_rows(
-                        session, source_account_id, symbol
-                    )
+                    row.id for row in self._active_lot_rows(session, source_account_id, symbol)
                 }
                 if active_ids != expected_lot_ids:
-                    raise PortfolioStateConflict(
-                        "持仓在更正卡片生成后已变化，请重新生成卡片"
-                    )
+                    raise PortfolioStateConflict("持仓在更正卡片生成后已变化，请重新生成卡片")
 
                 for event in events:
                     if session.get(PortfolioAccountRow, event.account_id) is None:
@@ -628,9 +697,7 @@ class PortfolioJournal:
         return existing
 
     @staticmethod
-    def _active_lot_rows(
-        session: Session, account_id: str, symbol: str
-    ) -> list[PortfolioEventRow]:
+    def _active_lot_rows(session: Session, account_id: str, symbol: str) -> list[PortfolioEventRow]:
         rows = session.exec(
             select(PortfolioEventRow).where(
                 PortfolioEventRow.account_id == account_id,
@@ -670,36 +737,24 @@ class PortfolioJournal:
         if event.event_type is not EventType.SELL or not event.symbol:
             return
         rows = session.exec(
-            select(PortfolioEventRow).where(
-                PortfolioEventRow.account_id == event.account_id
-            )
+            select(PortfolioEventRow).where(PortfolioEventRow.account_id == event.account_id)
         ).all()
-        current = derive_holdings(
-            event.account_id, [_event_from_row(row) for row in rows]
-        )
-        held = next(
-            (h for h in current.holdings if h.symbol == event.symbol), None
-        )
+        current = derive_holdings(event.account_id, [_event_from_row(row) for row in rows])
+        held = next((h for h in current.holdings if h.symbol == event.symbol), None)
         if held is None or held.qty <= 1e-9:
-            raise PortfolioStateConflict(
-                f"{event.symbol} 当前无持仓，不能卖出"
-            )
+            raise PortfolioStateConflict(f"{event.symbol} 当前无持仓，不能卖出")
         if event.qty > held.qty + 1e-9:
             raise PortfolioStateConflict(
                 f"{event.symbol} 卖出数量 {event.qty:g} 超过当前持仓 {held.qty:g}"
             )
 
     @classmethod
-    def _validate_symbol_currency(
-        cls, session: Session, event: PortfolioEvent
-    ) -> None:
+    def _validate_symbol_currency(cls, session: Session, event: PortfolioEvent) -> None:
         """One canonical currency per account+symbol lot history."""
         if not event.symbol or event.event_type.value not in _LOT_EVENT_VALUES:
             return
         currencies = {
-            row.currency for row in cls._active_lot_rows(
-                session, event.account_id, event.symbol
-            )
+            row.currency for row in cls._active_lot_rows(session, event.account_id, event.symbol)
         }
         if currencies and event.currency not in currencies:
             raise ValueError(

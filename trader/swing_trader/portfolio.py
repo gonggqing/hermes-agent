@@ -33,6 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 __all__ = [
     "AccountHoldings",
+    "AccountEnvironment",
     "AccountType",
     "AggregateHolding",
     "AggregatePortfolio",
@@ -84,6 +85,13 @@ class MarketScope(str, Enum):
 class AccountType(str, Enum):
     CASH = "cash"
     MARGIN = "margin"
+
+
+class AccountEnvironment(str, Enum):
+    """Whether an account represents real money or a simulation."""
+
+    LIVE = "live"
+    PAPER = "paper"
 
 
 class ProviderKind(str, Enum):
@@ -138,8 +146,12 @@ def _tz_aware(v: datetime) -> datetime:
 
 
 class PortfolioAccount(BaseModel):
-    """A real account the user maintains (Loop.md P0.9). One journal spans
-    many accounts across US/HK/CN, each keeping its own source attribution."""
+    """One user-visible account across US/HK/CN.
+
+    ``environment`` is account identity, not a transient UI filter. Existing
+    manually maintained accounts migrate to LIVE; the system-managed IBHK
+    Paper account is PAPER and projects the authoritative PaperBroker book.
+    """
 
     model_config = ConfigDict(validate_assignment=True)
 
@@ -148,6 +160,7 @@ class PortfolioAccount(BaseModel):
     provider: ProviderKind = ProviderKind.MANUAL
     market_scope: MarketScope
     account_type: AccountType = AccountType.CASH
+    environment: AccountEnvironment = AccountEnvironment.LIVE
     base_currency: str = Field(min_length=1, max_length=8)
     include_in_risk: bool = True  # feeds RiskEngine exposure when True (P0.9)
     note: str = ""
@@ -442,17 +455,25 @@ def aggregate_holdings(
         if abs(a["qty"]) <= _QTY_TOL:
             continue
         known = a["known"] and a["qty"] > _QTY_TOL
-        holdings.append(AggregateHolding(
-            symbol=sym, market=a["market"], currency=a["currency"], qty=a["qty"],
-            avg_cost=(a["cost"] / a["qty"]) if known else None,
-            cost_basis_known=known, accounts=a["accounts"]))
+        holdings.append(
+            AggregateHolding(
+                symbol=sym,
+                market=a["market"],
+                currency=a["currency"],
+                qty=a["qty"],
+                avg_cost=(a["cost"] / a["qty"]) if known else None,
+                cost_basis_known=known,
+                accounts=a["accounts"],
+            )
+        )
     cash_balances = [
         CashBalance(currency=c, amount=(amt if known else None), known=known)
         for c, (amt, known) in sorted(cash.items())
         if not known or abs(amt) > _QTY_TOL
     ]
-    return AggregatePortfolio(holdings=holdings, cash=cash_balances,
-                              accounts=account_ids, as_of=as_of)
+    return AggregatePortfolio(
+        holdings=holdings, cash=cash_balances, accounts=account_ids, as_of=as_of
+    )
 
 
 @dataclass
@@ -485,9 +506,7 @@ def derive_holdings(account_id: str, events: list[PortfolioEvent]) -> AccountHol
     }
     # Apply everything except reversed events and the CORRECTION markers.
     applied = [
-        e
-        for e in scoped
-        if e.id not in reversed_ids and e.event_type is not EventType.CORRECTION
+        e for e in scoped if e.id not in reversed_ids and e.event_type is not EventType.CORRECTION
     ]
     applied.sort(key=_event_sort_key)
 
@@ -513,9 +532,7 @@ def derive_holdings(account_id: str, events: list[PortfolioEvent]) -> AccountHol
         et = e.event_type
 
         if et in {EventType.OPENING_BALANCE, EventType.BUY} and e.symbol:
-            lot = lots.setdefault(
-                e.symbol, _Lot(market=e.market, currency=e.currency)
-            )
+            lot = lots.setdefault(e.symbol, _Lot(market=e.market, currency=e.currency))
             lot.qty += e.qty
             cost = buy_cost(e)
             if cost is None:
@@ -531,9 +548,7 @@ def derive_holdings(account_id: str, events: list[PortfolioEvent]) -> AccountHol
             bump_cash(e.currency, e.amount)  # opening cash
 
         elif et is EventType.SELL and e.symbol:
-            lot = lots.setdefault(
-                e.symbol, _Lot(market=e.market, currency=e.currency)
-            )
+            lot = lots.setdefault(e.symbol, _Lot(market=e.market, currency=e.currency))
             sold = min(e.qty, lot.qty) if lot.qty > 0 else e.qty
             # reduce cost basis proportionally (avg method); keep unknown sticky
             if lot.qty > _QTY_TOL and lot.cost_known:

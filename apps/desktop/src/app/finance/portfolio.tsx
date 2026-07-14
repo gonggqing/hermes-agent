@@ -25,12 +25,9 @@ const OVERVIEW_IDS = ['account', 'orders', 'stats', 'market', 'history', 'report
 
 type OverviewId = (typeof OVERVIEW_IDS)[number]
 
-const BOOKS = ['paper', 'real'] as const
-
-// The Portfolio tab holds two BOOKS: the paper-trading account above (default,
-// unchanged), and the user's REAL multi-account holdings (Phase 0.9). A thin
-// sub-nav toggles between them; the paper/live footer only makes sense for the
-// paper book, so the real book renders without it.
+// The bottom-right mode control is the account-scope switch for Portfolio.
+// LIVE opens the user's real multi-account holdings by default; PAPER retains
+// the full broker/order/history view and identifies the account as IBHK Paper.
 export function FinancePortfolioView({
   bottomBar,
   enabled,
@@ -40,34 +37,14 @@ export function FinancePortfolioView({
   enabled: boolean
   mode: FinanceMode
 }) {
-  const { t } = useI18n()
-  const copy = t.finance.holdings
-  const [book, setBook] = useRouteEnumParam('book', BOOKS, 'paper')
-
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div aria-label={copy.subnavAria} className="shrink-0 px-3 py-2" role="group">
-        <SegmentedControl
-          onChange={setBook}
-          options={[
-            { id: 'paper', label: copy.subnavPaper },
-            { id: 'real', label: copy.subnavReal }
-          ]}
-          value={book}
-        />
-      </div>
-      <div className="min-h-0 flex-1">
-        {book === 'paper' ? (
-          <PaperPortfolio bottomBar={bottomBar} enabled={enabled} mode={mode} />
-        ) : (
-          <FinanceHoldingsView enabled={enabled} />
-        )}
-      </div>
-    </div>
+  return mode === 'paper' ? (
+    <PaperPortfolio bottomBar={bottomBar} enabled={enabled} mode={mode} />
+  ) : (
+    <FinanceHoldingsView bottomBar={bottomBar} enabled={enabled} environment="live" />
   )
 }
 
-function PaperPortfolio({
+export function PaperPortfolio({
   bottomBar,
   enabled,
   mode
@@ -86,15 +63,12 @@ function PaperPortfolio({
 
   // Overview rows are fixed; position rows are the live holdings. Overview ids
   // are lowercase words, symbols uppercase tickers — never collide.
-  const selectableIds = useMemo(
-    () => [...OVERVIEW_IDS, ...positions.map(position => position.symbol)],
-    [positions]
-  )
+  const selectableIds = useMemo(() => [...OVERVIEW_IDS, ...positions.map(position => position.symbol)], [positions])
 
   const [selected, setSelected] = useRouteEnumParam('holding', selectableIds, 'account')
 
   const overviewLabel: Record<OverviewId, string> = {
-    account: copy.account,
+    account: t.finance.holdings.paperAccountName,
     orders: copy.orders,
     stats: copy.stats,
     market: copy.market,
