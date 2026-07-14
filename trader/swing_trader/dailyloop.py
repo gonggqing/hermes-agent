@@ -278,15 +278,33 @@ class TelegramSurfaceAdapter:
             )
         self._transport.answer_callback(cb_id, self._draft_toast(result, action))
         # A settled draft (confirmed OR rejected) stops tracking so a stale tap
-        # can't re-act. Confirmation also gets a persistent outbound line — the
-        # inline toast vanishes, but an entry in the chat is the audit the user
-        # sees. INCOMPLETE stays tracked so the user can retry after fixing it.
+        # can't re-act, AND posts a persistent group line — the inline toast
+        # vanishes, but a chat entry is the audit everyone in the group sees.
+        # Confirm and reject are symmetric (both leave a record). INCOMPLETE
+        # stays tracked (transient toast only) so the user can retry after
+        # fixing it in the portal.
         if result.ok:
             with self._draft_lock:
                 self._draft_by_short_id.pop(short, None)
-            if action == "ok":
-                sym = (result.draft.symbol if result.draft else "") or "记录"
-                self._transport.send_message(self._chat_id, f"✅ 已入账：{sym}")
+            by = str(sender.get("username") or sender.get("id") or "")
+            self._transport.send_message(
+                self._chat_id, self._draft_outcome_line(result.draft, action, by)
+            )
+
+    def _draft_outcome_line(self, draft: Any, action: str, by: str) -> str:
+        """Persistent group message for a settled draft (audit the group sees).
+        Symmetric for confirm/reject, with the standing trade + who acted."""
+        sym = (getattr(draft, "symbol", "") if draft else "") or "记录"
+        bits = [sym]
+        if draft is not None:
+            if getattr(draft, "qty", None) is not None:
+                bits.append(f"{draft.qty:g}")
+            if getattr(draft, "price", None) is not None:
+                bits.append(f"@ {draft.price:g}")
+        detail = " ".join(bits)
+        who = f"（@{by}）" if by else ""
+        head = "✅ 已入账" if action == "ok" else "❌ 已拒绝"
+        return f"{head}：{detail}{who}"
 
     def _draft_toast(self, result: Any, action: str) -> str:
         """Short inline-toast text for a draft confirm/reject outcome."""

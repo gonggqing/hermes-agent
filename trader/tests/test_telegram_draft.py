@@ -145,6 +145,21 @@ def test_reject_marks_rejected_no_event(tmp_path):
 
     assert svc.get_draft(d.id).status is DraftStatus.REJECTED
     assert not journal.holdings(account.id).holdings  # nothing appended
+    # a persistent group line records the rejection (symmetric with confirm):
+    # the standing trade + who acted, so the group has an audit, not just a toast.
+    line = next((t for t, _ in transport.sent if "已拒绝" in t), None)
+    assert line is not None and "513310" in line and "@gongqing" in line
+    assert any("已拒绝" in txt for _, txt in transport.answered)  # toast kept too
+
+
+def test_confirm_group_line_has_trade_and_actor(tmp_path):
+    _, account, svc, transport, adapter = _setup(tmp_path, {"gongqing"})
+    d = _complete_buy(svc, account.id)
+    adapter.push_draft_card(d)
+    transport.queue.append(_draft_cb(d, {"id": 1, "username": "gongqing"}, "ok"))
+    adapter.poll(None, NOW)
+    line = next((t for t, _ in transport.sent if "已入账" in t), None)
+    assert line is not None and "513310" in line and "200" in line and "@gongqing" in line
 
 
 def test_stale_tap_after_confirm_is_inert(tmp_path):
