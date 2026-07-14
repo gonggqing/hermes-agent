@@ -251,7 +251,17 @@ class AuditRow(SQLModel, table=True):
 # ------------------------------------------------------- schema <-> row
 
 
+#: Key under which the DATA as-of bar date is stashed inside features_json.
+#: Stored there (not a new column) so persistence needs no schema migration —
+#: the ledger uses create_all with no ALTER, so existing signals tables keep
+#: working (Loop.md §5.10 as-of-bar; see Signal.as_of_bar).
+_AS_OF_BAR_KEY = "_as_of_bar"
+
+
 def _signal_to_row(sig: Signal, mode: Mode | str) -> SignalRow:
+    features = dict(sig.features_json)
+    if sig.as_of_bar is not None:
+        features[_AS_OF_BAR_KEY] = _to_iso(sig.as_of_bar)
     return SignalRow(
         id=sig.id,
         ts=_to_iso(sig.ts),
@@ -261,11 +271,13 @@ def _signal_to_row(sig: Signal, mode: Mode | str) -> SignalRow:
         thesis=sig.thesis,
         direction=sig.direction.value,
         confidence=sig.confidence,
-        features_json=json.dumps(sig.features_json),
+        features_json=json.dumps(features),
     )
 
 
 def _signal_from_row(row: SignalRow) -> Signal:
+    features = json.loads(row.features_json)
+    raw_bar = features.pop(_AS_OF_BAR_KEY, None)  # keep it out of features_json
     return Signal(
         id=row.id,
         ts=_from_iso(row.ts),
@@ -274,7 +286,8 @@ def _signal_from_row(row: SignalRow) -> Signal:
         thesis=row.thesis,
         direction=Direction(row.direction),
         confidence=row.confidence,
-        features_json=json.loads(row.features_json),
+        as_of_bar=_from_iso(raw_bar) if raw_bar else None,
+        features_json=features,
     )
 
 

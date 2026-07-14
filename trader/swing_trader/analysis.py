@@ -211,6 +211,10 @@ class TechnicalAgent:
             thesis=thesis,
             direction=direction,
             confidence=confidence,
+            # DATA as-of = the last bar's date: close/SMA/RSI above are computed
+            # from THIS bar, not "now" (Loop.md §5.10). Over a weekend/stale feed
+            # this is what distinguishes the verdict's price snapshot from now.
+            as_of_bar=bars[-1].ts,
             features_json={
                 "rsi": rsi14,
                 "sma20": sma20,
@@ -508,12 +512,18 @@ class DebateAgent:
             f"(net {net:+.2f} from {len(signals)} signals"
             f"{', disagreement penalty applied' if penalty else ''})"
         )
+        # Inherit the DATA as-of from the inputs: the FRESHEST price bar any
+        # contributing signal used (Loop.md §5.10). So a debate verdict still
+        # says which day's prices it rests on, even though the debate itself has
+        # no bar.
+        bar_dates = [s.as_of_bar for s in signals if s.as_of_bar is not None]
         return Signal(
             source_agent=self.source_agent,
             symbol=symbol,
             thesis=thesis,
             direction=direction,
             confidence=confidence,
+            as_of_bar=max(bar_dates) if bar_dates else None,
             features_json={
                 "n_signals": len(signals),
                 "net_weight": net,

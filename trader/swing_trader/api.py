@@ -496,7 +496,12 @@ def create_app(runtime: FinanceRuntime):
             )
         except (DataFeedError, ValueError) as exc:
             raise HTTPException(404, f"no data for {symbol!r}: {exc}")
-        result["as_of"] = runtime.clock().isoformat()
+        result["as_of"] = runtime.clock().isoformat()  # when this ran
+        # DATA as-of (Loop.md §5.10): the bar date the verdict's numbers rest on
+        # — distinct from as_of (now). Lets the UI show "数据截至 <date>" so a
+        # verdict isn't misread against a later live price.
+        verdict = result.get("verdict") or {}
+        result["as_of_bar"] = verdict.get("as_of_bar")
         result["note"] = MARKET_DATA_NOTE
         return result
 

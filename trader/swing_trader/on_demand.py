@@ -133,7 +133,10 @@ def analyze_symbol(
     def _sig(s) -> dict:
         return {"source_agent": s.source_agent, "direction": s.direction.value,
                 "confidence": s.confidence, "thesis": s.thesis,
-                "features": s.features_json}
+                "features": s.features_json,
+                # DATA as-of (Loop.md §5.10): the bar date these numbers rest on,
+                # distinct from when the verdict was produced.
+                "as_of_bar": s.as_of_bar.isoformat() if s.as_of_bar is not None else None}
 
     return {
         "symbol": symbol.upper(),
@@ -151,7 +154,17 @@ def render_analysis_zh(result: dict) -> str:
     sym = result.get("symbol", "?")
     last = result.get("last")
     v = result.get("verdict")
-    lines = [f"📊 {sym} 快速分析" + (f" · 现价 {last:g}" if isinstance(last, (int, float)) else "")]
+    # DATA as-of (Loop.md §5.10): the numbers below (收盘/SMA/RSI) are from THIS
+    # bar, not necessarily "now" — surface it so a screenshot can't mislead over
+    # a weekend/stale feed. `last` is that bar's CLOSE, hence 收 (not 现价).
+    bar = v.get("as_of_bar") if v else None
+    bar_day = bar[:10] if isinstance(bar, str) else None
+    head = f"📊 {sym} 快速分析"
+    if bar_day:
+        head += f" · 数据截至 {bar_day}"
+    if isinstance(last, (int, float)):
+        head += f" · 收 {last:g}"
+    lines = [head]
     if v:
         dir_zh = {"long": "偏多", "short": "偏空/回避", "neutral": "中性"}.get(v["direction"], v["direction"])
         lines.append(f"结论: {dir_zh} · 置信度 {round(v['confidence'] * 100)}%")

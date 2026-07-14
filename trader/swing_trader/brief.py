@@ -237,6 +237,10 @@ class SignalView(BaseModel):
     confidence: float
     source_agent: str
     thesis: str
+    #: DATA as-of (ISO): the last price-bar date the verdict rests on (Loop.md
+    #: §5.10). Distinct from the brief's as_of (when it was generated). None for
+    #: signals with no price bar (sentiment/macro).
+    as_of_bar: Optional[str] = None
 
 
 class EventsView(BaseModel):
@@ -615,6 +619,7 @@ def _signal_views(
             confidence=s.confidence,
             source_agent=s.source_agent,
             thesis=_truncate(s.thesis, THESIS_MAX_CHARS),
+            as_of_bar=s.as_of_bar.isoformat() if s.as_of_bar is not None else None,
         )
         for s in todays
     ]

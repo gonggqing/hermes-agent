@@ -151,6 +151,13 @@ class Signal(_TsModel):
     direction: Direction
     confidence: float = Field(ge=0.0, le=1.0)
     features_json: dict = Field(default_factory=dict)
+    #: The DATA as-of: timestamp of the last price bar the analysis used (Loop.md
+    #: §5.10 — every displayed claim must identify its as-of time + source). This
+    #: is DISTINCT from ``ts`` (when the verdict was produced): over a weekend or
+    #: after a stale feed the two diverge, and a verdict's close/SMA/RSI reflect
+    #: ``as_of_bar``, not "now". None for agents with no price bar (sentiment,
+    #: macro, or an empty debate).
+    as_of_bar: Optional[datetime] = None
 
     @field_validator("symbol")
     @classmethod
