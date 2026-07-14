@@ -19,9 +19,10 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from swing_trader.analysis import (
     DebateAgent,
@@ -53,9 +54,12 @@ from swing_trader.scheduler import Event
 from swing_trader.schemas import CandidateOrder, Mode, Role, Side, Signal
 from swing_trader.telegram_gateway import (
     CALLBACK_ID_LEN,
+    DRAFT_CALLBACK_TYPE,
     TelegramTransport,
+    build_draft_keyboard,
     build_keyboard,
     render_card,
+    render_draft_card,
 )
 from swing_trader import watchlist as watchlist_mod
 
@@ -107,12 +111,51 @@ class TelegramSurfaceAdapter:
         self._offset: Optional[int] = None
         self._bot_username: Optional[str] = None
         self._bot_identified = False
+        # Portfolio-draft confirmation (Loop.md P0.9 boundary #4): the API
+        # thread pushes cards (push_draft_card) while the poll thread reads the
+        # map in _handle_draft_callback — guard the shared dict with a lock.
+        self._draft_by_short_id: dict[str, str] = {}
+        self._draft_lock = threading.Lock()
+        self._drafts: Any = None  # PortfolioDraftService, wired post-construction
 
     def set_text_responder(
         self, fn: Optional[Callable[[str], Optional[str]]]
     ) -> None:
         """Wire the DM/@mention text responder after construction."""
         self._respond_text = fn
+
+    def set_draft_service(self, service: Any) -> None:
+        """Wire the PortfolioDraftService so tapped draft cards can confirm /
+        reject real-holdings drafts in Telegram (Loop.md P0.9 boundary #4)."""
+        self._drafts = service
+
+    def push_draft_card(self, draft: Any, account_label: str = "") -> None:
+        """Push a portfolio-draft confirmation card so an allowlisted human can
+        confirm the trade IN Telegram — no portal round-trip (user request:
+        "telegram 直接确认"). The LLM only DRAFTED it; the confirmer is still an
+        authenticated human (boundary #4), and confirm goes through the SAME
+        PortfolioDraftService.confirm_draft the portal uses (same audit trail,
+        same idempotency, same incomplete-draft refusal).
+
+        Best-effort: only the INTERACTIVE (dedicated) bot long-polls callbacks,
+        so an outbound-only adapter skips the push; any transport error is
+        logged, never raised — draft creation must not depend on Telegram.
+        """
+        if not self.interactive:
+            return
+        try:
+            with self._draft_lock:
+                self._draft_by_short_id[draft.id[:CALLBACK_ID_LEN]] = draft.id
+            self._transport.send_message(
+                self._chat_id,
+                render_draft_card(draft, account_label),
+                reply_markup=build_draft_keyboard(draft),
+            )
+            logger.info("portfolio draft card pushed to telegram",
+                        extra={"draft_id": draft.id, "symbol": draft.symbol})
+        except Exception:  # best-effort: never break the draft-create request
+            logger.warning("failed to push telegram draft card",
+                           extra={"draft_id": getattr(draft, "id", "?")})
 
     def _is_authorized(self, sender: dict) -> bool:
         username = str(sender.get("username", "")).lower()
@@ -155,6 +198,13 @@ class TelegramSurfaceAdapter:
         except json.JSONDecodeError:
             self._transport.answer_callback(cb_id, "unrecognized action")
             return
+        # Portfolio-draft cards carry t="d" — route to the draft service
+        # (real-holdings journal), NOT the candidate ConfirmationService.
+        if data.get("t") == DRAFT_CALLBACK_TYPE:
+            self._handle_draft_callback(
+                cb_id, data, callback.get("from", {}) or {}, now_utc
+            )
+            return
         full_id = self._by_short_id.get(str(data.get("id", "")))
         action = {"ok": "approve", "no": "reject"}.get(data.get("a"))
         if full_id is None or action is None:
@@ -181,6 +231,74 @@ class TelegramSurfaceAdapter:
             idempotency_key=f"tg:{cb_id}", now_utc=now_utc,
         )
         self._transport.answer_callback(cb_id, result.message[:180])
+
+    def _handle_draft_callback(
+        self, cb_id: str, data: dict, sender: dict, now_utc: datetime
+    ) -> None:
+        """Confirm / reject a REAL-HOLDINGS portfolio draft from Telegram.
+
+        Goes through :meth:`PortfolioDraftService.confirm_draft` /
+        ``reject_draft`` — the SAME server-authoritative path the portal uses,
+        so boundary #4 holds: an authenticated (allowlisted) human finalizes,
+        the LLM never does; an INCOMPLETE draft is refused and the user is sent
+        to the portal to fill the gaps (never guessed).
+        """
+        short = str(data.get("id", ""))
+        action = data.get("a")
+        with self._draft_lock:
+            full_id = self._draft_by_short_id.get(short)
+        if full_id is None or action not in ("ok", "no"):
+            self._transport.answer_callback(cb_id, "未知或已处理的记录")
+            return
+        if self._drafts is None:  # draft service not wired (should not happen)
+            self._transport.answer_callback(cb_id, "组合记账服务未就绪")
+            return
+        if not self._is_authorized(sender):
+            logger.warning(
+                "unauthorized telegram draft action refused",
+                extra={"sender_id": str(sender.get("id", "?"))},
+            )
+            self._transport.answer_callback(cb_id, "无组合记账确认权限")
+            return
+        actor = f"telegram:{sender.get('username') or sender.get('id') or 'user'}"
+        if action == "ok":
+            result = self._drafts.confirm_draft(
+                full_id, actor=actor, surface=Surface.TELEGRAM.value,
+                idempotency_key=f"tg-draft:{cb_id}", now=now_utc,
+            )
+        else:
+            result = self._drafts.reject_draft(
+                full_id, actor=actor, surface=Surface.TELEGRAM.value,
+                idempotency_key=f"tg-draft:{cb_id}",
+            )
+        self._transport.answer_callback(cb_id, self._draft_toast(result, action))
+        # A settled draft (confirmed OR rejected) stops tracking so a stale tap
+        # can't re-act. Confirmation also gets a persistent outbound line — the
+        # inline toast vanishes, but an entry in the chat is the audit the user
+        # sees. INCOMPLETE stays tracked so the user can retry after fixing it.
+        if result.ok:
+            with self._draft_lock:
+                self._draft_by_short_id.pop(short, None)
+            if action == "ok":
+                sym = (result.draft.symbol if result.draft else "") or "记录"
+                self._transport.send_message(self._chat_id, f"✅ 已入账：{sym}")
+
+    def _draft_toast(self, result: Any, action: str) -> str:
+        """Short inline-toast text for a draft confirm/reject outcome."""
+        from swing_trader.portfolio_draft import DraftResultCode
+
+        if result.ok:
+            if result.code == DraftResultCode.REPLAYED:
+                return "已处理过（重复点击）"
+            return "✅ 已确认入账" if action == "ok" else "已拒绝该记录"
+        code = result.code
+        if code == DraftResultCode.INCOMPLETE:
+            return "缺项未补全，请在门户完成：" + (result.message or "")[:120]
+        if code == DraftResultCode.TERMINAL:
+            return "该记录已处理，无法重复操作"
+        if code == DraftResultCode.NOT_HUMAN:
+            return "仅限授权用户确认"
+        return (result.message or "操作失败")[:150]
 
     def _identity(self) -> Optional[str]:
         """This bot's @username (cached), for @mention detection; None if the

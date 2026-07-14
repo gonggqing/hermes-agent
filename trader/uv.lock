@@ -270,6 +270,19 @@ wheels = [
 ]
 
 [[package]]
+name = "eventkit"
+version = "1.0.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/16/1e/0fac4e45d71ace143a2673ec642701c3cd16f833a0e77a57fa6a40472696/eventkit-1.0.3.tar.gz", hash = "sha256:99497f6f3c638a50ff7616f2f8cd887b18bbff3765dc1bd8681554db1467c933", size = 28320 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/93/d9/7497d650b69b420e1a913329a843e16c715dac883750679240ef00a921e2/eventkit-1.0.3-py3-none-any.whl", hash = "sha256:0e199527a89aff9d195b9671ad45d2cc9f79ecda0900de8ecfb4c864d67ad6a2", size = 31837 },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.139.0"
 source = { registry = "https://pypi.org/simple" }
@@ -447,6 +460,19 @@ wheels = [
 ]
 
 [[package]]
+name = "ib-async"
+version = "1.0.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "eventkit" },
+    { name = "nest-asyncio" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6f/b8/991c16a06bfcbcfff5a202932e9f701a47f467058037c65771ebbbaecb19/ib_async-1.0.3.tar.gz", hash = "sha256:593691e1a8a1557ac053c601b70bf1527163a517cea3bbfdb2fadfc8a381d15e", size = 74795 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/26/83/0b69087dcdcf6700060dfc155014cc968a989499e2cc42fd8ecdc2238831/ib_async-1.0.3-py3-none-any.whl", hash = "sha256:3c8742e43084db99a3ecba991bcca3223a05fde270ce9dcac035697bb1855649", size = 77208 },
+]
+
+[[package]]
 name = "idna"
 version = "3.18"
 source = { registry = "https://pypi.org/simple" }
@@ -492,6 +518,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/be/c3/ac2cc9307fb15cc28ed6d4a9266b216c83ee7fe64299f0264047982bce88/multitasking-0.0.13.tar.gz", hash = "sha256:d896b5df877c9ca5eeddbf0e5994124694d6cb535aba698fb23344c7025155a1", size = 20585 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d3/1c/24dbf69b247f287401c904a396233a43c89fd4fb9b7cd2e50e430e9cd57c/multitasking-0.0.13-py3-none-any.whl", hash = "sha256:ec9243af140c67bfe52dc98d7173c294512735a88e8425c458b250db99dc2b48", size = 16380 },
+]
+
+[[package]]
+name = "nest-asyncio"
+version = "1.6.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/83/f8/51569ac65d696c8ecbee95938f89d4abf00f47d58d48f6fbabfe8f0baefe/nest_asyncio-1.6.0.tar.gz", hash = "sha256:6f172d5449aca15afd6c646851f4e31e02c598d553a667e38cafa997cfec55fe", size = 7418 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a0/c4/c2971a3ba4c6103a3d10c4b0f24f461ddc027f0f09763220cf35ca1401b3/nest_asyncio-1.6.0-py3-none-any.whl", hash = "sha256:87af6efd6b5e897c81050477ef65c62e2b2f35d51703cae01aff2905b1852e1c", size = 5195 },
 ]
 
 [[package]]
@@ -1068,6 +1103,9 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
 ]
+ibkr = [
+    { name = "ib-async" },
+]
 knowledge = [
     { name = "qdrant-client" },
 ]
@@ -1080,6 +1118,7 @@ service = [
 requires-dist = [
     { name = "fastapi", marker = "extra == 'service'", specifier = ">=0.115,<1" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27,<1" },
+    { name = "ib-async", marker = "extra == 'ibkr'", specifier = ">=1.0,<2" },
     { name = "pydantic", specifier = ">=2.9,<3" },
     { name = "pydantic-settings", specifier = ">=2.5,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
@@ -1091,7 +1130,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'service'", specifier = ">=0.30,<1" },
     { name = "yfinance", specifier = ">=0.2.40,<0.3" },
 ]
-provides-extras = ["service", "knowledge", "dev"]
+provides-extras = ["service", "knowledge", "ibkr", "dev"]
 
 [[package]]
 name = "tomli"

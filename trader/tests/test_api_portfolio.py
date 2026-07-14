@@ -46,6 +46,49 @@ def _draft_buy(client, account_id, **over):
     return r.json()
 
 
+class _RecordingTelegram:
+    """Stands in for TelegramSurfaceAdapter: records pushed drafts. The
+    ``boom`` flag makes push raise, proving draft-create survives a Telegram
+    outage (the API push is best-effort)."""
+
+    def __init__(self, boom=False):
+        self.pushed: list[tuple[str, str]] = []
+        self.boom = boom
+
+    def push_draft_card(self, draft, account_label=""):
+        if self.boom:
+            raise RuntimeError("telegram down")
+        self.pushed.append((draft.symbol, account_label))
+
+
+class TestTelegramDraftPush:
+    def _client_with_tg(self, tmp_path, tg):
+        url = f"sqlite:///{tmp_path/'tg.db'}"
+        journal = PortfolioJournal(url=url)
+        runtime = FinanceRuntime(ledger=Ledger(url=url), clock=lambda: NOW)
+        runtime.portfolio = journal
+        runtime.portfolio_drafts = PortfolioDraftService(journal, clock=lambda: NOW)
+        runtime.telegram = tg
+        return TestClient(create_app(runtime))
+
+    def test_create_pushes_card_with_account_label(self, tmp_path):
+        tg = _RecordingTelegram()
+        client = self._client_with_tg(tmp_path, tg)
+        acct = _make_account(client, name="平安证券")
+        _draft_buy(client, acct["id"], symbol="513310")
+        assert tg.pushed == [("513310", "平安证券")]
+
+    def test_create_survives_telegram_outage(self, tmp_path):
+        tg = _RecordingTelegram(boom=True)
+        client = self._client_with_tg(tmp_path, tg)
+        acct = _make_account(client)
+        r = client.post("/v1/portfolio/drafts", json=dict(
+            account_id=acct["id"], event_type="buy", symbol="NVDA", market="US",
+            currency="USD", qty=3, price=208.5, occurred_at=NOW.isoformat(),
+        ))
+        assert r.status_code == 201, r.text  # push failure never fails the draft
+
+
 class TestAccounts:
     def test_create_list_get(self, client):
         a = _make_account(client)

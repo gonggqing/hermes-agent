@@ -192,10 +192,17 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         telegram = TelegramSurfaceAdapter(
             approval_transport, chat_id, interactive=True, allowed_users=allowed,
         )
+        # Let tapped draft cards confirm/reject real-holdings drafts IN Telegram
+        # (Loop.md P0.9 boundary #4: authenticated human confirms, LLM never).
+        telegram.set_draft_service(runtime.portfolio_drafts)
         logger.info("finance gatekeeper bot attached (interactive approvals)",
                     extra={"n_allowed_users": len(allowed)})
     else:
         logger.warning("no dedicated finance bot; approvals via portal only")
+
+    # Give the API thread a handle to push draft cards on create (None when no
+    # interactive bot; the push is a guarded no-op then).
+    runtime.telegram = telegram
 
     # Knowledge store (Loop.md §5.10 / Phase 0.5): embedded Qdrant under
     # trader/data/knowledge by default; FINANCE_QDRANT_URL switches to the

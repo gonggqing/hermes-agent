@@ -96,6 +96,9 @@ class FinanceRuntime:
     # Phase 0.95 (go-live gate): manual operator kill-switch (halts NEW entries).
     kill_switch: Any = None  # swing_trader.killswitch.KillSwitch | None
     execution: Any = None  # swing_trader.execution.ExecutionEngine — cancel_all
+    # Interactive Telegram adapter — push draft cards so a new draft can be
+    # confirmed IN Telegram (Loop.md P0.9). None when no dedicated finance bot.
+    telegram: Any = None  # swing_trader.dailyloop.TelegramSurfaceAdapter | None
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
 
 
@@ -679,6 +682,27 @@ def create_app(runtime: FinanceRuntime):
         except ValueError:
             raise HTTPException(422, f"unknown surface {raw!r}")
 
+    def _push_draft_to_telegram(draft) -> None:
+        """Best-effort: push a Telegram card so a freshly-created draft can be
+        confirmed IN Telegram (Loop.md P0.9). Resolves the account's display
+        name for the card. Never raises — a Telegram outage must not fail draft
+        creation (the portal remains the fallback confirm surface)."""
+        tg = runtime.telegram
+        if tg is None:
+            return
+        label = ""
+        try:
+            if draft.account_id and runtime.portfolio is not None:
+                acct = runtime.portfolio.get_account(draft.account_id)
+                if acct is not None:
+                    label = acct.name
+        except Exception:  # noqa: BLE001 — label is cosmetic
+            label = ""
+        try:
+            tg.push_draft_card(draft, account_label=label)
+        except Exception:  # noqa: BLE001 — push is best-effort (see docstring)
+            pass
+
     def _symbol_names(account_id: Optional[str] = None) -> dict:
         """symbol -> display name, derived from the event note ('name|…'), so
         holdings show 名字 not just codes. First non-empty name wins."""
@@ -830,6 +854,7 @@ def create_app(runtime: FinanceRuntime):
                 created_by=body.created_by, created_surface=surface)
         except Exception as exc:  # noqa: BLE001 — surface bad draft input as 422
             raise HTTPException(422, f"invalid draft: {str(exc)[:200]}")
+        _push_draft_to_telegram(draft)
         return JSONResponse(draft.model_dump(mode="json"), status_code=201)
 
     @app.post(f"/{API_VERSION}/portfolio/accounts/{{account_id}}/close-draft")
@@ -843,6 +868,7 @@ def create_app(runtime: FinanceRuntime):
             raise HTTPException(404, f"unknown account {account_id!r}")
         draft = svc.propose_close(account_id=account_id, symbol=symbol,
                                   created_surface=surface)
+        _push_draft_to_telegram(draft)
         return JSONResponse(draft.model_dump(mode="json"), status_code=201)
 
     @app.post(f"/{API_VERSION}/portfolio/accounts/{{account_id}}/correct-draft")
@@ -860,6 +886,7 @@ def create_app(runtime: FinanceRuntime):
                                        created_surface=surface)
         if draft is None:
             raise HTTPException(404, f"unknown event {event_id!r} in this account")
+        _push_draft_to_telegram(draft)
         return JSONResponse(draft.model_dump(mode="json"), status_code=201)
 
     @app.post(f"/{API_VERSION}/portfolio/drafts/{{draft_id}}/action")

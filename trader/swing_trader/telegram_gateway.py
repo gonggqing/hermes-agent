@@ -45,12 +45,15 @@ logger = get_logger(__name__)
 
 __all__ = [
     "ConfirmationGateway",
+    "DRAFT_CALLBACK_TYPE",
     "FinalizedCandidates",
     "GatewayError",
     "HttpTransport",
     "TelegramTransport",
+    "build_draft_keyboard",
     "build_keyboard",
     "render_card",
+    "render_draft_card",
 ]
 
 #: Telegram caps callback_data at 64 bytes; a 16-char id prefix + compact
@@ -240,6 +243,91 @@ def build_keyboard(c: CandidateOrder) -> dict:
                 {"text": "Approve", "callback_data": _callback_data(c, "ok")},
                 {"text": "Edit", "callback_data": _callback_data(c, "edit")},
                 {"text": "Reject", "callback_data": _callback_data(c, "no")},
+            ]
+        ]
+    }
+
+
+#: Portfolio-draft callbacks carry a type tag so the shared interactive poll
+#: loop can route them to the PortfolioDraftService (real-holdings journal)
+#: instead of the ConfirmationService (candidate orders). Absent tag => a
+#: legacy candidate callback (backward compatible).
+DRAFT_CALLBACK_TYPE = "d"
+
+#: Human-readable Chinese labels for portfolio event types on the draft card
+#: (matches the portal wording; the confirmer sees the SAME action name).
+_EVENT_TYPE_ZH: dict[str, str] = {
+    "opening_balance": "建仓/期初",
+    "buy": "买入",
+    "sell": "卖出",
+    "dividend": "分红",
+    "fee": "费用",
+    "cash_transfer": "资金变动",
+    "split": "拆股",
+    "other_corporate_action": "公司行动",
+    "correction": "更正(撤销)",
+}
+
+
+def render_draft_card(draft: Any, account_label: str = "") -> str:
+    """Concise portfolio-draft confirmation card (Loop.md P0.9, boundary #4).
+
+    Renders a PROPOSED holdings change for in-Telegram confirmation. Any
+    ``missing``/``ambiguities`` are surfaced verbatim so an incomplete draft is
+    obviously not-yet-confirmable — the user completes it in the portal, never
+    by guessing. ``draft`` is a ``PortfolioDraft`` (kept as ``Any`` so this
+    module need not import the portfolio schema).
+    """
+    from swing_trader.instrument_names import name_for
+
+    et = getattr(draft.event_type, "value", str(draft.event_type))
+    action = _EVENT_TYPE_ZH.get(et, et)
+    sym = draft.symbol or "—"
+    name = name_for(draft.symbol) if draft.symbol else ""
+    head = f"📝 记一笔：{action} {sym}" + (f"（{name}）" if name else "")
+    lines = [head]
+
+    detail: list[str] = []
+    if draft.qty is not None:
+        detail.append(f"数量 {draft.qty:g}")
+    if draft.price is not None:
+        detail.append(f"价格 {draft.price:g}")
+    if draft.amount is not None:
+        detail.append(f"金额 {draft.amount:g}")
+    if detail:
+        lines.append(" · ".join(detail))
+    if account_label:
+        lines.append(f"账户：{account_label}")
+    if draft.occurred_at is not None:
+        lines.append(f"日期：{draft.occurred_at.date().isoformat()}")
+
+    gaps = [*draft.missing, *draft.ambiguities]
+    if gaps:
+        lines.append("⚠️ 待补全：" + "；".join(gaps[:4]))
+        lines.append("（缺项请在门户补全后再确认）")
+    return "\n".join(lines)
+
+
+def _draft_callback_data(draft: Any, action: str) -> str:
+    """Compact JSON draft-callback payload; stays <= 64 bytes (Telegram cap)."""
+    return json.dumps(
+        {"id": draft.id[:CALLBACK_ID_LEN], "a": action, "t": DRAFT_CALLBACK_TYPE},
+        separators=(",", ":"),
+    )
+
+
+def build_draft_keyboard(draft: Any) -> dict:
+    """Confirm / Reject inline keyboard for a portfolio draft.
+
+    No Edit button: field edits go through the portal (Desktop/Web) so the
+    single-authority draft state machine stays server-side — mirroring the
+    candidate keyboard's "edit via portal" decision.
+    """
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ 确认入账", "callback_data": _draft_callback_data(draft, "ok")},
+                {"text": "❌ 拒绝", "callback_data": _draft_callback_data(draft, "no")},
             ]
         ]
     }
