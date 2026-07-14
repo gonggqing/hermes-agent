@@ -89,6 +89,27 @@ class TestTelegramDraftPush:
         assert r.status_code == 201, r.text  # push failure never fails the draft
 
 
+class TestVerifiedNameOverride:
+    def test_verified_map_name_overrides_import_note_placeholder(self, client):
+        acct = _make_account(client, name="平安证券", market_scope="CN",
+                             base_currency="CNY")
+        # a buy recorded with the import's PLACEHOLDER note for a mapped symbol
+        draft = _draft_buy(client, acct["id"], symbol="159518.SZ", market="CN",
+                           currency="CNY", qty=1200, price=1.1332, commission=0,
+                           note="平安证券 场内ETF；")
+        r = client.post(f"/v1/portfolio/drafts/{draft['id']}/action", json={
+            "action": "confirm", "actor": "gongqing",
+            "idempotency_key": "k-159518", "surface": "web"})
+        assert r.json()["ok"], r.text
+        holds = client.get(
+            f"/v1/portfolio/accounts/{acct['id']}/holdings").json()["holdings"]
+        h = next(x for x in holds if x["symbol"] == "159518.SZ")
+        # the curated/verified name wins over the placeholder note (cost basis
+        # is untouched — the event is append-only).
+        assert h["display_name"] == "标普油气ETF嘉实"
+        assert h["avg_cost"] == 1.1332
+
+
 class TestAccounts:
     def test_create_list_get(self, client):
         a = _make_account(client)

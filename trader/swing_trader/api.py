@@ -735,7 +735,12 @@ def create_app(runtime: FinanceRuntime):
 
     def _symbol_names(account_id: Optional[str] = None) -> dict:
         """symbol -> display name, derived from the event note ('name|…'), so
-        holdings show 名字 not just codes. First non-empty name wins."""
+        holdings show 名字 not just codes. First non-empty name wins. A VERIFIED
+        central name (instrument_names.name_for) overrides an import-note
+        placeholder — e.g. 159518.SZ's "平安证券 场内ETF；" → 标普油气ETF嘉实 —
+        without touching the append-only event or its cost basis."""
+        from swing_trader.instrument_names import name_for
+
         out: dict = {}
         if runtime.portfolio is None:
             return out
@@ -744,6 +749,10 @@ def create_app(runtime: FinanceRuntime):
                 nm = e.note.split("|", 1)[0].strip()
                 if nm:
                     out[e.symbol] = nm
+        for sym in list(out):  # curated/verified name wins over the note
+            verified = name_for(sym)
+            if verified:
+                out[sym] = verified
         return out
 
     def _holdings_payload(h, names: Optional[dict] = None) -> dict:

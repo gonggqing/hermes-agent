@@ -44,6 +44,9 @@ SYMBOL_NAMES: dict[str, str] = {
     "600519.SS": "贵州茅台",
     "^HSI": "恒生指数",
     "^HSCE": "恒生中国企业指数",
+    # --- CN ETFs held in the real portfolio (verified names override the
+    # import-note placeholder; see _symbol_names) ---
+    "159518.SZ": "标普油气ETF嘉实",  # user-verified 2026-07-14 (was a placeholder)
 }
 
 
