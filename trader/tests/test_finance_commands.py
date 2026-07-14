@@ -51,16 +51,21 @@ def test_holdings_command_renders_names_with_override(tmp_path):
     assert "1.1332" in out          # avg cost
 
 
-def test_research_command_renders_movers(tmp_path):
+def test_research_command_asks_region_then_renders(tmp_path):
     briefs = {"kr": {"as_of": "2026-07-14T09:11:00Z", "movers": {"top": [
         {"symbol": "005930.KS", "display_name": "三星电子", "dist_sma20_pct": -16.6}]}}}
-    out = make_command_handler(_RT(briefs=briefs))("/研究")
+    h = make_command_handler(_RT(briefs=briefs))
+    # no region → asks which one
+    ask = h("/研究")
+    assert "cn" in ask and "kr" in ask and "哪个地区" in ask
+    # with a region → renders that brief
+    out = h("/brief kr")
     assert "韩国半导体" in out and "005930.KS" in out and "三星电子" in out
 
 
 def test_command_menu_shape():
-    # Telegram requires lowercase-latin command names; descriptions carry 中文.
+    # Telegram requires lowercase-latin command names; descriptions are English.
     cmds = [c for c, _ in COMMAND_MENU]
     assert cmds == ["holdings", "brief", "record", "help"]
     assert all(c.isascii() and c.islower() for c in cmds)
-    assert all("·" in d for _, d in COMMAND_MENU)  # 中文 label in the description
+    assert all(d.isascii() for _, d in COMMAND_MENU)  # English descriptions

@@ -157,6 +157,7 @@ class PortfolioDraftRow(SQLModel, table=True):
     confirmed_at: Optional[str] = None
     created_at: str
     updated_at: str
+    restate: str = "null"  # JSON TEXT: holding re-statement spec, or "null"
 
 
 class PortfolioAuditRow(SQLModel, table=True):
@@ -331,6 +332,7 @@ def _draft_to_row(d: PortfolioDraft) -> PortfolioDraftRow:
         confirmed_at=_to_iso(d.confirmed_at) if d.confirmed_at is not None else None,
         created_at=_to_iso(d.created_at),
         updated_at=_to_iso(d.updated_at),
+        restate=json.dumps(d.restate),
     )
 
 
@@ -363,6 +365,7 @@ def _draft_from_row(r: PortfolioDraftRow) -> PortfolioDraft:
         confirmed_at=_from_iso(r.confirmed_at) if r.confirmed_at else None,
         created_at=_from_iso(r.created_at),
         updated_at=_from_iso(r.updated_at),
+        restate=json.loads(r.restate) if r.restate else None,
     )
 
 

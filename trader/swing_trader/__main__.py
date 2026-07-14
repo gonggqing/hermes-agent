@@ -293,7 +293,17 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
         telegram.set_command_handler(make_command_handler(runtime))
 
-        _FIELD_ZH = {"cost": "成本", "qty": "数量", "account": "账户"}
+        def _holding_accounts(symbol: str) -> list:
+            j = runtime.portfolio
+            return [ac for ac in j.list_accounts()
+                    if any(h.symbol == symbol for h in j.holdings(ac.id).holdings)]
+
+        def _match_account(name: str):
+            for ac in runtime.portfolio.list_accounts():
+                if name and (ac.name == name or name in ac.name
+                             or (len(name) >= 2 and name[:2] in ac.name)):
+                    return ac
+            return None
 
         def _update_handler(text: str):
             parsed = parse_update(text)
@@ -314,10 +324,34 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                     actor="telegram", as_of=runtime.clock())
                 return (f"✅ 已把 {symbol} 现价标记为 {price:g} {ccy}"
                         "（用于市值/盈亏显示，不影响成本）")
-            # cost / qty / account → financial correction (confirm card, WIP)
-            return (f"📝「改{_FIELD_ZH.get(field, field)}」属于财务纠错，要走确认卡片"
-                    "（撤销原记录 + 记正确值，保留审计），这个流程我正在做、很快可用；"
-                    "急的话先在门户改。")
+            # cost / qty / account → financial correction via a confirm card
+            holders = _holding_accounts(symbol)
+            if len(holders) != 1:
+                where = "当前无持仓" if not holders else "在多个账户持有"
+                return f"{symbol} {where}，成本/数量/账户更正请在门户处理或指明账户。"
+            from_acct = holders[0]
+            drafts = runtime.portfolio_drafts
+            if field == "account":
+                tgt = _match_account(value)
+                if tgt is None:
+                    return f"没找到目标账户「{value}」。"
+                r = drafts.propose_restate(
+                    account_id=from_acct.id, symbol=symbol, field="account",
+                    target_account_id=tgt.id, original_text=text)
+                label = tgt.name
+            else:
+                try:
+                    num = float(value)
+                except ValueError:
+                    return f"没看懂数值 {value!r}。"
+                r = drafts.propose_restate(
+                    account_id=from_acct.id, symbol=symbol, field=field,
+                    value=num, original_text=text)
+                label = from_acct.name
+            if not r.ok:
+                return r.message  # refusal (未知价格 / 数量<=0 / 目标账户无效 …)
+            telegram.push_draft_card(r.draft, account_label=label)
+            return "📝 已生成更正草稿，请核对下方卡片并确认 ✅ / 拒绝 ❌"
 
         telegram.set_update_handler(_update_handler)
         telegram.register_commands(COMMAND_MENU)

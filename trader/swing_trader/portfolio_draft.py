@@ -196,6 +196,121 @@ class PortfolioDraftService:
             created_by=created_by, created_surface=created_surface,
         )
 
+    # ------------------------------------------------ update-holdings restate
+
+    _RESTATE_FIELDS = {"cost", "qty", "account"}
+
+    def propose_restate(
+        self, *, account_id: str, symbol: str, field: str,
+        value: Optional[float] = None, target_account_id: Optional[str] = None,
+        original_text: str = "", created_by: str = "hermes",
+        created_surface: str = "telegram",
+    ) -> DraftResult:
+        """Draft a holding CORRECTION for update-holdings (改成本/数量/账户).
+
+        Confirmation RE-STATES the position: reverse the symbol's current lot
+        events + record a corrected OPENING_BALANCE, keeping cash unchanged
+        (compensating for any reversed buy/sell cash). Refuses (never guesses)
+        when the symbol isn't held, an unknown-price lot blocks the cash math,
+        or an account move target is missing/unknown. Still human-confirmed."""
+        symbol = symbol.strip().upper()
+        if field not in self._RESTATE_FIELDS:
+            return DraftResult(False, DraftResultCode.INVALID_EDIT,
+                               f"unknown field {field!r}")
+        pos = next((h for h in self._journal.holdings(account_id).holdings
+                    if h.symbol == symbol), None)
+        if pos is None:
+            return DraftResult(False, DraftResultCode.INCOMPLETE,
+                               f"{symbol} 当前无持仓，无法更正")
+
+        lot_events = self._lot_events(account_id, symbol)
+        if any(e.event_type in {EventType.BUY, EventType.SELL} and e.price is None
+               for e in lot_events):
+            return DraftResult(False, DraftResultCode.INCOMPLETE,
+                               f"{symbol} 有未知价格的买卖记录，请在门户逐笔处理")
+
+        tgt_acct, tgt_qty, tgt_price = account_id, pos.qty, pos.avg_cost
+        if field == "cost":
+            tgt_price = value
+        elif field == "qty":
+            if value is None or value <= 0:
+                return DraftResult(False, DraftResultCode.INVALID_EDIT, "数量需 > 0")
+            tgt_qty = value
+        elif field == "account":
+            if not target_account_id or self._journal.get_account(target_account_id) is None:
+                return DraftResult(False, DraftResultCode.INCOMPLETE, "目标账户无效")
+            tgt_acct = target_account_id
+
+        draft = self.create_draft(
+            account_id=tgt_acct, event_type=EventType.OPENING_BALANCE,
+            symbol=symbol, market=pos.market, currency=pos.currency,
+            qty=tgt_qty, price=tgt_price, occurred_at=self._clock(),
+            original_text=original_text, created_by=created_by,
+            created_surface=created_surface,
+            note=f"更正持仓 {symbol}·{field}",
+        )
+        draft.restate = {
+            "from_account_id": account_id, "field": field,
+            "current": {"qty": pos.qty, "avg_cost": pos.avg_cost},
+        }
+        self._journal.save_draft(draft)
+        return DraftResult(True, DraftResultCode.APPLIED, "restate drafted",
+                           draft=draft, version=draft.version)
+
+    def _lot_events(self, account_id: str, symbol: str) -> list[PortfolioEvent]:
+        """The symbol's non-reversed lot events in an account (open/buy/sell/
+        split) — the events a re-statement reverses."""
+        events = self._journal.get_events(account_id)
+        reversed_ids = {e.reverses_event_id for e in events
+                        if e.event_type is EventType.CORRECTION and e.reverses_event_id}
+        lot_types = {EventType.OPENING_BALANCE, EventType.BUY,
+                     EventType.SELL, EventType.SPLIT}
+        return [e for e in events
+                if e.symbol == symbol and e.event_type in lot_types
+                and e.id not in reversed_ids]
+
+    def _append_restate_events(self, draft: PortfolioDraft, actor: str,
+                               surface: str, idem: str, now: datetime) -> PortfolioEvent:
+        """Reverse the symbol's lot events in the source account, compensate cash
+        so it's unchanged, then record the corrected OPENING_BALANCE in the
+        target account. Returns the corrected opening-balance event."""
+        from_acct = draft.restate["from_account_id"]
+        symbol = draft.symbol
+        lot_events = self._lot_events(from_acct, symbol)
+
+        cash_sym = 0.0  # net cash the symbol's events contributed (to restore)
+        for e in lot_events:
+            if e.event_type is EventType.BUY:
+                cash_sym += -(e.qty * (e.price or 0.0) + (e.commission or 0.0))
+            elif e.event_type is EventType.SELL:
+                cash_sym += e.qty * (e.price or 0.0) - (e.commission or 0.0)
+
+        for e in lot_events:  # 1) reverse each lot event
+            self._journal.append_event(PortfolioEvent(
+                account_id=from_acct, event_type=EventType.CORRECTION,
+                symbol=symbol, market=e.market, currency=e.currency,
+                reverses_event_id=e.id, occurred_at=now,
+                idempotency_key=f"{idem}:rev:{e.id}", actor=actor, surface=surface,
+                note=f"restate: reverse {e.event_type.value} {e.id[:8]}",
+                created_at=now))
+
+        if abs(cash_sym) > 1e-9:  # 2) keep cash unchanged
+            self._journal.append_event(PortfolioEvent(
+                account_id=from_acct, event_type=EventType.CASH_TRANSFER,
+                currency=draft.currency, amount=cash_sym, occurred_at=now,
+                idempotency_key=f"{idem}:cash", actor=actor, surface=surface,
+                note="restate: keep cash unchanged (holding correction)",
+                created_at=now))
+
+        stored, _ = self._journal.append_event(PortfolioEvent(  # 3) corrected lot
+            account_id=draft.account_id, event_type=EventType.OPENING_BALANCE,
+            symbol=symbol, market=draft.market, currency=draft.currency,
+            qty=draft.qty if draft.qty is not None else 0.0, price=draft.price,
+            occurred_at=now, idempotency_key=f"{idem}:new", actor=actor,
+            surface=surface, note=draft.note or "restate: corrected holding",
+            created_at=now))
+        return stored
+
     def get_draft(self, draft_id: str) -> Optional[PortfolioDraft]:
         return self._journal.get_draft(draft_id)
 
@@ -301,28 +416,35 @@ class PortfolioDraftService:
                 detail="; ".join(draft.missing + draft.ambiguities),
                 idempotency_key=idempotency_key)
 
-        event = PortfolioEvent(
-            account_id=draft.account_id,
-            event_type=draft.event_type,
-            symbol=draft.symbol,
-            market=draft.market,
-            currency=draft.currency,
-            qty=draft.qty if draft.qty is not None else 0.0,
-            price=draft.price,
-            commission=draft.commission,
-            amount=draft.amount,
-            occurred_at=draft.occurred_at,
-            settlement_date=draft.settlement_date,
-            source=draft.source,
-            external_id=draft.external_id,
-            reverses_event_id=draft.reverses_event_id,
-            idempotency_key=idempotency_key,
-            actor=actor,
-            surface=surface,
-            note=draft.note,
-            created_at=now,
-        )
-        stored, _created = self._journal.append_event(event)
+        if draft.restate:
+            # Holding re-statement (update-holdings correction): reverse the
+            # symbol's lot events + record the corrected OPENING_BALANCE, keeping
+            # cash unchanged. Returns the corrected opening-balance event.
+            stored = self._append_restate_events(
+                draft, actor, surface, idempotency_key, now)
+        else:
+            event = PortfolioEvent(
+                account_id=draft.account_id,
+                event_type=draft.event_type,
+                symbol=draft.symbol,
+                market=draft.market,
+                currency=draft.currency,
+                qty=draft.qty if draft.qty is not None else 0.0,
+                price=draft.price,
+                commission=draft.commission,
+                amount=draft.amount,
+                occurred_at=draft.occurred_at,
+                settlement_date=draft.settlement_date,
+                source=draft.source,
+                external_id=draft.external_id,
+                reverses_event_id=draft.reverses_event_id,
+                idempotency_key=idempotency_key,
+                actor=actor,
+                surface=surface,
+                note=draft.note,
+                created_at=now,
+            )
+            stored, _created = self._journal.append_event(event)
         confirmed = draft.model_copy(update={
             "status": DraftStatus.CONFIRMED, "confirmed_by": actor,
             "confirmed_at": now, "updated_at": now,

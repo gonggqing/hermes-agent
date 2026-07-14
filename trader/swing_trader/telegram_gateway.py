@@ -273,6 +273,34 @@ _EVENT_TYPE_ZH: dict[str, str] = {
 }
 
 
+def _fmt_cost(v: Optional[float]) -> str:
+    return "未知" if v is None else f"{v:g}"
+
+
+def _render_restate_card(draft: Any, account_label: str, name_for) -> str:
+    """Confirmation card for an update-holdings CORRECTION (改成本/数量/账户).
+    Shows current → target and states cash is unchanged."""
+    r = draft.restate or {}
+    field = r.get("field")
+    cur = r.get("current", {}) or {}
+    sym = draft.symbol or "—"
+    name = name_for(draft.symbol) if draft.symbol else ""
+    lines = [f"📝 更正持仓：{sym}" + (f"（{name}）" if name else "")]
+    if field == "cost":
+        lines.append(f"成本：{_fmt_cost(cur.get('avg_cost'))} → {_fmt_cost(draft.price)}"
+                     f"（数量 {draft.qty:g} 不变）")
+    elif field == "qty":
+        lines.append(f"数量：{cur.get('qty')} → {draft.qty:g}"
+                     f"（成本 {_fmt_cost(draft.price)} 不变）")
+    elif field == "account":
+        lines.append(f"移到账户：{account_label or draft.account_id}（数量/成本不变）")
+    lines.append("💵 现金不变 · 撤销原记录 + 记正确值（保留审计）")
+    gaps = [*draft.missing, *draft.ambiguities]
+    if gaps:
+        lines.append("⚠️ 待补全：" + "；".join(gaps[:4]))
+    return "\n".join(lines)
+
+
 def render_draft_card(draft: Any, account_label: str = "") -> str:
     """Concise portfolio-draft confirmation card (Loop.md P0.9, boundary #4).
 
@@ -283,6 +311,9 @@ def render_draft_card(draft: Any, account_label: str = "") -> str:
     module need not import the portfolio schema).
     """
     from swing_trader.instrument_names import name_for
+
+    if getattr(draft, "restate", None):
+        return _render_restate_card(draft, account_label, name_for)
 
     et = getattr(draft.event_type, "value", str(draft.event_type))
     action = _EVENT_TYPE_ZH.get(et, et)

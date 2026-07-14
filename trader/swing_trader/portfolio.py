@@ -275,6 +275,13 @@ class PortfolioDraft(BaseModel):
     external_id: Optional[str] = None
     reverses_event_id: Optional[str] = None  # set for a CORRECTION (undo) draft
     note: str = ""
+    # A holding RE-STATEMENT (update-holdings correction of qty/avg_cost/account).
+    # When set, confirming this draft does NOT append its single event; instead
+    # it reverses the symbol's current lot events in ``from_account_id`` and
+    # records the corrected OPENING_BALANCE (this draft's fields), keeping cash
+    # unchanged via a compensating cash entry (append-only, boundary #4). Shape:
+    # {"from_account_id": str, "field": "cost|qty|account", "current": {...}}.
+    restate: Optional[dict] = None
     # -- draft workflow bookkeeping --
     status: DraftStatus = DraftStatus.DRAFT
     version: int = 1
