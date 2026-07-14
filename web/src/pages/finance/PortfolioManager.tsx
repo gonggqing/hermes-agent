@@ -1800,7 +1800,7 @@ function DraftCard({
     draft: FinancePortfolioDraft,
     action: "confirm" | "reject" | "edit",
     edits?: DraftEditForm,
-  ) => void;
+  ) => Promise<FinancePortfolioDraftActionOutcome | null>;
   ft: FinanceTranslations;
 }) {
   const d = ft.portfolio.draftsView;
@@ -1808,14 +1808,24 @@ function DraftCard({
   const [edit, setEdit] = useState<DraftEditForm>(() => draftEditFrom(draft));
   const [editError, setEditError] = useState<string | null>(null);
 
-  const saveAndConfirm = () => {
+  // "Save & confirm" (保存并确认): apply the edits AND confirm in one click. We
+  // must chain — an edit bumps the draft version, so the confirm has to use the
+  // version the edit returned; otherwise the stale version fails and the user
+  // has to refresh before confirming (the reported bug).
+  const saveAndConfirm = async () => {
     const parsed = parseDraftEdits(edit, ft);
     if (typeof parsed === "string") {
       setEditError(parsed);
       return;
     }
     setEditError(null);
-    onAct(draft, "edit", edit);
+    let toConfirm = draft;
+    if (Object.keys(parsed).length > 0) {
+      const editOut = await onAct(draft, "edit", edit);
+      if (!editOut || !editOut.ok) return; // edit failed — outcome already shown
+      toConfirm = { ...draft, version: editOut.version ?? draft.version };
+    }
+    await onAct(toConfirm, "confirm");
   };
 
   return (
@@ -1920,7 +1930,7 @@ function DraftCard({
                 type="button"
                 size="sm"
                 disabled={busy}
-                onClick={saveAndConfirm}
+                onClick={() => void saveAndConfirm()}
                 prefix={busy ? <Spinner /> : <Check />}
               >
                 {d.save}
@@ -2143,6 +2153,7 @@ function DraftsView({
       });
       keysRef.current.delete(actionKey);
       renderOutcome(draft, action, outcome);
+      return outcome;
     } catch (err) {
       showToast(
         d.outcome.requestFailed
@@ -2150,6 +2161,7 @@ function DraftsView({
           .replace("{error}", String(err)),
         "error",
       );
+      return null;
     } finally {
       setBusyKey(null);
     }

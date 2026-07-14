@@ -53,7 +53,11 @@ async def proxy(path: str, request: Request) -> Response:
     }
     body = await request.body()
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        # 60s (not 15s): some finance endpoints do many yfinance / fund-NAV
+        # calls — a cold `marks/refresh` (~20 symbols) or `/analyze` routinely
+        # exceeds 15s and would otherwise 503 as "service offline". (The very
+        # slow research/run returns immediately via a background thread.)
+        async with httpx.AsyncClient(timeout=60.0) as client:
             upstream = await client.request(
                 request.method,
                 url,
