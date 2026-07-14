@@ -854,9 +854,9 @@ export const zh: Translations = {
       perRegionNote:
         "中国与香港由同一份中国简报拆分；市场状态、新闻与主题为两地共享。分地区独立简报属于 0.9 阶段的后续优化。",
       selectDesk: "研究面板",
-      runResearch: "立即更新研究",
+      runResearch: "更新研究",
       runningResearch: "更新中…",
-      runResearchDone: "{market} 研究已更新",
+      runResearchDone: "已开始更新，约 1 分钟后简报自动刷新",
       runResearchFailed: "无法更新研究：{error}",
       modeLabel: "交易模式",
       modePaper: "模拟盘",

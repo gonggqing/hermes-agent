@@ -5,10 +5,10 @@ import {
   Globe,
   Newspaper,
   PlugZap,
-  RefreshCw,
   TrendingUp,
   Wallet,
 } from "lucide-react";
+import { Button } from "@nous-research/ui/ui/components/button";
 import { api } from "@/lib/api";
 import type {
   FinanceAccountResponse,
@@ -684,23 +684,16 @@ function ResearchView({
       <div className="flex flex-col gap-3">
         {canRun && (
           <div className="flex justify-end">
-            <button
+            <Button
               type="button"
-              onClick={onRunResearch}
+              size="sm"
               disabled={researchRunning}
-              className={cn(
-                "inline-flex items-center gap-1.5 border border-border/60 px-3 py-1.5",
-                "font-mondwest normal-case text-xs text-foreground",
-                "hover:bg-secondary/40 disabled:opacity-50 disabled:cursor-not-allowed",
-              )}
+              onClick={onRunResearch}
             >
-              <RefreshCw
-                className={cn("h-3.5 w-3.5", researchRunning && "animate-spin")}
-              />
               {researchRunning
                 ? ft.layout.runningResearch
                 : ft.layout.runResearch}
-            </button>
+            </Button>
           </div>
         )}
         <ResearchDetail desk={desk} briefs={briefs} ft={ft} />
@@ -1054,12 +1047,11 @@ export default function FinancePage() {
     if (briefMarket !== "cn" && briefMarket !== "kr") return;
     setResearchRunning(true);
     try {
-      const res = await api.financeRunResearch(briefMarket);
-      showToast(
-        ft.layout.runResearchDone.replace("{market}", res.market_label),
-        "success",
-      );
-      refresh();
+      // Fires a BACKGROUND refresh (a full run does slow yfinance calls, ~1
+      // min for KR — far over the proxy's 15s timeout); returns immediately.
+      // The brief updates via the ongoing 30s poll when the run completes.
+      await api.financeRunResearch(briefMarket);
+      showToast(ft.layout.runResearchDone, "success");
     } catch (err) {
       showToast(
         ft.layout.runResearchFailed.replace("{error}", String(err)),
@@ -1068,7 +1060,7 @@ export default function FinancePage() {
     } finally {
       setResearchRunning(false);
     }
-  }, [briefMarket, refresh, showToast, ft]);
+  }, [briefMarket, showToast, ft]);
 
   const ledgerFallback = account !== null && "source" in account;
   const liveView = account !== null && !("source" in account) ? account : null;

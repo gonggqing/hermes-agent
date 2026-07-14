@@ -2981,14 +2981,12 @@ export type FinanceMode = "paper" | "live";
  * (risk null, no pending candidates). */
 export type FinanceResearchMarket = "us" | "cn" | "kr";
 
-/** Result of POST /v1/research/run (ResearchSession.run_now summary). */
+/** Result of POST /v1/research/run — a BACKGROUND kickoff (returns immediately;
+ *  the brief updates via the poll when the run finishes). */
 export interface FinanceRunResearchResult {
+  status: "started" | "already_running";
   market: string;
-  market_label: string;
-  ran_at: string;
-  signals: number;
-  sent: boolean;
-  brief_ready: boolean;
+  note?: string;
 }
 
 export type FinanceBreakerState = "NORMAL" | "TRIPPED";

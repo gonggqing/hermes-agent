@@ -269,9 +269,9 @@ export const financeEn: FinanceTranslations = {
     perRegionNote:
       "China and Hong Kong are partitioned from one shared CN brief; regime, news and themes are shared. Per-region briefs are a Phase 0.9 refinement.",
     selectDesk: "Research desk",
-    runResearch: "Run research now",
+    runResearch: "Update research",
     runningResearch: "Running…",
-    runResearchDone: "{market} research refreshed",
+    runResearchDone: "Refresh started — the brief updates in about a minute",
     runResearchFailed: "Could not run research: {error}",
     modeLabel: "Trading mode",
     modePaper: "Paper",

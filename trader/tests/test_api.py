@@ -183,16 +183,30 @@ class TestReads:
 
     def test_research_run_triggers_hook(self, env):
         _, _, runtime, client = env
+        import threading
+
+        done = threading.Event()
         called = {"n": 0}
 
         def _run():
             called["n"] += 1
+            done.set()
             return {"market": "KR", "brief_ready": True}
 
         runtime.run_research["kr"] = _run
         r = client.post("/v1/research/run", params={"market": "kr"})
-        assert r.status_code == 200 and r.json()["market"] == "KR"
+        # Returns IMMEDIATELY (background run — avoids the proxy's 15s timeout).
+        assert r.status_code == 200 and r.json()["status"] == "started"
+        assert r.json()["market"] == "kr"
+        assert done.wait(timeout=2)  # the background thread runs the hook
         assert called["n"] == 1
+
+    def test_research_run_already_running_returns_fast(self, env):
+        _, _, runtime, client = env
+        runtime.research_running.add("kr")  # pretend a run is in flight
+        runtime.run_research["kr"] = lambda: {}
+        r = client.post("/v1/research/run", params={"market": "kr"})
+        assert r.status_code == 200 and r.json()["status"] == "already_running"
 
     def test_research_run_404_for_unknown_market(self, env):
         _, _, runtime, client = env

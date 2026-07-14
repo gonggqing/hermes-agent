@@ -89,6 +89,8 @@ class FinanceRuntime:
     # Manual research refresh, keyed by lowercase market_id (cn/kr/…) →
     # Callable[[], dict] (ResearchSession.run_now). Read-only, ungated.
     run_research: dict = field(default_factory=dict)
+    #: Markets whose research is currently refreshing (background run guard).
+    research_running: set = field(default_factory=set)
     nav_provider: Any = None  # swing_trader.fund_nav.NavProvider — 场外基金 NAV
     gold_provider: Any = None  # swing_trader.sge_gold.GoldProvider — 国内金价 (SGE)
     # Phase 0.95 (go-live gate): manual operator kill-switch (halts NEW entries).
@@ -404,15 +406,35 @@ def create_app(runtime: FinanceRuntime):
     @app.post(f"/{API_VERSION}/research/run")
     def research_run(market: str = Query(min_length=2, max_length=8)) -> dict:
         """Manually re-run a market's RESEARCH session NOW (off-schedule refresh
-        button). Refreshes ?market=<market>'s brief. Read-only — places NO
-        orders — so it is NOT human-gated (unlike /session/run). 404 when that
-        research market is disabled/unknown."""
-        fn = runtime.run_research.get(market.lower())
+        button). Read-only — places NO orders — so it is NOT human-gated. Runs
+        in the BACKGROUND and returns immediately: a full refresh does slow
+        yfinance calls (KR can take ~90s), far over the dashboard proxy's 15s
+        timeout, so a synchronous response would 503. The brief updates in
+        runtime.latest_briefs[market] when done; the tab's poll picks it up.
+        404 when that research market is disabled/unknown."""
+        import threading
+
+        key = market.lower()
+        fn = runtime.run_research.get(key)
         if fn is None:
             raise HTTPException(
                 404, f"no research session for market {market!r} "
                      f"(available: {sorted(runtime.run_research) or 'none'})")
-        return fn()
+        if key in runtime.research_running:
+            return {"status": "already_running", "market": key}
+        runtime.research_running.add(key)
+
+        def _run() -> None:
+            try:
+                fn()
+            except Exception:  # noqa: BLE001 — background; never crash the thread
+                logger.exception("background research run failed", extra={"market": key})
+            finally:
+                runtime.research_running.discard(key)
+
+        threading.Thread(target=_run, daemon=True, name=f"research-run-{key}").start()
+        return {"status": "started", "market": key,
+                "note": "research refreshing in the background (~1 min)"}
 
     # --------------------------------------------- on-demand market analysis
     # Phase 0.75 thrust B: READ/ANALYSIS-ONLY endpoints for the conversational
