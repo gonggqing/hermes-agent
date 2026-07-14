@@ -46,6 +46,9 @@ __all__ = [
     "CN_SCHEDULE",
     "ET",
     "EVENT_TIMES_ET",
+    "KR_HOLIDAYS_2026",
+    "KR_SCHEDULE",
+    "SEOUL",
     "SHANGHAI",
     "US_SCHEDULE",
     "DailyLoopRunner",
@@ -61,6 +64,7 @@ __all__ = [
 
 ET = ZoneInfo("America/New_York")
 SHANGHAI = ZoneInfo("Asia/Shanghai")
+SEOUL = ZoneInfo("Asia/Seoul")
 UTC = timezone.utc
 
 # --------------------------------------------------------------------- events
@@ -213,6 +217,47 @@ CN_SCHEDULE = SessionSchedule(
     tz=SHANGHAI,
     event_times=CN_EVENT_TIMES_LOCAL,
     holidays=CN_HK_HOLIDAYS_2026,
+)
+
+#: KR (KRX) research session (Asia/Seoul): monitor at the open (09:30 KST),
+#: build near the close (14:30) and push at 15:00 — the near-full KR
+#: semiconductor day is what leads/transfers to the CN tape (human directive
+#: 2026-07-14). Report-only: NO confirmation window / cutoff / execution.
+KR_EVENT_TIMES_LOCAL: Mapping[Event, time] = {
+    Event.MONITOR_START: time(9, 30),
+    Event.DECIDE_START: time(14, 30),
+    Event.PUSH_CANDIDATES: time(15, 0),
+}
+
+# Best-effort KRX 2026 full-day WEEKDAY closures (weekends already handled).
+# Report-only, so an imperfect entry only risks a stale-flagged brief, never an
+# order. TODO(calendar): replace with an authoritative KRX 2026/2027 calendar
+# before the KR session could ever gain order authority.
+KR_HOLIDAYS_2026: frozenset[date] = frozenset(
+    {
+        date(2026, 1, 1),   # New Year's Day
+        date(2026, 2, 16),  # Seollal (Lunar New Year) holiday
+        date(2026, 2, 17),  # Seollal
+        date(2026, 2, 18),  # Seollal
+        date(2026, 3, 2),   # Independence Movement Day (Mar 1 Sun → substitute)
+        date(2026, 5, 1),   # Labour Day (KRX closed)
+        date(2026, 5, 5),   # Children's Day
+        date(2026, 5, 25),  # Buddha's Birthday (May 24 Sun → substitute)
+        date(2026, 9, 24),  # Chuseok holiday
+        date(2026, 9, 25),  # Chuseok
+        date(2026, 9, 28),  # Chuseok (Sep 26 Sat → substitute)
+        date(2026, 10, 9),  # Hangul Day
+        date(2026, 12, 25),  # Christmas
+        date(2026, 12, 31),  # Year-end market closure
+    }
+)
+
+#: KR afternoon research session schedule.
+KR_SCHEDULE = SessionSchedule(
+    market_id="KR",
+    tz=SEOUL,
+    event_times=KR_EVENT_TIMES_LOCAL,
+    holidays=KR_HOLIDAYS_2026,
 )
 
 

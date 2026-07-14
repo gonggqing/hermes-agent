@@ -82,6 +82,14 @@ class Settings(BaseSettings):
     cn_market_tz: str = "Asia/Shanghai"
     cn_symbols: str = ""
 
+    # --- KR (Korea) semiconductor RESEARCH session (Loop.md two-session ext) ---
+    # A narrow, semiconductor-only KR read (memory giants + HBM chain): KR semi
+    # sentiment leads/transfers to the CN tape. Report-only. ``kr_symbols``
+    # overrides the built-in universe (comma-separated; empty = default).
+    kr_session_enabled: bool = True
+    kr_market_tz: str = "Asia/Seoul"
+    kr_symbols: str = ""
+
     # --- Telegram bots: distinct roles in the shared group (Loop.md P0.5) ---
     # The shared gateway bot (``telegram_bot_token``) is the OUTBOUND-ONLY
     # REPORTER (daily summaries / research briefs). A dedicated finance bot

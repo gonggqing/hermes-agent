@@ -161,6 +161,26 @@ class TestReads:
         runtime.latest_brief = {"mode": "paper", "marker": "from-loop"}
         assert client.get("/v1/research/brief").json()["marker"] == "from-loop"
 
+    def test_research_brief_kr_routes_to_per_market_slot(self, env):
+        _, _, runtime, client = env
+        runtime.latest_briefs["kr"] = {"mode": "paper", "marker": "kr-brief"}
+        assert client.get("/v1/research/brief",
+                          params={"market": "kr"}).json()["marker"] == "kr-brief"
+        # US brief unaffected by the KR slot
+        runtime.latest_brief = {"mode": "paper", "marker": "us"}
+        assert client.get("/v1/research/brief").json()["marker"] == "us"
+
+    def test_research_brief_kr_degraded_when_no_session_yet(self, env):
+        _, _, _, client = env
+        body = client.get("/v1/research/brief", params={"market": "kr"}).json()
+        assert any("Korea" in u for u in body["uncertainty"])
+
+    def test_research_brief_cn_backcompat_slot(self, env):
+        _, _, runtime, client = env
+        runtime.latest_brief_cn = {"mode": "paper", "marker": "cn-legacy"}
+        assert client.get("/v1/research/brief",
+                          params={"market": "cn"}).json()["marker"] == "cn-legacy"
+
     def test_knowledge_search_503_when_unconfigured(self, env):
         _, _, _, client = env
         assert client.get("/v1/knowledge/search", params={"q": "nvda"}).status_code == 503

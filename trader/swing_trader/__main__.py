@@ -309,6 +309,45 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         logger.info("cn research session enabled",
                     extra={"n_symbols": len(cn_wl.symbols)})
 
+    # KR (Korea) semiconductor RESEARCH session (human directive 2026-07-14): a
+    # narrow semi-only read (memory giants + HBM chain) whose sentiment leads/
+    # transfers to the CN tape. Same research-only shape as CN — no orders.
+    kr_runner = None
+    kr_session = None
+    if settings.kr_session_enabled:
+        from zoneinfo import ZoneInfo
+
+        from swing_trader.kr_watchlist import KR_INDEX_SYMBOLS, build_kr_watchlist
+        from swing_trader.research_session import ResearchSession
+        from swing_trader.scheduler import KR_SCHEDULE
+
+        kr_wl = build_kr_watchlist(settings.kr_symbols)
+        kr_session = ResearchSession(
+            market_id="KR",
+            market_label="Korea semiconductors",
+            feed=RetryingFeed(YFinanceFeed()),
+            ledger=ledger,  # never read (research-only); satisfies brief signature
+            symbols=kr_wl.symbols,
+            watchlist_lookup=kr_wl.lookup,
+            trading_tz=ZoneInfo(settings.kr_market_tz),
+            index_symbols=list(KR_INDEX_SYMBOLS),
+            mode=settings.mode,
+            runtime=runtime,
+            notify=notify,  # REPORTER bot (outbound-only)
+            llm_analyst=LLMAnalyst(llm_settings) if llm_settings else None,
+            knowledge=knowledge,
+            knowledge_index=knowledge_index,
+            focus_note="仅半导体: 存储巨头(三星/海力士) + HBM 封装链; 关注财报 / news, "
+                       "情绪领先 A 股半导体",
+            lang="zh",
+            clock=runtime.clock,
+        )
+        kr_runner = DailyLoopRunner(
+            kr_session.callbacks(), clock=runtime.clock, schedule=KR_SCHEDULE
+        )
+        logger.info("kr research session enabled",
+                    extra={"n_symbols": len(kr_wl.symbols)})
+
     app = create_app(runtime)
     server = uvicorn.Server(uvicorn.Config(
         app, host="127.0.0.1", port=args.port, log_level="warning"
@@ -334,6 +373,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             # spam the chat.
             cn_session.on_monitor()
             cn_session.on_research()
+        if kr_session is not None:
+            # Populate the KR semiconductor brief (?market=kr) for the tab; the
+            # scheduled 15:00 KST send handles the group push.
+            kr_session.on_monitor()
+            kr_session.on_research()
         print("check done — report sent; Finance tab now has live data.", flush=True)
 
     def _poll_extra() -> None:
@@ -346,6 +390,8 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             runner.run_pending()
             if cn_runner is not None:
                 cn_runner.run_pending()
+            if kr_runner is not None:
+                kr_runner.run_pending()
             _poll_extra()
             _time.sleep(30)
     except KeyboardInterrupt:

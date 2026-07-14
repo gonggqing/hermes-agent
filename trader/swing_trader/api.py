@@ -68,6 +68,9 @@ class FinanceRuntime:
     latest_reports: dict = field(default_factory=dict)  # kind -> text
     latest_brief: dict = field(default_factory=dict)  # US ResearchBrief dump
     latest_brief_cn: dict = field(default_factory=dict)  # CN ResearchBrief dump
+    # Per-market research briefs keyed by lowercase market_id (cn/kr/…). The US
+    # brief stays on latest_brief; CN mirrors here AND on latest_brief_cn.
+    latest_briefs: dict = field(default_factory=dict)
     knowledge: Any = None  # FinanceKnowledge (Phase 0.5)
     knowledge_index: Any = None  # KnowledgeIndex | None (fail-closed)
     # Phase 0.75 (thrust B): on-demand analysis for the conversational agent.
@@ -352,25 +355,37 @@ def create_app(runtime: FinanceRuntime):
     def latest_reports() -> dict:
         return runtime.latest_reports
 
+    #: Research markets served off the US brief (Loop.md two-session extension):
+    #: market_id -> (trading tz, human label) for the degraded-brief fallback.
+    _RESEARCH_MARKETS = {
+        "cn": ("Asia/Shanghai", "China / HK"),
+        "kr": ("Asia/Seoul", "Korea semiconductors"),
+    }
+
     @app.get(f"/{API_VERSION}/research/brief")
     def research_brief(market: Optional[str] = Query(default=None)) -> dict:
-        """Investment Research brief (Loop.md Phase 0.5). ``market=cn`` returns
-        the China morning research brief; anything else returns the US brief.
-        Falls back to an on-demand DEGRADED brief (explicit freshness warnings)
-        when the relevant session has not produced one yet."""
+        """Investment Research brief (Loop.md Phase 0.5). ``market=cn`` /
+        ``market=kr`` return that research session's brief; anything else returns
+        the US brief. Falls back to an on-demand DEGRADED brief (explicit
+        freshness warnings) when the relevant session hasn't produced one yet."""
         from swing_trader.brief import build_research_brief
 
-        if market == "cn":
-            if runtime.latest_brief_cn:
-                return runtime.latest_brief_cn
+        key = (market or "").lower()
+        if key in _RESEARCH_MARKETS:
+            # Prefer the per-market slot; keep CN's legacy slot as a fallback.
+            cached = runtime.latest_briefs.get(key) or (
+                runtime.latest_brief_cn if key == "cn" else None)
+            if cached:
+                return cached
             from zoneinfo import ZoneInfo
 
+            tz_name, label = _RESEARCH_MARKETS[key]
             brief = build_research_brief(
                 runtime.ledger, runtime.mode, now=runtime.clock(),
                 signals=[], candidates=[], include_account=False,
-                trading_tz=ZoneInfo("Asia/Shanghai"),
+                trading_tz=ZoneInfo(tz_name),
                 extra_uncertainty=[
-                    "China research session has not run yet today — "
+                    f"{label} research session has not run yet today — "
                     "showing an empty degraded brief"
                 ],
             )

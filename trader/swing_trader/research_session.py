@@ -274,7 +274,11 @@ class ResearchSession:
             logger.exception("cn research brief build failed")
             return None
         if self.runtime is not None:
-            self.runtime.latest_brief_cn = brief.model_dump(mode="json")
+            dump = brief.model_dump(mode="json")
+            # Per-market slot (cn/kr/…) so any research market routes uniformly.
+            self.runtime.latest_briefs[self.market_id.lower()] = dump
+            if self.market_id.upper() == "CN":
+                self.runtime.latest_brief_cn = dump  # back-compat
         return brief
 
     def _ingest_news(self) -> None:
