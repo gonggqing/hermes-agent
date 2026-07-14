@@ -39,6 +39,27 @@ def loop_env(tmp_path):
     return loop, runtime, clock, days
 
 
+class TestTelegramPollBeforeDecide:
+    def test_on_confirm_poll_polls_telegram_with_no_confirmation(self, loop_env):
+        """A portfolio-draft card can be tapped at ANY time, so on_confirm_poll
+        must poll Telegram even before the decide phase creates the candidate
+        ConfirmationService. Regression: the old `_confirmation is None` guard
+        skipped the poll, so a tapped draft card spun forever until ~11:00 ET."""
+        loop, runtime, clock, days = loop_env
+        calls = []
+
+        class _Tg:
+            interactive = True
+
+            def poll(self, service, now):
+                calls.append(service)
+
+        loop.telegram = _Tg()
+        assert loop._confirmation is None  # decide phase has not run
+        loop.on_confirm_poll()
+        assert calls == [None]  # polled anyway, forwarding the None service
+
+
 class TestRunSessionNow:
     def test_publishes_into_now_anchored_window(self, loop_env):
         loop, runtime, clock, days = loop_env

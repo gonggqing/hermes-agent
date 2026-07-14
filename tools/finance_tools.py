@@ -144,10 +144,48 @@ def _handle_analyze_symbol(args: dict, **kw) -> str:
 
 def _handle_research_brief(args: dict, **kw) -> str:
     market = str(args.get("market", "us")).strip().lower()
-    if market not in ("us", "cn"):
-        return tool_error("market must be 'us' or 'cn'")
-    params = {"market": "cn"} if market == "cn" else {}
+    if market not in ("us", "cn", "kr"):
+        return tool_error("market must be 'us', 'cn', or 'kr'")
+    date = str(args.get("date", "")).strip()
+    if date:
+        # A past trading day's ARCHIVED brief (reads history, no live re-pull).
+        return _respond(*_finance_get(
+            "/v1/research/history", {"market": market, "date": date}))
+    params = {"market": market} if market in ("cn", "kr") else {}
     return _respond(*_finance_get("/v1/research/brief", params))
+
+
+def _handle_refresh_research(args: dict, **kw) -> str:
+    """Trigger a market's research session to re-run NOW (background). Read-only:
+    refreshes movers/signals/news for that market's brief — places NO orders."""
+    market = str(args.get("market", "")).strip().lower()
+    if market not in ("cn", "kr"):
+        return tool_error(
+            "market must be 'cn' or 'kr' (US is the evening trading loop, "
+            "not a standalone research session)")
+    return _respond(*_finance_post(
+        "/v1/research/run", {}, params={"market": market}))
+
+
+def _handle_research_history(args: dict, **kw) -> str:
+    """Browse archived brief snapshots (newest first), or fetch one day's brief.
+    Lets you read a PAST brief instead of re-pulling live market data."""
+    params: dict = {}
+    market = str(args.get("market", "")).strip().lower()
+    if market:
+        params["market"] = market
+    date = str(args.get("date", "")).strip()
+    if date:
+        if not market:
+            return tool_error("market is required when date is given")
+        params["date"] = date
+    limit = args.get("limit")
+    if limit is not None:
+        try:
+            params["limit"] = max(1, min(200, int(limit)))
+        except (TypeError, ValueError):
+            return tool_error(f"Invalid limit: {limit!r}")
+    return _respond(*_finance_get("/v1/research/history", params))
 
 
 def _handle_search_research(args: dict, **kw) -> str:
@@ -228,14 +266,54 @@ _ANALYZE_SYMBOL_SCHEMA = {
 _RESEARCH_BRIEF_SCHEMA = {
     "name": "research_brief",
     "description": (
-        "Get today's Investment Research brief: market regime, risk/freshness warnings, "
+        "Get an Investment Research brief: market regime, risk/freshness warnings, "
         "watchlist movers, themes, news digest, and analysis signals. market='us' (default) "
-        "for the US evening desk or market='cn' for the China/HK morning research desk."
+        "for the US evening desk, 'cn' for the China/HK morning desk, or 'kr' for the Korea "
+        "semiconductor desk. Returns the CACHED latest brief (no live re-pull). Pass "
+        "date='YYYY-MM-DD' to read that day's ARCHIVED brief from history instead."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "market": {"type": "string", "enum": ["us", "cn"], "description": "'us' (default) or 'cn'."},
+            "market": {"type": "string", "enum": ["us", "cn", "kr"], "description": "'us' (default), 'cn', or 'kr'."},
+            "date": {"type": "string", "description": "Optional 'YYYY-MM-DD' to read a past day's archived brief."},
+        },
+        "required": [],
+    },
+}
+
+_REFRESH_RESEARCH_SCHEMA = {
+    "name": "refresh_research",
+    "description": (
+        "Re-run a market's research session NOW to refresh its brief (movers / signals / "
+        "news). Runs in the BACKGROUND (~1 min) and returns immediately; read research_brief "
+        "again shortly after for the updated data. READ-ONLY market research — places NO "
+        "orders. Only 'cn' and 'kr' are standalone research sessions (US is the evening "
+        "trading loop). Use when the cached brief is stale or the user asks for fresh data."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "market": {"type": "string", "enum": ["cn", "kr"], "description": "'cn' or 'kr'."},
+        },
+        "required": ["market"],
+    },
+}
+
+_RESEARCH_HISTORY_SCHEMA = {
+    "name": "research_history",
+    "description": (
+        "Browse the ARCHIVED research-brief history. With no date: newest-first snapshot "
+        "metadata (id, market, trading_date, generated_at, counts) — optionally filtered by "
+        "market. With market+date='YYYY-MM-DD': that day's full archived brief. Lets you "
+        "compare across days or recall a past brief without re-pulling live market data."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "market": {"type": "string", "enum": ["us", "cn", "kr"], "description": "Optional market filter."},
+            "date": {"type": "string", "description": "Optional 'YYYY-MM-DD' (requires market) for that day's full brief."},
+            "limit": {"type": "integer", "description": "Max snapshots when listing (1-200, default 20)."},
         },
         "required": [],
     },
@@ -456,6 +534,8 @@ registry.register(name="get_quote", schema=_GET_QUOTE_SCHEMA, handler=_handle_ge
 registry.register(name="get_kline", schema=_GET_KLINE_SCHEMA, handler=_handle_get_kline, **_F)
 registry.register(name="analyze_symbol", schema=_ANALYZE_SYMBOL_SCHEMA, handler=_handle_analyze_symbol, **_F)
 registry.register(name="research_brief", schema=_RESEARCH_BRIEF_SCHEMA, handler=_handle_research_brief, **_F)
+registry.register(name="refresh_research", schema=_REFRESH_RESEARCH_SCHEMA, handler=_handle_refresh_research, **_F)
+registry.register(name="research_history", schema=_RESEARCH_HISTORY_SCHEMA, handler=_handle_research_history, **_F)
 registry.register(name="search_research", schema=_SEARCH_RESEARCH_SCHEMA, handler=_handle_search_research, **_F)
 registry.register(name="account_view", schema=_ACCOUNT_VIEW_SCHEMA, handler=_handle_account_view, **_F)
 # Phase 0.9 portfolio — read + DRAFT-ONLY (no confirm/place; human confirms).

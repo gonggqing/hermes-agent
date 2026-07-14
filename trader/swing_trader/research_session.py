@@ -304,6 +304,15 @@ class ResearchSession:
             self.runtime.latest_briefs[self.market_id.lower()] = dump
             if self.market_id.upper() == "CN":
                 self.runtime.latest_brief_cn = dump  # back-compat
+            # Archive a durable snapshot so the brief survives restart and builds
+            # a queryable history (latest_briefs alone is in-memory). Best-effort.
+            store = getattr(self.runtime, "brief_store", None)
+            if store is not None:
+                try:
+                    store.save(self.market_id.lower(), dump)
+                except Exception:  # never break the loop on an archive failure
+                    logger.warning("brief snapshot archive failed",
+                                   extra={"market": self.market_id})
         return brief
 
     def _ingest_news(self) -> None:

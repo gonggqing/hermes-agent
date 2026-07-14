@@ -173,7 +173,12 @@ class TelegramSurfaceAdapter:
                 self._chat_id, render_card(cand), reply_markup=build_keyboard(cand)
             )
 
-    def poll(self, service: ConfirmationService, now_utc: datetime) -> None:
+    def poll(
+        self, service: Optional[ConfirmationService], now_utc: datetime
+    ) -> None:
+        # ``service`` may be None before the daily decide phase — draft
+        # callbacks don't need it, and candidate callbacks find no registered
+        # id and are answered without touching it (see on_confirm_poll).
         if not self.interactive:
             return  # outbound-only: never touch getUpdates (see __init__)
         updates = self._transport.get_updates(offset=self._offset)
@@ -526,8 +531,18 @@ class DailyLoop:
             )
 
     def on_confirm_poll(self) -> None:
-        """Call repeatedly inside the window (Telegram long-poll surface)."""
-        if self._confirmation is None or self.telegram is None:
+        """Poll the Telegram surface — drives BOTH candidate approvals AND
+        portfolio-draft confirm/reject.
+
+        We poll whenever the bot exists, NOT only when a candidate
+        ConfirmationService is live: the ConfirmationService is created lazily
+        in the daily decide phase (~11:00 ET), but a portfolio-draft card can be
+        tapped at ANY time and its callback routes to the PortfolioDraftService
+        (no ConfirmationService needed). Gating on ``_confirmation`` here meant a
+        tapped draft card spun forever until the decide phase ran. Candidate
+        callbacks arriving with no ConfirmationService find no registered id and
+        are answered "unknown candidate" (never touch the None service)."""
+        if self.telegram is None:
             return
         self.telegram.poll(self._confirmation, self.clock())
 

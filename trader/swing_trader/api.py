@@ -93,6 +93,8 @@ class FinanceRuntime:
     research_running: set = field(default_factory=set)
     nav_provider: Any = None  # swing_trader.fund_nav.NavProvider — 场外基金 NAV
     gold_provider: Any = None  # swing_trader.sge_gold.GoldProvider — 国内金价 (SGE)
+    # Durable per-market brief history (latest_briefs is in-memory only).
+    brief_store: Any = None  # swing_trader.brief_store.BriefStore | None
     # Phase 0.95 (go-live gate): manual operator kill-switch (halts NEW entries).
     kill_switch: Any = None  # swing_trader.killswitch.KillSwitch | None
     execution: Any = None  # swing_trader.execution.ExecutionEngine — cancel_all
@@ -438,6 +440,34 @@ def create_app(runtime: FinanceRuntime):
         threading.Thread(target=_run, daemon=True, name=f"research-run-{key}").start()
         return {"status": "started", "market": key,
                 "note": "research refreshing in the background (~1 min)"}
+
+    @app.get(f"/{API_VERSION}/research/history")
+    def research_history(
+        market: Optional[str] = Query(default=None),
+        date: Optional[str] = Query(default=None),
+        snapshot_id: Optional[str] = Query(default=None),
+        limit: int = Query(default=20, ge=1, le=200),
+    ) -> dict:
+        """Durable research-brief HISTORY (brief_store). Without ``date``/
+        ``snapshot_id`` returns newest-first snapshot metadata for browsing;
+        with either, returns that snapshot's FULL brief payload. Lets the agent
+        read a past day's brief instead of re-pulling. 503 if archiving is off."""
+        if runtime.brief_store is None:
+            raise HTTPException(503, "brief history not available (no brief store)")
+        if snapshot_id:
+            payload = runtime.brief_store.get(snapshot_id)
+            if payload is None:
+                raise HTTPException(404, f"unknown snapshot {snapshot_id!r}")
+            return {"brief": payload}
+        if date:
+            if not market:
+                raise HTTPException(422, "market is required with date")
+            payload = runtime.brief_store.get_by_date(market, date)
+            if payload is None:
+                raise HTTPException(
+                    404, f"no {market!r} brief archived for {date!r}")
+            return {"brief": payload}
+        return {"snapshots": runtime.brief_store.list_snapshots(market, limit)}
 
     # --------------------------------------------- on-demand market analysis
     # Phase 0.75 thrust B: READ/ANALYSIS-ONLY endpoints for the conversational

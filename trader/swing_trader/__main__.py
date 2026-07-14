@@ -122,6 +122,15 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
     runtime.portfolio = PortfolioJournal(url=db_url)
     runtime.portfolio_drafts = PortfolioDraftService(runtime.portfolio, clock=runtime.clock)
+    # Durable research-brief history (own DB file, own MetaData — never the
+    # ledger's tables): archives each published brief so it survives restart and
+    # the agent can read a past day's brief (latest_briefs is in-memory only).
+    from pathlib import Path as _DbPath
+
+    from swing_trader.brief_store import BriefStore
+
+    _briefs_url = f"sqlite:///{_DbPath(args.db or settings.db_path).parent / 'briefs.db'}"
+    runtime.brief_store = BriefStore(url=_briefs_url)
     # Instrument type-ahead: the curated static catalog for discovery PLUS the
     # user's actually-held instruments (searchable by code or note keyword, so a
     # held Chinese fund/ETF is always findable — Loop.md P0.9).
@@ -397,6 +406,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         loop.on_confirm_poll()
 
     import time as _time
+    # Run the schedulers on a ~30s tick, but poll Telegram every ~3s so a tapped
+    # card (draft confirm/reject, candidate approval) responds in seconds rather
+    # than on the slow scheduler tick — otherwise the inline button spins.
+    _TG_POLL_S = 3
+    _TICKS_PER_CYCLE = 10  # 10 * 3s ≈ 30s scheduler cadence
     try:
         while True:
             runner.run_pending()
@@ -404,8 +418,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 cn_runner.run_pending()
             if kr_runner is not None:
                 kr_runner.run_pending()
-            _poll_extra()
-            _time.sleep(30)
+            for _ in range(_TICKS_PER_CYCLE):
+                _poll_extra()
+                _time.sleep(_TG_POLL_S)
     except KeyboardInterrupt:
         server.should_exit = True
         print("bye")
