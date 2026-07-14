@@ -257,6 +257,29 @@ def test_learned_dm_chat_routes_later_api_card(tmp_path):
     assert transport.targets[-1] == "55501"
 
 
+def test_dm_slash_command_routes_to_command_handler(tmp_path):
+    _, account, svc, transport, adapter = _setup(tmp_path, {"gongqing"})
+    adapter.set_command_handler(lambda text: "持仓：…" if text.startswith("/持仓") else None)
+    adapter.set_trade_recorder(lambda text: None)
+    adapter.set_text_responder(lambda text: "analysis")
+    transport.queue.append(_dm("/持仓"))
+    adapter.poll(None, NOW)
+    assert ("持仓：…", None) in transport.sent
+    assert transport.targets == ["55501"]  # command reply in the DM
+
+
+def test_dm_update_routes_before_trade(tmp_path):
+    _, account, svc, transport, adapter = _setup(tmp_path, {"gongqing"})
+    seen = []
+    adapter.set_command_handler(lambda text: None)
+    adapter.set_update_handler(lambda text: "✅ 已改名" if "改名" in text else None)
+    adapter.set_trade_recorder(lambda text: seen.append(text) or None)
+    transport.queue.append(_dm("159518 改名 标普油气ETF嘉实"))
+    adapter.poll(None, NOW)
+    assert ("✅ 已改名", None) in transport.sent
+    assert seen == []  # update handled first; trade recorder never called
+
+
 def test_recording_only_in_dm_not_group_mention(tmp_path):
     _, account, svc, transport, adapter = _setup(tmp_path, {"gongqing"})
     calls = []

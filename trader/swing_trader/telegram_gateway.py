@@ -201,6 +201,10 @@ class HttpTransport:
     def get_me(self) -> dict:
         return self._call("getMe", {}) or {}
 
+    def set_my_commands(self, commands: list[dict]) -> None:
+        """Register the bot's "/" command menu (Bot API setMyCommands)."""
+        self._call("setMyCommands", {"commands": commands})
+
 
 # --------------------------------------------------------------------------- cards
 

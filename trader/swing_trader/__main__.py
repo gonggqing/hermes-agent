@@ -131,6 +131,12 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
     _briefs_url = f"sqlite:///{_DbPath(args.db or settings.db_path).parent / 'briefs.db'}"
     runtime.brief_store = BriefStore(url=_briefs_url)
+    # User-set display-name overrides (finance-bot DM "改名"): own DB, highest
+    # precedence in _symbol_names. Lets the user fix a name with no code deploy.
+    from swing_trader.name_override import NameOverrideStore
+
+    _names_url = f"sqlite:///{_DbPath(args.db or settings.db_path).parent / 'name_overrides.db'}"
+    runtime.name_overrides = NameOverrideStore(url=_names_url)
     # Instrument type-ahead: the curated static catalog for discovery PLUS the
     # user's actually-held instruments (searchable by code or note keyword, so a
     # held Chinese fund/ETF is always findable — Loop.md P0.9).
@@ -274,6 +280,47 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         from swing_trader.trade_record import make_trade_recorder
 
         telegram.set_trade_recorder(make_trade_recorder(runtime))
+
+        # DM "/" command menu (/持仓 /研究 /记账 /帮助) + update-holdings:
+        # 改名/现价 apply immediately (display override / manual mark); 成本/数量/
+        # 账户 are FINANCIAL corrections that go through a confirm card (built
+        # next — until then they get a clear "coming" reply, never a bad guess).
+        from swing_trader.finance_commands import (
+            COMMAND_MENU,
+            make_command_handler,
+        )
+        from swing_trader.update_holdings import market_currency, parse_update
+
+        telegram.set_command_handler(make_command_handler(runtime))
+
+        _FIELD_ZH = {"cost": "成本", "qty": "数量", "account": "账户"}
+
+        def _update_handler(text: str):
+            parsed = parse_update(text)
+            if parsed is None:
+                return None
+            field, symbol, value = parsed
+            if field == "name":
+                runtime.name_overrides.set(symbol, value)
+                return f"✅ 已把 {symbol} 的显示名改为「{value}」（成本/历史不变）"
+            if field == "mark":
+                try:
+                    price = float(value)
+                except ValueError:
+                    return f"没看懂价格 {value!r}，例如「{symbol} 现价 1.15」"
+                _, ccy = market_currency(symbol)
+                runtime.portfolio.set_mark(
+                    symbol, price, currency=ccy, source="manual",
+                    actor="telegram", as_of=runtime.clock())
+                return (f"✅ 已把 {symbol} 现价标记为 {price:g} {ccy}"
+                        "（用于市值/盈亏显示，不影响成本）")
+            # cost / qty / account → financial correction (confirm card, WIP)
+            return (f"📝「改{_FIELD_ZH.get(field, field)}」属于财务纠错，要走确认卡片"
+                    "（撤销原记录 + 记正确值，保留审计），这个流程我正在做、很快可用；"
+                    "急的话先在门户改。")
+
+        telegram.set_update_handler(_update_handler)
+        telegram.register_commands(COMMAND_MENU)
     loop = DailyLoop(
         feed, broker, ledger, mode=settings.mode,
         live_orders_allowed=settings.live_orders_allowed,

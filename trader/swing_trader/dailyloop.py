@@ -124,6 +124,36 @@ class TelegramSurfaceAdapter:
         # trade message into a draft; None disables recording.
         self._dm_chat_id: Optional[str] = None
         self._record_trade: Optional[Callable[[str], Any]] = None
+        # DM "/" command menu (/持仓 /研究 …) and update-holdings handler
+        # (改名/现价 immediate, 成本/数量/账户 via correction card).
+        self._command_handler: Optional[Callable[[str], Optional[str]]] = None
+        self._update_handler: Optional[Callable[[str], Optional[str]]] = None
+
+    def set_command_handler(
+        self, fn: Optional[Callable[[str], Optional[str]]]
+    ) -> None:
+        """Wire the slash-command handler (``text -> reply`` or None)."""
+        self._command_handler = fn
+
+    def set_update_handler(
+        self, fn: Optional[Callable[[str], Optional[str]]]
+    ) -> None:
+        """Wire the DM update-holdings handler (``text -> reply`` or None if the
+        text isn't an update-holdings edit)."""
+        self._update_handler = fn
+
+    def register_commands(self, menu: list) -> None:
+        """Register the "/" command menu with Telegram (setMyCommands). menu is
+        a list of (command, description); best-effort — logged, never raised."""
+        setter = getattr(self._transport, "set_my_commands", None)
+        if not callable(setter):
+            return
+        try:
+            setter([{"command": c, "description": d} for c, d in menu])
+            logger.info("finance bot command menu registered",
+                        extra={"n_commands": len(menu)})
+        except Exception:
+            logger.warning("failed to register finance bot command menu")
 
     def set_text_responder(
         self, fn: Optional[Callable[[str], Optional[str]]]
@@ -361,7 +391,8 @@ class TelegramSurfaceAdapter:
         in a group — and only for allowlisted users. Otherwise stay quiet (the
         finance bot is the confirmation channel, not a group chatterbox). A DM
         also records trades (see _record_trade); analysis is _respond_text."""
-        if self._respond_text is None and self._record_trade is None:
+        if (self._respond_text is None and self._record_trade is None
+                and self._command_handler is None and self._update_handler is None):
             return
         text = str(message.get("text") or "").strip()
         if not text:
@@ -382,6 +413,28 @@ class TelegramSurfaceAdapter:
         if mentioned and username:
             text = re.sub(rf"@{re.escape(username)}", "", text,
                           flags=re.IGNORECASE).strip()
+        # Slash command (/持仓 /研究 /记账 /帮助 …) — works in DM or @mention.
+        if self._command_handler is not None and text.startswith("/"):
+            try:
+                reply = self._command_handler(text)
+            except Exception:
+                logger.exception("finance bot command handler failed")
+                reply = None
+            if reply:
+                self._transport.send_message(chat_id, reply)
+                return
+        # Update-holdings — DM ONLY ("159518 改名 X", "159518 现价 1.15", …).
+        # Name/mark apply immediately; cost/qty/account route to a correction
+        # card. The handler returns the reply (or a card was pushed) or None.
+        if is_dm and self._update_handler is not None:
+            try:
+                reply = self._update_handler(text)
+            except Exception:
+                logger.exception("finance bot update-holdings handler failed")
+                reply = None
+            if reply:
+                self._transport.send_message(chat_id, reply)
+                return
         # Recording (记账) — DM ONLY: parse a trade → draft → confirm card here.
         # The card IS the human safety net, so a rough parse is corrected/rejected
         # there, never silently recorded (boundary #4). Falls through to analysis

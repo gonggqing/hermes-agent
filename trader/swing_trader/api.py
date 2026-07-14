@@ -95,6 +95,8 @@ class FinanceRuntime:
     gold_provider: Any = None  # swing_trader.sge_gold.GoldProvider — 国内金价 (SGE)
     # Durable per-market brief history (latest_briefs is in-memory only).
     brief_store: Any = None  # swing_trader.brief_store.BriefStore | None
+    # User-set display-name overrides (finance-bot DM "改名"). Highest precedence.
+    name_overrides: Any = None  # swing_trader.name_override.NameOverrideStore | None
     # Phase 0.95 (go-live gate): manual operator kill-switch (halts NEW entries).
     kill_switch: Any = None  # swing_trader.killswitch.KillSwitch | None
     execution: Any = None  # swing_trader.execution.ExecutionEngine — cancel_all
@@ -753,6 +755,13 @@ def create_app(runtime: FinanceRuntime):
             verified = name_for(sym)
             if verified:
                 out[sym] = verified
+        if runtime.name_overrides is not None:  # user override wins over all
+            try:
+                for sym, nm in runtime.name_overrides.all().items():
+                    if nm:
+                        out[sym] = nm
+            except Exception:  # name overrides are cosmetic; never break holdings
+                pass
         return out
 
     def _holdings_payload(h, names: Optional[dict] = None) -> dict:

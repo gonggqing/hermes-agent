@@ -21,7 +21,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-__all__ = ["ParsedTrade", "looks_like_trade", "parse_trade"]
+__all__ = ["ParsedTrade", "find_symbol", "looks_like_trade", "parse_trade"]
 
 # Direction keywords. Bare "code price qty" with no keyword defaults to BUY
 # (recording a new/added position is the common case) and flags an ambiguity.
@@ -64,6 +64,11 @@ def _infer_cn_suffix(code: str) -> str:
     """A-share exchange from the leading digit (standard convention): 0/1/2/3 →
     Shenzhen (.SZ), 5/6/9 → Shanghai (.SS). Covers 159xxx→SZ, 51/58xxxx→SS."""
     return ".SZ" if code[0] in "0123" else ".SS"
+
+
+def find_symbol(text: str) -> Optional[str]:
+    """Public: first normalized symbol in the text, or None (used by rename)."""
+    return _find_symbol(text)
 
 
 def _find_symbol(text: str) -> Optional[str]:
