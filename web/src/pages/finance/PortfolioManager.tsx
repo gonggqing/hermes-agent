@@ -42,7 +42,7 @@ import type {
   FinancePortfolioValuationTotal,
 } from "@/lib/api";
 import type { FinanceTranslations } from "@/i18n/types";
-import { cn } from "@/lib/utils";
+import { cn, randomId } from "@/lib/utils";
 import { Badge } from "@nous-research/ui/ui/components/badge";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@nous-research/ui/ui/components/card";
@@ -851,7 +851,7 @@ function RecordTradeForm({
       const outcome = await api.financePortfolioDraftAction(draft.id, {
         action: "confirm",
         actor: FINANCE_ACTOR,
-        idempotency_key: crypto.randomUUID(),
+        idempotency_key: randomId(),
         expected_version: draft.version,
       });
       if (outcome.code === "applied" || outcome.code === "replayed") {
@@ -2122,7 +2122,7 @@ function DraftsView({
     const actionKey = `${draft.id}:${action}`;
     let idem = keysRef.current.get(actionKey);
     if (!idem) {
-      idem = crypto.randomUUID();
+      idem = randomId();
       keysRef.current.set(actionKey, idem);
     }
     setBusyKey(actionKey);

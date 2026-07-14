@@ -10,6 +10,7 @@ import {
   Zap,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { randomId } from "@/lib/utils";
 import type {
   FinanceActionOutcome,
   FinanceCandidate,
@@ -463,7 +464,7 @@ export function ApprovalQueue({
     const actionKey = `${c.id}:${action}`;
     let idem = keysRef.current.get(actionKey);
     if (!idem) {
-      idem = crypto.randomUUID();
+      idem = randomId();
       keysRef.current.set(actionKey, idem);
     }
     setBusyKey(actionKey);

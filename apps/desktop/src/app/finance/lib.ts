@@ -26,12 +26,32 @@ const idempotencyKeys = new Map<string, string>()
 const intentKey = (candidateId: string, action: string, edits?: object): string =>
   `${candidateId}:${action}:${edits ? JSON.stringify(edits) : ''}`
 
+/**
+ * A random id that also works on NON-secure origins. `crypto.randomUUID` only
+ * exists in a secure context (HTTPS/localhost); over plain http://<host> it is
+ * undefined and throws, breaking every draft/approval action. Fall back to
+ * getRandomValues (a v4 UUID) then to time+random (uniqueness, not CSPRNG).
+ */
+export function randomId(): string {
+  if (typeof crypto !== 'undefined') {
+    if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+    if (typeof crypto.getRandomValues === 'function') {
+      const b = crypto.getRandomValues(new Uint8Array(16))
+      b[6] = (b[6] & 0x0f) | 0x40
+      b[8] = (b[8] & 0x3f) | 0x80
+      const h = Array.from(b, x => x.toString(16).padStart(2, '0')).join('')
+      return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+    }
+  }
+  return `id-${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`
+}
+
 export function idempotencyKeyFor(candidateId: string, action: string, edits?: object): string {
   const key = intentKey(candidateId, action, edits)
   let value = idempotencyKeys.get(key)
 
   if (!value) {
-    value = crypto.randomUUID()
+    value = randomId()
     idempotencyKeys.set(key, value)
   }
 

@@ -76,6 +76,7 @@ import {
   fmtSignedPct,
   fmtTs,
   idempotencyKeyFor,
+  randomId,
   parseFinanceError,
   pnlClass,
   settleIdempotencyKey
@@ -1465,7 +1466,7 @@ function RecordTradeDialog({
         action: 'confirm',
         actor: FINANCE_ACTOR,
         expected_version: draft.version,
-        idempotency_key: crypto.randomUUID()
+        idempotency_key: randomId()
       })
     },
     onError: error_ => notifyError(new Error(parseFinanceError(error_).message), copy.tradeFailed),
