@@ -15,10 +15,12 @@ import pytest
 from swing_trader.instruments import (
     CachedInstrumentSearch,
     CompositeInstrumentProvider,
+    EastmoneyInstrumentProvider,
     InstrumentMatch,
     InstrumentSearchProvider,
     PortfolioInstrumentProvider,
     StaticInstrumentProvider,
+    YFinanceInstrumentProvider,
     normalize_symbol,
 )
 from swing_trader.portfolio import EventSource, EventType, MarketScope, PortfolioEvent, SecurityType
@@ -119,6 +121,53 @@ class TestStaticProvider:
 
     def test_no_match_empty(self, provider):
         assert provider.search("ZZZZZZ") == []
+
+
+class TestLiveProviders:
+    def test_eastmoney_fund_name_and_code_metadata(self):
+        rows = [{
+            "CODE": "015894",
+            "NAME": "平安中证消费电子主题ETF发起式联接A",
+            "CATEGORYDESC": "基金",
+        }]
+        provider = EastmoneyInstrumentProvider(
+            search_fn=lambda _query, _timeout: rows
+        )
+        match = provider.search("消费电子")[0]
+        assert match.canonical_symbol == "015894"
+        assert match.market is MarketScope.CN and match.exchange == "OTC"
+        assert match.currency == "CNY" and match.security_type is SecurityType.FUND
+
+    def test_eastmoney_maps_cn_exchange_instrument(self):
+        rows = [{"CODE": "300750", "NAME": "宁德时代", "CATEGORYDESC": "深市"}]
+        match = EastmoneyInstrumentProvider(
+            search_fn=lambda _q, _t: rows
+        ).search("宁德时代")[0]
+        assert match.canonical_symbol == "300750.SZ"
+        assert match.exchange == "SZSE" and match.security_type is SecurityType.STOCK
+
+    def test_yfinance_filters_to_supported_markets(self):
+        rows = [
+            {"symbol": "NVDA", "exchange": "NMS", "quoteType": "EQUITY",
+             "longname": "NVIDIA Corporation", "exchDisp": "NASDAQ"},
+            {"symbol": "0700.HK", "exchange": "HKG", "quoteType": "EQUITY",
+             "longname": "Tencent Holdings"},
+            {"symbol": "APC.F", "exchange": "FRA", "quoteType": "EQUITY",
+             "longname": "Apple Frankfurt"},
+        ]
+        provider = YFinanceInstrumentProvider(
+            search_fn=lambda _query, _limit, _timeout: rows
+        )
+        matches = provider.search("tech")
+        assert [m.canonical_symbol for m in matches] == ["NVDA", "0700.HK"]
+        assert matches[0].currency == "USD" and matches[1].currency == "HKD"
+
+    def test_live_provider_failure_returns_no_unverified_match(self):
+        def fail(*_args):
+            raise RuntimeError("down")
+
+        assert EastmoneyInstrumentProvider(search_fn=fail).search("x") == []
+        assert YFinanceInstrumentProvider(search_fn=fail).search("x") == []
 
 
 # --------------------------------------------------------------- cache

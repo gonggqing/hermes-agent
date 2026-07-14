@@ -21,7 +21,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-__all__ = ["ParsedTrade", "find_symbol", "looks_like_trade", "parse_trade"]
+__all__ = [
+    "ParsedTrade", "find_symbol", "looks_like_trade", "looks_like_trade_intent",
+    "parse_trade",
+]
 
 # Direction keywords. Bare "code price qty" with no keyword defaults to BUY
 # (recording a new/added position is the common case) and flags an ambiguity.
@@ -59,6 +62,11 @@ class ParsedTrade:
     qty: Optional[float]
     price: Optional[float]
     ambiguities: list = field(default_factory=list)
+    instrument_query: str = ""
+    suggested_symbol: Optional[str] = None
+    account_hint: Optional[str] = None
+    price_kind: Optional[str] = None
+    parser_source: str = "rule"
 
 
 def _infer_cn_suffix(code: str) -> str:
@@ -104,6 +112,19 @@ def looks_like_trade(text: str) -> bool:
     return bool(text) and _QTY.search(text) is not None and _find_symbol(text) is not None
 
 
+def looks_like_trade_intent(text: str) -> bool:
+    """Cheap pre-model gate: explicit buy/sell language plus a share unit.
+
+    Unlike :func:`looks_like_trade`, no ticker is required, so natural new-lot
+    messages such as ``买了英伟达 5 股`` still reach the LLM extractor. This
+    gate only saves irrelevant model calls; it never creates a draft itself.
+    """
+    if not text or _QTY.search(text) is None:
+        return False
+    low = text.lower()
+    return any(word in low for word in (*_BUY, *_SELL))
+
+
 def parse_trade(text: str) -> Optional[ParsedTrade]:
     """Parse a record message, or None if it isn't a trade record.
 
@@ -135,4 +156,5 @@ def parse_trade(text: str) -> Optional[ParsedTrade]:
         event_type=event_type, symbol=symbol, raw_symbol=raw_symbol,
         qty=qty, price=price,
         ambiguities=ambiguities,
+        instrument_query=raw_symbol,
     )

@@ -246,6 +246,14 @@ def test_dm_non_trade_falls_through_to_analysis(tmp_path):
     assert transport.targets == ["55501"]  # analysis reply in the DM
 
 
+def test_dm_trade_extraction_refusal_is_sent_without_card(tmp_path):
+    _, _, _, transport, adapter = _setup(tmp_path, {"gongqing"})
+    adapter.set_trade_recorder(lambda _text: "⚠️ 模型未能可靠解析，未生成草稿")
+    transport.queue.append(_dm("买入一个新票 5股"))
+    adapter.poll(None, NOW)
+    assert transport.sent == [("⚠️ 模型未能可靠解析，未生成草稿", None)]
+
+
 def test_learned_dm_chat_routes_later_api_card(tmp_path):
     _, account, svc, transport, adapter = _setup(tmp_path, {"gongqing"})
     adapter.set_trade_recorder(lambda text: None)

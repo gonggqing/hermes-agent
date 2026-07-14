@@ -446,6 +446,9 @@ class TelegramSurfaceAdapter:
                 logger.exception("finance bot trade recorder failed")
                 rec = None
             if rec is not None:
+                if isinstance(rec, str):
+                    self._transport.send_message(chat_id, rec)
+                    return
                 draft, account_label, ack = rec
                 self.push_draft_card(draft, account_label=account_label,
                                      chat_id=chat_id)

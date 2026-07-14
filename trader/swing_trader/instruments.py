@@ -21,6 +21,7 @@ Shenzhen ``000001.SZ``.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Protocol, runtime_checkable
 
@@ -34,11 +35,13 @@ logger = get_logger(__name__)
 __all__ = [
     "CachedInstrumentSearch",
     "CompositeInstrumentProvider",
+    "EastmoneyInstrumentProvider",
     "InstrumentMatch",
     "InstrumentSearchProvider",
     "InstrumentSearchResult",
     "PortfolioInstrumentProvider",
     "StaticInstrumentProvider",
+    "YFinanceInstrumentProvider",
     "normalize_symbol",
 ]
 
@@ -221,6 +224,177 @@ class StaticInstrumentProvider:
                 scored.append((score, i, seed))  # i keeps catalog order stable
         scored.sort(key=lambda t: (t[0], t[1]))
         return [_seed_to_match(s) for _, _, s in scored[: max(1, limit)]]
+
+
+# ------------------------------------------------------------- live discovery
+
+_EASTMONEY_SEARCH_URL = (
+    "https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx"
+)
+
+
+def _default_eastmoney_search(query: str, timeout: float) -> list[dict]:
+    import urllib.parse
+    import urllib.request
+
+    url = f"{_EASTMONEY_SEARCH_URL}?{urllib.parse.urlencode({'m': 1, 'key': query})}"
+    req = urllib.request.Request(url, headers={"User-Agent": "hermes-finance/0.9"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 fixed host
+        obj = json.loads(resp.read().decode("utf-8", errors="replace"))
+    rows = obj.get("Datas") if isinstance(obj, dict) else None
+    return rows if isinstance(rows, list) else []
+
+
+class EastmoneyInstrumentProvider:
+    """Live Chinese name/code discovery for funds and CN/HK securities.
+
+    The same Eastmoney family already supplies OTC-fund NAVs. Search results
+    are metadata only; a result still has to survive draft validation and a
+    human confirmation before it can affect holdings.
+    """
+
+    def __init__(
+        self,
+        search_fn: Optional[Callable[[str, float], list[dict]]] = None,
+        timeout: float = 8.0,
+    ) -> None:
+        self._search = search_fn or _default_eastmoney_search
+        self._timeout = timeout
+
+    @staticmethod
+    def _row_to_match(row: dict) -> Optional[InstrumentMatch]:
+        code = str(row.get("CODE") or "").strip()
+        name = str(row.get("NAME") or "").strip()
+        desc = str(row.get("CATEGORYDESC") or "").strip()
+        if not code or not name:
+            return None
+        if desc == "基金":
+            if not (code.isdigit() and len(code) == 6):
+                return None
+            return InstrumentMatch(
+                canonical_symbol=code, display_name=name, market=_CN,
+                exchange="OTC", currency="CNY", security_type=SecurityType.FUND,
+            )
+        if desc in {"沪市", "深市"}:
+            if not (code.isdigit() and len(code) == 6):
+                return None
+            market_symbol = normalize_symbol(code, _CN)
+            is_etf = code.startswith(("15", "16", "50", "51", "56", "58", "59"))
+            return InstrumentMatch(
+                canonical_symbol=market_symbol, display_name=name, market=_CN,
+                exchange="SSE" if desc == "沪市" else "SZSE", currency="CNY",
+                security_type=SecurityType.ETF if is_etf else SecurityType.STOCK,
+            )
+        if desc == "港股" and code.isdigit():
+            return InstrumentMatch(
+                canonical_symbol=f"{int(code):04d}.HK", display_name=name,
+                market=_HK, exchange="SEHK", currency="HKD",
+                security_type=SecurityType.STOCK,
+            )
+        if desc == "美股":
+            return InstrumentMatch(
+                canonical_symbol=code.upper(), display_name=name, market=_US,
+                exchange="US", currency="USD", security_type=SecurityType.STOCK,
+            )
+        return None
+
+    def search(
+        self, query: str, *, market: Optional[MarketScope] = None, limit: int = 10
+    ) -> list[InstrumentMatch]:
+        try:
+            rows = self._search(query.strip(), self._timeout)
+        except Exception as exc:  # live discovery failure -> no guessed result
+            logger.warning("eastmoney instrument search failed",
+                           extra={"error": str(exc)[:160]})
+            return []
+        out: list[InstrumentMatch] = []
+        seen: set[str] = set()
+        for row in rows:
+            match = self._row_to_match(row) if isinstance(row, dict) else None
+            if match is None or (market is not None and match.market is not market):
+                continue
+            if match.canonical_symbol not in seen:
+                seen.add(match.canonical_symbol)
+                out.append(match)
+                if len(out) >= max(1, limit):
+                    break
+        return out
+
+
+def _default_yfinance_search(query: str, limit: int, timeout: float) -> list[dict]:
+    import yfinance as yf
+
+    result = yf.Search(
+        query, max_results=limit, news_count=0, lists_count=0,
+        include_cb=False, timeout=timeout, raise_errors=True,
+    )
+    return list(result.quotes or [])
+
+
+class YFinanceInstrumentProvider:
+    """Live US/HK/CN exchange-instrument discovery via Yahoo Search."""
+
+    _US_EXCHANGES = {"NMS", "NYQ", "ASE", "BTS", "PCX", "NGM", "NCM"}
+
+    def __init__(
+        self,
+        search_fn: Optional[Callable[[str, int, float], list[dict]]] = None,
+        timeout: float = 8.0,
+    ) -> None:
+        self._search = search_fn or _default_yfinance_search
+        self._timeout = timeout
+
+    @classmethod
+    def _quote_to_match(cls, quote: dict) -> Optional[InstrumentMatch]:
+        symbol = str(quote.get("symbol") or "").strip().upper()
+        exchange_code = str(quote.get("exchange") or "").strip().upper()
+        if not symbol:
+            return None
+        if symbol.endswith(".HK") or exchange_code == "HKG":
+            market, currency, exchange = _HK, "HKD", "SEHK"
+        elif symbol.endswith((".SS", ".SZ")) or exchange_code in {"SHH", "SHZ"}:
+            market, currency = _CN, "CNY"
+            exchange = "SSE" if symbol.endswith(".SS") or exchange_code == "SHH" else "SZSE"
+        elif exchange_code in cls._US_EXCHANGES and "." not in symbol:
+            market, currency = _US, "USD"
+            exchange = str(quote.get("exchDisp") or exchange_code)
+        else:
+            return None
+        qtype = str(quote.get("quoteType") or "").upper()
+        security_type = (
+            SecurityType.ETF if qtype == "ETF"
+            else SecurityType.FUND if qtype in {"MUTUALFUND", "FUND"}
+            else SecurityType.STOCK
+        )
+        name = str(
+            quote.get("longname") or quote.get("shortname") or symbol
+        ).strip()
+        return InstrumentMatch(
+            canonical_symbol=symbol, display_name=name, market=market,
+            exchange=exchange, currency=currency, security_type=security_type,
+        )
+
+    def search(
+        self, query: str, *, market: Optional[MarketScope] = None, limit: int = 10
+    ) -> list[InstrumentMatch]:
+        try:
+            rows = self._search(query.strip(), max(1, limit), self._timeout)
+        except Exception as exc:  # live discovery failure -> no guessed result
+            logger.warning("yfinance instrument search failed",
+                           extra={"error": str(exc)[:160]})
+            return []
+        out: list[InstrumentMatch] = []
+        seen: set[str] = set()
+        for quote in rows:
+            match = self._quote_to_match(quote) if isinstance(quote, dict) else None
+            if match is None or (market is not None and match.market is not market):
+                continue
+            if match.canonical_symbol not in seen:
+                seen.add(match.canonical_symbol)
+                out.append(match)
+                if len(out) >= max(1, limit):
+                    break
+        return out
 
 
 # ------------------------------------------------------------------ cache

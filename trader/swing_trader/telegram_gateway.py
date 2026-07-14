@@ -333,6 +333,8 @@ def render_draft_card(draft: Any, account_label: str = "") -> str:
         lines.append(" · ".join(detail))
     if account_label:
         lines.append(f"账户：{account_label}")
+    if draft.note:
+        lines.append(f"标的：{draft.note}")
     if draft.occurred_at is not None:
         lines.append(f"日期：{draft.occurred_at.date().isoformat()}")
 

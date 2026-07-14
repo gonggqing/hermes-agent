@@ -24,7 +24,7 @@ from swing_trader.schemas import Direction, Signal
 
 logger = get_logger(__name__)
 
-__all__ = ["LLMAnalyst", "LLMSettings", "llm_settings_from_env"]
+__all__ = ["LLMAnalyst", "LLMSettings", "http_complete", "llm_settings_from_env"]
 
 _PROVIDER_DEFAULTS = {
     # provider: (base_url, model, api-key env var)
@@ -90,7 +90,13 @@ def llm_settings_from_env(
     return None
 
 
-def _http_complete(settings: LLMSettings, system: str, prompt: str) -> str:
+def http_complete(settings: LLMSettings, system: str, prompt: str) -> str:
+    """One stateless OpenAI-compatible completion.
+
+    Shared by the analysis voice and narrow structured extractors. Keeping it
+    stateless avoids coupling Finance utility calls to Hermes conversation
+    history or prompt caching.
+    """
     import requests
 
     resp = requests.post(
@@ -122,7 +128,7 @@ class LLMAnalyst:
         complete: Optional[Callable[[LLMSettings, str, str], str]] = None,
     ) -> None:
         self.settings = settings
-        self._complete = complete or _http_complete
+        self._complete = complete or http_complete
 
     def analyze(
         self,

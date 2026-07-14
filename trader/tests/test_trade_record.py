@@ -11,10 +11,13 @@ from datetime import datetime, timezone
 
 import pytest
 
+from swing_trader.instruments import CachedInstrumentSearch, StaticInstrumentProvider
+from swing_trader.llm import LLMSettings
 from swing_trader.portfolio import EventType, MarketScope
 from swing_trader.portfolio_draft import PortfolioDraftService
 from swing_trader.portfolio_journal import PortfolioJournal
 from swing_trader.trade_record import make_trade_recorder
+from swing_trader.trade_llm import LLMTradeExtractor
 
 NOW = datetime(2026, 7, 14, 9, 0, tzinfo=timezone.utc)
 
@@ -110,3 +113,65 @@ def test_non_trade_message_returns_none(env):
     record, _, _, _ = env
     assert record("分析一下 159813 走势") is None
     assert record("159813 现在多少钱") is None
+
+
+def test_llm_name_only_new_position_resolves_search_metadata(tmp_path):
+    journal = PortfolioJournal(url=f"sqlite:///{tmp_path/'new.db'}")
+    account = journal.create_account(
+        name="IBKR", market_scope="US", base_currency="USD", provider="ibkr"
+    )
+    drafts = PortfolioDraftService(journal, clock=lambda: NOW)
+    rt = _RT(journal, drafts)
+    rt.instrument_search = CachedInstrumentSearch(StaticInstrumentProvider())
+
+    def complete(_settings, _system, _prompt):
+        return (
+            '{"is_trade":true,"action":"buy","instrument_query":"英伟达",'
+            '"suggested_symbol":"NVDA","quantity":5,"price":180.25,'
+            '"price_kind":"trade","account_hint":"IBKR"}'
+        )
+
+    settings = LLMSettings(base_url="https://x", model="fast", api_key="k")
+    record = make_trade_recorder(
+        rt, extractor=LLMTradeExtractor(settings, complete=complete), require_llm=True
+    )
+
+    draft, label, ack = record("IBKR 以180.25美元买入英伟达5股")
+    assert draft.account_id == account.id and label == "IBKR"
+    assert draft.symbol == "NVDA" and draft.market is MarketScope.US
+    assert draft.currency == "USD" and draft.qty == 5 and draft.price == 180.25
+    assert "NVIDIA Corp" in draft.note and "llm:fast" in draft.note
+    assert "NVDA（NVIDIA Corp）" in ack
+    assert not draft.needs_clarification
+
+
+def test_llm_unknown_instrument_returns_clarification_without_draft(tmp_path):
+    journal = PortfolioJournal(url=f"sqlite:///{tmp_path/'unknown.db'}")
+    journal.create_account(name="IBKR", market_scope="US", base_currency="USD")
+    drafts = PortfolioDraftService(journal, clock=lambda: NOW)
+    rt = _RT(journal, drafts)
+    rt.instrument_search = CachedInstrumentSearch(StaticInstrumentProvider())
+
+    class _Extractor:
+        settings = type("Settings", (), {"model": "fast"})()
+
+        @staticmethod
+        def extract(_text):
+            from swing_trader.trade_llm import ExtractedTrade
+
+            return ExtractedTrade("buy", "不存在公司", "ZZZZZ", 1, 10)
+
+    record = make_trade_recorder(rt, extractor=_Extractor(), require_llm=True)
+    reply = record("买入不存在公司1股，成交价10")
+    assert isinstance(reply, str) and "没查到" in reply and "未生成草稿" in reply
+    assert journal.list_drafts() == []
+
+
+def test_required_llm_missing_refuses_rule_fallback(env):
+    _, journal, _, _ = env
+    before = len(journal.list_drafts())
+    # Rebuild a recorder over the same runtime pieces but require the model.
+    rt = _RT(journal, PortfolioDraftService(journal, clock=lambda: NOW))
+    reply = make_trade_recorder(rt, require_llm=True)("卖出 159813 1股 @1.9")
+    assert isinstance(reply, str) and "模型未配置" in reply
+    assert len(journal.list_drafts()) == before

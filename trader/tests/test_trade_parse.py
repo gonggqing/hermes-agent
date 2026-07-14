@@ -6,7 +6,11 @@ parser aims for the common cases and flags anything it's unsure about.
 
 from __future__ import annotations
 
-from swing_trader.trade_parse import looks_like_trade, parse_trade
+from swing_trader.trade_parse import (
+    looks_like_trade,
+    looks_like_trade_intent,
+    parse_trade,
+)
 
 
 def test_buy_with_chengjiaojia():
@@ -77,3 +81,8 @@ def test_analysis_messages_are_not_trades():
 def test_looks_like_trade_gate():
     assert looks_like_trade("卖了 159813 200股 @1.893") is True
     assert looks_like_trade("159813 怎么样") is False  # no share quantity
+
+
+def test_llm_intent_gate_allows_name_only_new_position():
+    assert looks_like_trade_intent("IBKR 以180美元买入英伟达 5股") is True
+    assert looks_like_trade_intent("分析英伟达") is False

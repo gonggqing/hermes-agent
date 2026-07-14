@@ -190,13 +190,17 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     from swing_trader.instruments import (
         CachedInstrumentSearch,
         CompositeInstrumentProvider,
+        EastmoneyInstrumentProvider,
         PortfolioInstrumentProvider,
         StaticInstrumentProvider,
+        YFinanceInstrumentProvider,
     )
 
     runtime.instrument_search = CachedInstrumentSearch(CompositeInstrumentProvider([
         StaticInstrumentProvider(),
         PortfolioInstrumentProvider(runtime.portfolio),
+        YFinanceInstrumentProvider(),
+        EastmoneyInstrumentProvider(),
     ]))
     # 场外基金 NAV (Loop.md P0.9 #41): real net-asset-value for open-end funds so
     # they can be valued (market value + P&L) instead of showing 未知.
@@ -325,8 +329,29 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         # a DM trade message ("卖了 159813 200股 @1.893") → draft → confirm card
         # in the DM. Analysis DMs still fall through to _finance_responder above.
         from swing_trader.trade_record import make_trade_recorder
+        from swing_trader.trade_llm import LLMTradeExtractor
 
-        telegram.set_trade_recorder(make_trade_recorder(runtime))
+        if llm_settings:
+            from dataclasses import replace
+
+            # Reasoning-capable high-speed models may spend several seconds in
+            # <think> before their small JSON answer. This is a stateless,
+            # infrequent human DM path; give it enough room and retry once.
+            trade_settings = replace(
+                llm_settings, timeout=max(30.0, llm_settings.timeout)
+            )
+            trade_extractor = LLMTradeExtractor(trade_settings, attempts=2)
+        else:
+            trade_extractor = None
+        if trade_extractor is None:
+            logger.warning(
+                "finance trade extraction disabled: no high-speed LLM configured"
+            )
+        telegram.set_trade_recorder(
+            make_trade_recorder(
+                runtime, extractor=trade_extractor, require_llm=True
+            )
+        )
 
         # DM "/" command menu (/持仓 /研究 /记账 /帮助) + update-holdings:
         # 改名/现价 apply immediately (display override / manual mark); 成本/数量/
