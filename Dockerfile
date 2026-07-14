@@ -200,7 +200,13 @@ RUN cd web && npm run build && \
 # swing_trader package itself is imported at runtime via PYTHONPATH=trader
 # (python -m), so no editable install is needed here.
 COPY trader/pyproject.toml trader/uv.lock trader/
-RUN cd trader && uv sync --frozen --no-install-project
+# `service` = fastapi+uvicorn (the serve HTTP API), `knowledge` = qdrant-client
+# (embedded vector store), `ibkr` = ib_async (Phase-1 live broker, imported
+# lazily). These are optional-dependencies in trader/pyproject.toml — the serve
+# command needs service+knowledge at startup, so they must be installed here.
+# `dev` (pytest/ruff) is deliberately excluded from the runtime image.
+RUN cd trader && uv sync --frozen --no-install-project \
+    --extra service --extra knowledge --extra ibkr
 
 # ---------- Source code ----------
 # .dockerignore excludes node_modules, so the installs above survive.

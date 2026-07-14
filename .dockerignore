@@ -26,6 +26,13 @@ node_modules
 .notebooklm-cli-venv/
 .notebooklm-playwright/
 .pip-cache/
+
+# Frontend build artifact — the image builds it itself inside the Dockerfile
+# (`RUN cd web && npm run build` → hermes_cli/web_dist). Excluding it here keeps
+# the image self-contained and reproducible: without this, `COPY . .` copied a
+# stale HOST web_dist OVER the freshly-built one, so the container served
+# whatever bundle the host last built rather than the committed source.
+hermes_cli/web_dist
 .uv-cache/
 
 # Built artifacts that are regenerated inside the image.  Excluded so local
