@@ -466,6 +466,9 @@ function MarketStrip({
             <Badge tone={regimeTone(market.risk_on_off)}>
               {market.risk_on_off ?? "—"}
             </Badge>
+            {market.source === "research_brief" && (
+              <Badge tone="outline">{ft.market.persistedBrief}</Badge>
+            )}
             <span className="text-muted-foreground">
               {ft.market.vix}{" "}
               <span className="text-foreground">

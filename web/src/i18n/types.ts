@@ -257,6 +257,7 @@ export interface FinanceTranslations {
     vix: string;
     breadth: string;
     asOf: string; // "as of {time}"
+    persistedBrief: string;
     noSnapshot: string;
   };
   reports: {

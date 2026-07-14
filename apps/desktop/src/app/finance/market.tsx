@@ -63,7 +63,12 @@ export function FinanceMarketTab({ enabled, query }: { enabled: boolean; query: 
   return (
     <div className="space-y-5">
       <section className="space-y-2">
-        <FinanceSectionLabel>{copy.regimeTitle}</FinanceSectionLabel>
+        <div className="flex flex-wrap items-center gap-2">
+          <FinanceSectionLabel>{copy.regimeTitle}</FinanceSectionLabel>
+          {market?.source === 'research_brief' ? (
+            <FinancePill variant="outline">{copy.persistedBrief}</FinancePill>
+          ) : null}
+        </div>
         <QuerySection
           empty={copy.regimeEmpty}
           error={marketQuery.isError ? marketQuery.error : undefined}

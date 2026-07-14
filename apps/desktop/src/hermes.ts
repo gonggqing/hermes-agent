@@ -1367,6 +1367,7 @@ export interface FinanceMarketSnapshot {
   // `{"status": "no snapshot yet"}` before the loop's first market poll.
   status?: string
   ts?: string
+  source?: 'research_brief' | 'runtime'
   indices?: Record<string, Record<string, null | number>>
   vix?: null | number
   breadth_pct_above_50dma?: number

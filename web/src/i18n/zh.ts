@@ -830,7 +830,8 @@ export const zh: Translations = {
       vix: "VIX",
       breadth: "50日均线上方广度",
       asOf: "截至 {time}",
-      noSnapshot: "暂无市场快照 —— 每日循环运行时 MarketMonitor 会发布。",
+      persistedBrief: "研报快照",
+      noSnapshot: "暂无可用市场快照——当前既无实时轮询，也无可恢复的持久化研报状态。",
     },
     reports: {
       title: "最新报告",
@@ -851,7 +852,7 @@ export const zh: Translations = {
       marketJapan: "日本",
       comingSoon: "0.9 阶段",
       perRegionNote:
-        "中国与香港由同一份中国简报拆分；市场状态、新闻与主题为两地共享。分地区独立简报属于 0.9 阶段的后续优化。",
+        "中国与香港目前由同一份中国简报拆分，市场状态、新闻与主题为两地共享；独立地区研报计划在 0.95 阶段完成。",
       selectDesk: "研究面板",
       runResearch: "更新研究",
       runningResearch: "更新中…",

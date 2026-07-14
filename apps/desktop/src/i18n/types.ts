@@ -1385,6 +1385,7 @@ export interface Translations {
     market: {
       regimeTitle: string
       regimeEmpty: string
+      persistedBrief: string
       regime: string
       vix: string
       breadth: string

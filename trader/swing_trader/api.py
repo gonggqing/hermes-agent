@@ -357,9 +357,62 @@ def create_app(runtime: FinanceRuntime):
         rows = runtime.ledger.get_snapshots(_mode(mode))
         return [s.model_dump(mode="json") for s in rows[-limit:]]
 
+    def _archived_brief(market_key: str) -> Optional[dict]:
+        """Best-effort restart fallback; never turn a readable API into 500."""
+        store = runtime.brief_store
+        if store is None:
+            return None
+        try:
+            return store.get_latest(market_key)
+        except Exception:  # noqa: BLE001 — corrupt archive degrades honestly
+            logger.warning(
+                "latest brief archive read failed", extra={"market": market_key}
+            )
+            return None
+
+    def _market_from_brief(brief: object) -> Optional[dict]:
+        """Map a persisted US research brief back to the market-card shape.
+
+        A brief's regime is a durable snapshot, not a live quote.  Preserve its
+        original timestamp and provenance so clients cannot mistake this
+        restart fallback for a fresh MarketMonitor poll.
+        """
+        if not isinstance(brief, dict):
+            return None
+        regime = brief.get("regime")
+        if not isinstance(regime, dict) or not regime:
+            return None
+
+        payload = dict(regime)
+        freshness = brief.get("freshness")
+        market_as_of = (
+            freshness.get("market_as_of") if isinstance(freshness, dict) else None
+        )
+        ts = market_as_of or brief.get("as_of")
+        if ts:
+            payload["ts"] = ts
+        payload["source"] = "research_brief"
+        return payload
+
     @app.get(f"/{API_VERSION}/market")
     def market() -> dict:
-        return runtime.market or {"status": "no snapshot yet"}
+        if runtime.market:
+            payload = dict(runtime.market)
+            payload.setdefault("source", "runtime")
+            return payload
+
+        payload = _market_from_brief(runtime.latest_brief)
+        if payload:
+            return payload
+
+        # A degraded/incomplete in-memory brief must not mask the last usable
+        # archived regime after a restart.
+        archived = _archived_brief("us")
+        payload = _market_from_brief(archived)
+        if payload:
+            runtime.latest_brief = archived
+            return payload
+        return {"status": "no snapshot yet"}
 
     @app.get(f"/{API_VERSION}/watchlist")
     def get_watchlist() -> list[dict]:
@@ -375,19 +428,6 @@ def create_app(runtime: FinanceRuntime):
         "cn": ("Asia/Shanghai", "China / HK"),
         "kr": ("Asia/Seoul", "Korea semiconductors"),
     }
-
-    def _archived_brief(market_key: str) -> Optional[dict]:
-        """Best-effort restart fallback; never turn a readable API into 500."""
-        store = runtime.brief_store
-        if store is None:
-            return None
-        try:
-            return store.get_latest(market_key)
-        except Exception:  # noqa: BLE001 — corrupt archive degrades honestly
-            logger.warning(
-                "latest brief archive read failed", extra={"market": market_key}
-            )
-            return None
 
     @app.get(f"/{API_VERSION}/research/brief")
     def research_brief(market: Optional[str] = Query(default=None)) -> dict:

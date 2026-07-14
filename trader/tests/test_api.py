@@ -133,10 +133,71 @@ class TestReads:
 
     def test_market_watchlist_reports(self, env):
         _, _, _, client = env
-        assert client.get("/v1/market").json()["vix"] == 18.5
+        market = client.get("/v1/market").json()
+        assert market["vix"] == 18.5
+        assert market["source"] == "runtime"
         wl = client.get("/v1/watchlist").json()
         assert any(i["symbol"] == "NVDA" for i in wl)
         assert client.get("/v1/reports/latest").json()["morning"] == "all quiet"
+
+    def test_market_prefers_runtime_over_research_brief(self, env):
+        _, _, runtime, client = env
+        runtime.latest_brief = {
+            "as_of": "2026-07-12T15:00:00Z",
+            "regime": {"risk_on_off": "risk_off", "vix": 99.0},
+        }
+
+        body = client.get("/v1/market").json()
+        assert body["vix"] == 18.5
+        assert body["source"] == "runtime"
+
+    def test_market_falls_back_to_latest_in_memory_brief(self, env):
+        _, _, runtime, client = env
+        runtime.market = {}
+        runtime.latest_brief = {
+            "as_of": "2026-07-14T15:00:00Z",
+            "freshness": {"market_as_of": "2026-07-14T14:55:00Z"},
+            "regime": {
+                "risk_on_off": "risk_on",
+                "vix": 16.4,
+                "breadth_pct_above_50dma": 56.7,
+                "indices": {"SPY": {"last": 620.0}},
+            },
+        }
+
+        body = client.get("/v1/market").json()
+        assert body["risk_on_off"] == "risk_on"
+        assert body["vix"] == 16.4
+        assert body["ts"] == "2026-07-14T14:55:00Z"
+        assert body["source"] == "research_brief"
+
+    def test_market_restores_latest_brief_from_archive(self, env, tmp_path):
+        from swing_trader.brief_store import BriefStore
+
+        _, _, runtime, client = env
+        runtime.market = {}
+        runtime.latest_brief = {"as_of": "2026-07-14T15:00:00Z"}
+        runtime.brief_store = BriefStore(url=f"sqlite:///{tmp_path/'market.db'}")
+        runtime.brief_store.save("us", {
+            "as_of": "2026-07-13T15:00:00Z",
+            "trading_date": "2026-07-13",
+            "regime": {"risk_on_off": "neutral", "vix": 17.2},
+        })
+
+        body = client.get("/v1/market").json()
+        assert body == {
+            "risk_on_off": "neutral",
+            "vix": 17.2,
+            "ts": "2026-07-13T15:00:00Z",
+            "source": "research_brief",
+        }
+        assert runtime.latest_brief["trading_date"] == "2026-07-13"
+
+    def test_market_ignores_brief_without_regime(self, env):
+        _, _, runtime, client = env
+        runtime.market = {}
+        runtime.latest_brief = {"as_of": "2026-07-14T15:00:00Z"}
+        assert client.get("/v1/market").json() == {"status": "no snapshot yet"}
 
     def test_empty_collections(self, env):
         _, _, _, client = env

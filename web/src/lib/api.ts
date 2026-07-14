@@ -3132,6 +3132,7 @@ export interface FinanceTrade {
 /** Latest MarketSnapshot dump, or ``{status: "no snapshot yet"}``. */
 export interface FinanceMarketSnapshot {
   ts?: string;
+  source?: "runtime" | "research_brief";
   risk_on_off?: "risk_on" | "neutral" | "risk_off";
   vix?: number | null;
   breadth_pct_above_50dma?: number;

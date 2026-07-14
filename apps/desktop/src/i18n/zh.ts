@@ -1831,7 +1831,8 @@ export const zh: Translations = {
     },
     market: {
       regimeTitle: '市场状态',
-      regimeEmpty: '暂无市场快照 — 循环在当天首次市场轮询后发布。',
+      regimeEmpty: '暂无实时轮询或可恢复的持久化研报状态。',
+      persistedBrief: '研报快照',
       regime: '状态',
       vix: 'VIX',
       breadth: '广度 > 50 日均线',

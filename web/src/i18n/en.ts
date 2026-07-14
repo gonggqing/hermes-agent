@@ -244,8 +244,9 @@ export const financeEn: FinanceTranslations = {
     vix: "VIX",
     breadth: "Breadth >50dma",
     asOf: "as of {time}",
+    persistedBrief: "Research brief snapshot",
     noSnapshot:
-      "No market snapshot yet — the MarketMonitor publishes one while the daily loop runs.",
+      "No market snapshot is available — neither a live poll nor a persisted research regime has been published yet.",
   },
   reports: {
     title: "Latest report",
@@ -267,7 +268,7 @@ export const financeEn: FinanceTranslations = {
     marketJapan: "Japan",
     comingSoon: "Phase 0.9",
     perRegionNote:
-      "China and Hong Kong are partitioned from one shared CN brief; regime, news and themes are shared. Per-region briefs are a Phase 0.9 refinement.",
+      "China and Hong Kong are partitioned from one shared CN brief; regime, news and themes are shared. Independent regional briefs are planned for Phase 0.95.",
     selectDesk: "Research desk",
     runResearch: "Update research",
     runningResearch: "Running…",

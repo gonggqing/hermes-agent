@@ -1659,7 +1659,8 @@ export const en: Translations = {
     },
     market: {
       regimeTitle: 'Market regime',
-      regimeEmpty: 'No market snapshot yet — the loop publishes one after its first market poll of the day.',
+      regimeEmpty: 'No live poll or persisted research-regime snapshot is available yet.',
+      persistedBrief: 'Research brief snapshot',
       regime: 'Regime',
       vix: 'VIX',
       breadth: 'Breadth > 50DMA',
