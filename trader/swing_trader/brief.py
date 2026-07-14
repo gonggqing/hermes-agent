@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from swing_trader import watchlist
 from swing_trader.instrument_names import name_for
+from swing_trader.discovery import DiscoveryPool
 from swing_trader.ledger import Ledger, TradeStats
 from swing_trader.log import get_logger
 from swing_trader.monitors import (
@@ -297,6 +298,9 @@ class ResearchBrief(BaseModel):
     news: NewsSection = Field(default_factory=NewsSection)
     signals_today: list[SignalView] = Field(default_factory=list)
     candidates_today: CandidatesToday = Field(default_factory=CandidatesToday)
+    # Phase 0.95: research-only symbols discovered outside the static
+    # watchlist. This object deliberately contains no order/candidate state.
+    discovery: Optional[DiscoveryPool] = None
     uncertainty: list[str] = Field(default_factory=list)
     provenance: list[ProvenanceLink] = Field(default_factory=list)
 
@@ -673,6 +677,7 @@ def build_research_brief(
     include_account: bool = True,
     extra_uncertainty: Optional[list[str]] = None,
     earnings: Optional[list] = None,
+    discovery: Optional[DiscoveryPool] = None,
 ) -> ResearchBrief:
     """Build the daily Investment Research brief (Loop.md §7 Phase 0.5).
 
@@ -800,6 +805,7 @@ def build_research_brief(
         news=news_section,
         signals_today=signal_views,
         candidates_today=candidates_view,
+        discovery=discovery,
         uncertainty=unknowns,
         provenance=_build_provenance(news_section.items),
     )

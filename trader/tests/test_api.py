@@ -242,6 +242,33 @@ class TestReads:
         assert client.get("/v1/research/brief",
                           params={"market": "cn"}).json()["marker"] == "cn-legacy"
 
+    def test_cn_and_hk_briefs_stay_independent_and_include_synthesis(self, env):
+        _, _, runtime, client = env
+        runtime.latest_briefs["cn"] = {
+            "marker": "cn", "as_of": "2026-07-15T03:00:00Z",
+            "trading_date": "2026-07-15", "freshness": {"status": "fresh"},
+            "regime": {"risk_on_off": "risk_off"},
+        }
+        runtime.latest_briefs["hk"] = {
+            "marker": "hk", "as_of": "2026-07-15T03:00:00Z",
+            "trading_date": "2026-07-15", "freshness": {"status": "stale"},
+            "regime": {"risk_on_off": "risk_on"},
+        }
+        cn = client.get("/v1/research/brief", params={"market": "cn"}).json()
+        hk = client.get("/v1/research/brief", params={"market": "hk"}).json()
+        assert cn["marker"] == "cn" and hk["marker"] == "hk"
+        synth = hk["cross_market_synthesis"]
+        assert synth["markets"]["cn"]["regime"] == "risk_off"
+        assert synth["markets"]["hk"]["regime"] == "risk_on"
+
+    def test_research_synthesis_endpoint_degrades_without_hk(self, env):
+        _, _, runtime, client = env
+        runtime.latest_briefs["cn"] = {"trading_date": "2026-07-15"}
+        body = client.get("/v1/research/synthesis").json()
+        assert body["status"] == "degraded"
+        assert body["markets"]["cn"]["available"] is True
+        assert body["markets"]["hk"]["available"] is False
+
     def test_research_brief_restores_market_from_archive(self, env, tmp_path):
         from swing_trader.brief_store import BriefStore
 

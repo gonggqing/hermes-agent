@@ -26,9 +26,11 @@ from swing_trader.schemas import AiPhase, Role
 from swing_trader.watchlist import WatchlistItem
 
 __all__ = [
+    "CN_MAINLAND_UNIVERSE",
     "CN_UNIVERSE",
     "CnWatchlist",
     "build_cn_watchlist",
+    "build_mainland_watchlist",
 ]
 
 
@@ -67,6 +69,13 @@ CN_UNIVERSE: list[WatchlistItem] = [
 
 #: HK/China index symbols shown as regime context in the CN brief.
 CN_INDEX_SYMBOLS: tuple[str, ...] = ("^HSI", "^HSCE")
+
+# Phase 0.95 keeps the legacy mixed universe above for API compatibility, but
+# production CN and HK sessions consume disjoint views.
+CN_MAINLAND_UNIVERSE: list[WatchlistItem] = [
+    item for item in CN_UNIVERSE if item.symbol.endswith((".SS", ".SZ"))
+]
+CN_MAINLAND_INDEX_SYMBOLS: tuple[str, ...] = ("000001.SS", "399001.SZ")
 
 
 @dataclass(frozen=True)
@@ -118,3 +127,21 @@ def build_cn_watchlist(override: str = "") -> CnWatchlist:
         return by_symbol.get(_norm(symbol))
 
     return CnWatchlist(items=items, lookup=lookup)
+
+
+def build_mainland_watchlist(override: str = "") -> CnWatchlist:
+    """Resolve a mainland-only universe; reject HK suffixes from overrides."""
+    known = {_norm(i.symbol): i for i in CN_MAINLAND_UNIVERSE}
+    raw_symbols = [s for s in override.split(",") if s.strip()] if override.strip() else []
+    items = []
+    for raw in raw_symbols:
+        sym = _norm(raw)
+        if not sym.endswith((".SS", ".SZ")):
+            continue
+        items.append(known.get(sym) or WatchlistItem(
+            symbol=sym, theme="cn-custom", ai_phase=AiPhase.NONE, role=Role.ROTATION
+        ))
+    if not override.strip():
+        items = list(CN_MAINLAND_UNIVERSE)
+    by_symbol = {_norm(i.symbol): i for i in items}
+    return CnWatchlist(items=items, lookup=lambda symbol: by_symbol.get(_norm(symbol)))

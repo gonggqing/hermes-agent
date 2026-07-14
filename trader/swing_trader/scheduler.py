@@ -43,11 +43,15 @@ logger = get_logger(__name__)
 
 __all__ = [
     "CN_HK_HOLIDAYS_2026",
+    "CN_HOLIDAYS_2026",
     "CN_SCHEDULE",
     "ET",
     "EVENT_TIMES_ET",
     "KR_HOLIDAYS_2026",
     "KR_SCHEDULE",
+    "HK_HOLIDAYS_2026",
+    "HK_SCHEDULE",
+    "HONG_KONG",
     "SEOUL",
     "SHANGHAI",
     "US_SCHEDULE",
@@ -65,6 +69,7 @@ __all__ = [
 ET = ZoneInfo("America/New_York")
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 SEOUL = ZoneInfo("Asia/Seoul")
+HONG_KONG = ZoneInfo("Asia/Hong_Kong")
 UTC = timezone.utc
 
 # --------------------------------------------------------------------- events
@@ -211,12 +216,34 @@ CN_HK_HOLIDAYS_2026: frozenset[date] = frozenset(
     }
 )
 
+CN_HOLIDAYS_2026: frozenset[date] = frozenset(
+    day for day in CN_HK_HOLIDAYS_2026
+    if day not in {
+        date(2026, 4, 3), date(2026, 5, 25), date(2026, 12, 25)
+    }
+)
+
+HK_HOLIDAYS_2026: frozenset[date] = frozenset({
+    date(2026, 1, 1), date(2026, 2, 17), date(2026, 2, 18),
+    date(2026, 2, 19), date(2026, 4, 3), date(2026, 4, 6),
+    date(2026, 4, 7), date(2026, 5, 1), date(2026, 5, 25),
+    date(2026, 6, 19), date(2026, 7, 1), date(2026, 10, 1),
+    date(2026, 10, 19), date(2026, 12, 25), date(2026, 12, 28),
+})
+
 #: CN morning research session schedule.
 CN_SCHEDULE = SessionSchedule(
     market_id="CN",
     tz=SHANGHAI,
     event_times=CN_EVENT_TIMES_LOCAL,
-    holidays=CN_HK_HOLIDAYS_2026,
+    holidays=CN_HOLIDAYS_2026,
+)
+
+HK_SCHEDULE = SessionSchedule(
+    market_id="HK",
+    tz=HONG_KONG,
+    event_times=CN_EVENT_TIMES_LOCAL,
+    holidays=HK_HOLIDAYS_2026,
 )
 
 #: KR (KRX) research session (Asia/Seoul): monitor at the open (09:30 KST),

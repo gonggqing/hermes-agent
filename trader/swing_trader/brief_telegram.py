@@ -25,6 +25,7 @@ _TOP_MOVERS = 4
 _TOP_THEMES = 3
 _TOP_NEWS = 4
 _TOP_SIGNALS = 4
+_TOP_DISCOVERY = 3
 _MAX_WARNINGS = 3
 
 _L = {
@@ -39,6 +40,7 @@ _L = {
         "themes": "主题",
         "news": "新闻",
         "signals": "信号",
+        "discovery": "新机会发现",
         "notes": "提示",
         "none": "无",
         "source": "数据源",
@@ -55,6 +57,7 @@ _L = {
         "themes": "Themes",
         "news": "News",
         "signals": "Signals",
+        "discovery": "New opportunities",
         "notes": "Notes",
         "none": "none",
         "source": "Source",
@@ -123,6 +126,13 @@ def render_research_brief(
             for th in brief.themes[:_TOP_THEMES]
         ]
         lines.append(f"{t['themes']}: " + " | ".join(parts))
+
+    if brief.discovery is not None and brief.discovery.candidates:
+        parts = [
+            f"#{row.rank} {row.symbol} {row.score:.0f} ({row.theme})"
+            for row in brief.discovery.candidates[:_TOP_DISCOVERY]
+        ]
+        lines.append(f"{t['discovery']}: " + " | ".join(parts))
 
     news_items = brief.news.items[:_TOP_NEWS]
     if news_items:

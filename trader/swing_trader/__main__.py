@@ -26,7 +26,7 @@ def _runtime_brief(runtime, market: str):
     return runtime.latest_brief if key == "us" else runtime.latest_briefs.get(key)
 
 
-def _restore_latest_briefs(runtime, markets=("us", "cn", "kr")) -> list[str]:
+def _restore_latest_briefs(runtime, markets=("us", "cn", "hk", "kr")) -> list[str]:
     """Hydrate volatile FinanceRuntime slots from the durable brief archive."""
     store = getattr(runtime, "brief_store", None)
     restored: list[str] = []
@@ -455,6 +455,45 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
         telegram.set_update_handler(_update_handler)
         telegram.register_commands(COMMAND_MENU)
+    from swing_trader.discovery import (
+        CompositeDiscoveryUniverse,
+        DiscoveryTheme,
+        JsonDiscoveryUniverse,
+        KnowledgeDiscoveryUniverse,
+        MarketDiscoveryScanner,
+    )
+
+    discovery_universe = CompositeDiscoveryUniverse([
+        JsonDiscoveryUniverse(
+            _DbPath(args.db or settings.db_path).parent / "discovery-seeds.json"
+        ),
+        KnowledgeDiscoveryUniverse(
+            knowledge,
+            runtime.instrument_search,
+            themes=[
+                DiscoveryTheme(
+                    name="robotics-and-embodied-ai",
+                    query="robotics embodied AI supply chain technical barrier orders capex",
+                ),
+                DiscoveryTheme(
+                    name="ai-infrastructure",
+                    query="AI infrastructure supply chain bottleneck capacity capex orders",
+                ),
+                DiscoveryTheme(
+                    name="power-and-cooling",
+                    query="data center power cooling grid supply chain capacity orders",
+                ),
+                DiscoveryTheme(
+                    name="semiconductor-enablers",
+                    query="semiconductor equipment materials packaging supply chain technical barrier",
+                ),
+                DiscoveryTheme(
+                    name="biotechnology-platforms",
+                    query="biotechnology platform manufacturing supply chain clinical catalyst moat",
+                ),
+            ],
+        ),
+    ])
     loop = DailyLoop(
         feed, broker, ledger, mode=settings.mode,
         live_orders_allowed=settings.live_orders_allowed,
@@ -464,6 +503,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         llm_analyst=llm_analyst,
         knowledge=knowledge, knowledge_index=knowledge_index,
         kill_switch=kill_switch,  # Phase 0.95 manual HALT
+        discovery_scanner=MarketDiscoveryScanner(
+            feed, discovery_universe,
+            benchmark_symbol="SPY", min_adv=5_000_000,
+            clock=runtime.clock,
+        ),
     )
     if rehydration.performed:
         loop.execution.seed_synced_fills(rehydration.fill_ids)
@@ -486,20 +530,24 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     if settings.cn_session_enabled:
         from zoneinfo import ZoneInfo
 
-        from swing_trader.cn_watchlist import CN_INDEX_SYMBOLS, build_cn_watchlist
+        from swing_trader.cn_watchlist import (
+            CN_MAINLAND_INDEX_SYMBOLS,
+            build_mainland_watchlist,
+        )
         from swing_trader.research_session import ResearchSession
         from swing_trader.scheduler import CN_SCHEDULE
 
-        cn_wl = build_cn_watchlist(settings.cn_symbols)
+        cn_wl = build_mainland_watchlist(settings.cn_symbols)
+        cn_feed = RetryingFeed(YFinanceFeed())
         cn_session = ResearchSession(
             market_id="CN",
-            market_label="China / HK",
-            feed=RetryingFeed(YFinanceFeed()),
+            market_label="Mainland China",
+            feed=cn_feed,
             ledger=ledger,  # never read (research-only); satisfies brief signature
             symbols=cn_wl.symbols,
             watchlist_lookup=cn_wl.lookup,
             trading_tz=ZoneInfo(settings.cn_market_tz),
-            index_symbols=list(CN_INDEX_SYMBOLS),
+            index_symbols=list(CN_MAINLAND_INDEX_SYMBOLS),
             mode=settings.mode,
             runtime=runtime,
             notify=notify,  # REPORTER bot (outbound-only)
@@ -509,6 +557,12 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             focus_note="聚焦科技: 半导体 / 电子 / AI (其他板块仅作参考)",
             lang="zh",
             clock=runtime.clock,
+            discovery_scanner=MarketDiscoveryScanner(
+                cn_feed,
+                discovery_universe,
+                benchmark_symbol="000001.SS", min_adv=10_000_000,
+                clock=runtime.clock,
+            ),
         )
         cn_runner = DailyLoopRunner(
             cn_session.callbacks(), clock=runtime.clock, schedule=CN_SCHEDULE
@@ -516,6 +570,42 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         runtime.run_research["cn"] = cn_session.run_now  # manual refresh button
         logger.info("cn research session enabled",
                     extra={"n_symbols": len(cn_wl.symbols)})
+
+    # HK is independent from mainland CN: own universe, indices, calendar,
+    # freshness and persisted brief. It remains research-only.
+    hk_runner = None
+    hk_session = None
+    if settings.hk_session_enabled:
+        from zoneinfo import ZoneInfo
+
+        from swing_trader.hk_watchlist import HK_INDEX_SYMBOLS, build_hk_watchlist
+        from swing_trader.research_session import ResearchSession
+        from swing_trader.scheduler import HK_SCHEDULE
+
+        hk_wl = build_hk_watchlist(settings.hk_symbols)
+        hk_feed = RetryingFeed(YFinanceFeed())
+        hk_session = ResearchSession(
+            market_id="HK", market_label="Hong Kong", feed=hk_feed,
+            ledger=ledger, symbols=hk_wl.symbols, watchlist_lookup=hk_wl.lookup,
+            trading_tz=ZoneInfo(settings.hk_market_tz),
+            index_symbols=list(HK_INDEX_SYMBOLS), mode=settings.mode,
+            runtime=runtime, notify=notify,
+            llm_analyst=LLMAnalyst(llm_settings) if llm_settings else None,
+            knowledge=knowledge, knowledge_index=knowledge_index,
+            focus_note="香港独立研究: 科技 / 平台 / 半导体供应链",
+            lang="zh", clock=runtime.clock,
+            discovery_scanner=MarketDiscoveryScanner(
+                hk_feed,
+                discovery_universe,
+                benchmark_symbol="^HSI", min_adv=5_000_000,
+                clock=runtime.clock,
+            ),
+        )
+        hk_runner = DailyLoopRunner(
+            hk_session.callbacks(), clock=runtime.clock, schedule=HK_SCHEDULE
+        )
+        runtime.run_research["hk"] = hk_session.run_now
+        logger.info("hk research session enabled", extra={"n_symbols": len(hk_wl.symbols)})
 
     # KR (Korea) semiconductor RESEARCH session (human directive 2026-07-14): a
     # narrow semi-only read (memory giants + HBM chain) whose sentiment leads/
@@ -576,6 +666,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         market_timezones = {
             "us": settings.market_tz,
             "cn": settings.cn_market_tz,
+            "hk": settings.hk_market_tz,
             "kr": settings.kr_market_tz,
         }
         missing_markets = [
@@ -624,6 +715,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             # scheduled 15:00 KST send handles the group push.
             kr_session.on_monitor()
             kr_session.on_research()
+        if hk_session is not None:
+            hk_session.on_monitor()
+            hk_session.on_research()
         print("check done — report sent; Finance tab now has live data.", flush=True)
 
     def _poll_extra() -> None:
@@ -641,6 +735,8 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             runner.run_pending()
             if cn_runner is not None:
                 cn_runner.run_pending()
+            if hk_runner is not None:
+                hk_runner.run_pending()
             if kr_runner is not None:
                 kr_runner.run_pending()
             for _ in range(_TICKS_PER_CYCLE):

@@ -58,7 +58,6 @@ import {
   watchModuleName,
   type FinanceDesk,
 } from "@/pages/finance/constants";
-import { partitionCnBrief } from "@/pages/finance/partition";
 import { useFinanceT } from "@/pages/finance/i18n";
 import type { FinanceTranslations } from "@/i18n/types";
 import {
@@ -592,6 +591,7 @@ function ResearchDetail({
   briefs: {
     us: FinanceResearchBriefData | null;
     cn: FinanceResearchBriefData | null;
+    hk: FinanceResearchBriefData | null;
     kr: FinanceResearchBriefData | null;
   };
   ft: FinanceTranslations;
@@ -606,19 +606,15 @@ function ResearchDetail({
   }
   if (desk === "korea") {
     // KR is its own single-region semiconductor brief (no CN-style partition).
-    return <ResearchBrief brief={briefs.kr} market="cn" />;
+    return <ResearchBrief brief={briefs.kr} market="kr" />;
   }
-  // China / HK both derive from the ONE CN brief, partitioned by symbol
-  // suffix. Regime/news/themes/freshness are shared. Research-only.
-  const region = desk === "hk" ? "hk" : "china";
-  const partitioned =
-    briefs.cn !== null ? partitionCnBrief(briefs.cn, region) : null;
+  const regionalBrief = desk === "hk" ? briefs.hk : briefs.cn;
   return (
     <div className="flex flex-col gap-3">
       <p className="border border-border/60 bg-secondary/20 px-3 py-2 font-mondwest normal-case text-xs text-muted-foreground">
         {ft.layout.perRegionNote}
       </p>
-      <ResearchBrief brief={partitioned} market="cn" />
+      <ResearchBrief brief={regionalBrief} market={desk === "hk" ? "hk" : "cn"} />
     </div>
   );
 }
@@ -636,6 +632,7 @@ function ResearchView({
   briefs: {
     us: FinanceResearchBriefData | null;
     cn: FinanceResearchBriefData | null;
+    hk: FinanceResearchBriefData | null;
     kr: FinanceResearchBriefData | null;
   };
   ft: FinanceTranslations;
@@ -912,8 +909,9 @@ export default function FinancePage() {
   const [briefs, setBriefs] = useState<{
     us: FinanceResearchBriefData | null;
     cn: FinanceResearchBriefData | null;
+    hk: FinanceResearchBriefData | null;
     kr: FinanceResearchBriefData | null;
-  }>({ us: null, cn: null, kr: null });
+  }>({ us: null, cn: null, hk: null, kr: null });
   const [account, setAccount] = useState<FinanceAccountResponse | null>(null);
   const [snapshots, setSnapshots] = useState<FinanceSnapshot[]>([]);
   const [market, setMarket] = useState<FinanceMarketSnapshot | null>(null);
@@ -973,11 +971,13 @@ export default function FinancePage() {
 
   // The brief the Research desk needs: US, the shared CN brief, or none
   // (watch modules). Threaded into the loader so switching desks refetches.
-  const briefMarket: "us" | "cn" | "kr" | null =
+  const briefMarket: "us" | "cn" | "hk" | "kr" | null =
     researchDesk === "us"
       ? "us"
-      : researchDesk === "china" || researchDesk === "hk"
+      : researchDesk === "china"
         ? "cn"
+        : researchDesk === "hk"
+          ? "hk"
         : researchDesk === "korea"
           ? "kr"
           : null;
@@ -1051,7 +1051,7 @@ export default function FinancePage() {
   // meaningful for markets with their own session (CN via china/hk, KR).
   const [researchRunning, setResearchRunning] = useState(false);
   const runResearch = useCallback(async () => {
-    if (briefMarket !== "cn" && briefMarket !== "kr") return;
+    if (briefMarket !== "cn" && briefMarket !== "hk" && briefMarket !== "kr") return;
     setResearchRunning(true);
     try {
       // Fires a BACKGROUND refresh (a full run does slow yfinance calls, ~1

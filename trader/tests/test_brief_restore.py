@@ -20,18 +20,19 @@ def _runtime(tmp_path):
 
 def test_restore_hydrates_all_runtime_slots(tmp_path):
     runtime = _runtime(tmp_path)
-    for market in ("us", "cn", "kr"):
+    for market in ("us", "cn", "hk", "kr"):
         runtime.brief_store.save(market, {
             "as_of": NOW.isoformat(),
             "trading_date": "2026-07-14",
             "marker": market,
         })
 
-    assert _restore_latest_briefs(runtime) == ["us", "cn", "kr"]
+    assert _restore_latest_briefs(runtime) == ["us", "cn", "hk", "kr"]
     assert runtime.latest_brief["marker"] == "us"
     assert runtime.latest_briefs["cn"]["marker"] == "cn"
     assert runtime.latest_brief_cn["marker"] == "cn"
     assert runtime.latest_briefs["kr"]["marker"] == "kr"
+    assert runtime.latest_briefs["hk"]["marker"] == "hk"
 
 
 def test_missing_today_uses_each_markets_local_date(tmp_path):

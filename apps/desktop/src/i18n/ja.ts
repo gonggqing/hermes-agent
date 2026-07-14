@@ -23,7 +23,7 @@ export const ja = defineLocale({
       comingSoon: '近日公開',
       phaseBadge: 'フェーズ 0.9',
       regionNote:
-        '現在、中国と香港は 1 つの CN モーニングブリーフを共有し、上場市場（.SS/.SZ と .HK）で分割しています。レジーム・ニュース・テーマは共通で、地域別ブリーフはフェーズ 0.9 の改善項目です。',
+        '中国本土と香港は、調査セッション、取引カレンダー、レジーム、鮮度を独立して管理します。市場間の関係は明示的な統合ビューだけに表示されます。',
       runResearch: '調査を今すぐ更新',
       runningResearch: '更新中…',
       runResearchDone: '調査を更新しました',

@@ -2990,7 +2990,7 @@ export type FinanceMode = "paper" | "live";
 /** Research desk for the Investment Research brief: the default US desk or
  * the China/HK (Asia/Shanghai) morning desk. The CN brief is research-only
  * (risk null, no pending candidates). */
-export type FinanceResearchMarket = "us" | "cn" | "kr";
+export type FinanceResearchMarket = "us" | "cn" | "hk" | "kr";
 
 /** Result of POST /v1/research/run — a BACKGROUND kickoff (returns immediately;
  *  the brief updates via the poll when the run finishes). */
@@ -3386,8 +3386,59 @@ export interface FinanceResearchBrief {
     counts: Record<string, number>;
     pending: FinanceBriefPendingCandidate[];
   };
+  discovery: FinanceDiscoveryPool | null;
+  cross_market_synthesis?: FinanceResearchSynthesis;
   uncertainty: string[];
   provenance: FinanceProvenanceLink[];
+}
+
+export interface FinanceResearchSynthesis {
+  as_of: string;
+  status: string;
+  markets: Record<string, {
+    market: string;
+    available: boolean;
+    trading_date: string | null;
+    freshness_status: string;
+    regime: string | null;
+  }>;
+  shared_themes: {
+    theme: string;
+    cn_symbols: string[];
+    hk_symbols: string[];
+    evidence_urls: string[];
+  }[];
+  notes: string[];
+}
+
+export interface FinanceDiscoveryEvidence {
+  kind: string;
+  source: string;
+  url: string;
+  observed_at: string;
+  summary: string;
+  confidence: number;
+}
+
+export interface FinanceDiscoveryCandidate {
+  symbol: string;
+  display_name: string;
+  market: string;
+  theme: string;
+  component: string;
+  relationship: string;
+  score: number;
+  rank: number;
+  reasons: string[];
+  evidence: FinanceDiscoveryEvidence[];
+}
+
+export interface FinanceDiscoveryPool {
+  market: string;
+  as_of: string;
+  candidates: FinanceDiscoveryCandidate[];
+  rejected: { symbol: string; reason: string }[];
+  source_count: number;
 }
 
 // ── On-demand market-data types (Phase 0.75; trader/swing_trader/api.py) ─

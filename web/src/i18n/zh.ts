@@ -660,6 +660,16 @@ export const zh: Translations = {
         leaders: "领先",
         empty: "暂无主题数据。",
       },
+      discovery: {
+        title: "新机会发现池",
+        empty: "今日暂无通过来源、代码、趋势和流动性验证的新标的。",
+        score: "研究评分",
+        sources: "证据来源",
+      },
+      synthesis: {
+        title: "中港跨市场综合",
+        empty: "等待 A 股与港股两份独立研报完成。",
+      },
       news: {
         title: "新闻摘要",
         empty: "最新快照中没有新闻条目。",
@@ -689,6 +699,7 @@ export const zh: Translations = {
         label: "市场",
         us: "美股",
         cn: "中国·香港",
+        hk: "香港",
         researchOnly: "仅研究 —— 不涉及下单",
       },
     },
@@ -852,7 +863,7 @@ export const zh: Translations = {
       marketJapan: "日本",
       comingSoon: "0.9 阶段",
       perRegionNote:
-        "中国与香港目前由同一份中国简报拆分，市场状态、新闻与主题为两地共享；独立地区研报计划在 0.95 阶段完成。",
+        "A股与港股使用独立的研究会话、交易日历、市场状态和新鲜度；跨市场关联只在显式中港综合中呈现。",
       selectDesk: "研究面板",
       runResearch: "更新研究",
       runningResearch: "更新中…",

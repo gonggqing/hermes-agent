@@ -87,6 +87,16 @@ export interface FinanceTranslations {
       leaders: string;
       empty: string;
     };
+    discovery: {
+      title: string;
+      empty: string;
+      score: string;
+      sources: string;
+    };
+    synthesis: {
+      title: string;
+      empty: string;
+    };
     news: {
       title: string;
       empty: string;
@@ -117,6 +127,7 @@ export interface FinanceTranslations {
       label: string;
       us: string;
       cn: string;
+      hk: string;
       researchOnly: string; // "Research only — no orders"
     };
   };
@@ -281,7 +292,7 @@ export interface FinanceTranslations {
     marketKorea: string;
     marketJapan: string;
     comingSoon: string; // disabled placeholder badge, e.g. "Phase 0.9"
-    perRegionNote: string; // China/HK derived from one CN brief note
+    perRegionNote: string; // CN/HK independent session note
     selectDesk: string; // aria-label for the narrow-screen desk select
     // Manual "re-run this market's research session now" button.
     runResearch: string; // "Run research now"

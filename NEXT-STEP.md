@@ -4,9 +4,10 @@
 > plan in Loop.md §8, the next phase (refine & complete) is intended for
 > Opus 4.8. **Read `Loop.md` first — it is the single source of truth.**
 
-## Where we are (updated 2026-07-14)
+## Where we are (updated 2026-07-15)
 
-**Phases 0 → 0.9 are BUILT; Phase 0.95 (pre-live gate) is LANDING.** Phase 0
+**Phases 0 → 0.95 are code-complete locally; the Phase 0.95 external review
+gate is still open.** Phase 0
 (paper loop) was approved; since then: 0.5 (research-first UI + rehydration +
 knowledge store), 0.5+ (two-session CN-morning/US-evening + dual bots), 0.75
 (fundamentals, on-demand endpoints, finance toolset, K-line skill, earnings,
@@ -16,6 +17,19 @@ RAG, deeper ingestion), **0.8 (resilience: dead-man's switch + health/heartbeat
 broker backbone + 0.95 go-live gate** (see next block). Still NO live orders —
 the §3 triple gate is untouched; IBKR account is the last blocker for Phase 1.
 See Loop.md §13 for the dated detail.
+
+### Phase 0.95 local build (2026-07-15)
+
+- Deterministic, evidence/freshness/instrument/liquidity-gated discovery now
+  feeds the normal US/HK/CN research path; it owns no execution authority.
+- Mainland CN and HK have independent universes, calendars, snapshots,
+  schedules, persisted briefs, API routes, Telegram summaries and Web/Desktop
+  desks; explicit synthesis is the only cross-market join.
+- The old frontend suffix partition is removed; Hermes-native components and
+  EN/ZH/JA/ZH-Hant locale conventions are preserved.
+- Full trader, Web and Desktop regression suites plus a 22-day crash simulation
+  passed. Per operator instruction, these local changes are **not in a rebuilt
+  Docker image yet**, so the running paper day remains uninterrupted.
 
 ### Phase-1 readiness landed this cycle (2026-07-14)
 
@@ -41,9 +55,10 @@ moment the account funds:
   bucketed by market regime with a ≥2-regime coverage gate.
 - **Broker parity harness** — PaperBroker↔IBKRBroker substitutability tests.
 
-Still TODO for the ⛔ Phase-0.95 human gate (do NOT self-advance): reviewed
-weekend upstream sync merge; a real IBKR-**paper** dry run once TWS is up;
-≥20 paper-day exit criterion; guardrail audit; **human sign-off**.
+Still TODO for the ⛔ Phase-0.95 human gate (do NOT self-advance): preserve and
+review the current uninterrupted US paper-day close evidence; run a real
+IBKR-**paper** dry run once TWS is up; complete the ≥20 paper-day criterion;
+perform final guardrail review; obtain **human sign-off**.
 
 - All trading code: `trader/` (self-contained package `swing_trader`, zero
   Hermes-internal imports, extractable to its own repo before Phase 1).

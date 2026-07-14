@@ -1436,6 +1436,12 @@ export interface Translations {
       vsSma50: (delta: string) => string
       themesTitle: string
       themesEmpty: string
+      discoveryTitle: string
+      discoveryEmpty: string
+      discoveryScore: (score: string) => string
+      discoverySource: (source: string) => string
+      synthesisTitle: string
+      synthesisEmpty: string
       themeMeta: (count: number, avg: string) => string
       themeLeaders: (symbols: string) => string
       newsTitle: string

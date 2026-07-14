@@ -581,6 +581,7 @@ class DailyLoop:
         knowledge_index=None,  # Optional[KnowledgeIndex] — None = fail-closed
         earnings_provider=None,  # Optional[EarningsProvider] (Phase 0.75)
         kill_switch=None,  # Optional[KillSwitch] — manual operator HALT (§3)
+        discovery_scanner=None,  # Optional[MarketDiscoveryScanner] — research only
     ) -> None:
         self.feed = feed
         self.broker = broker
@@ -631,6 +632,8 @@ class DailyLoop:
         self._memory_seen_trades: set[str] = set()
         self._health: Optional[HealthStatus] = None  # Phase 0.8 (dead-man's switch)
         self.kill_switch = kill_switch  # Phase 0.95 manual HALT (may be None)
+        self.discovery_scanner = discovery_scanner
+        self._discovery = None
 
     # ---------------------------------------------------------------- events
 
@@ -650,8 +653,18 @@ class DailyLoop:
 
     def on_monitor(self) -> None:
         self._market = self.market_monitor.poll()
-        self._portfolio = self.portfolio_monitor.poll()
-        self._news = self.news_monitor.poll(self.symbols)
+        if self.discovery_scanner is not None:
+            try:
+                self._discovery = self.discovery_scanner.scan("US")
+            except Exception:
+                logger.exception("US discovery scan failed")
+                self._discovery = None
+        discovered = [
+            row.symbol for row in (self._discovery.candidates if self._discovery else [])
+        ]
+        research_symbols = list(dict.fromkeys([*self.symbols, *discovered]))
+        self._portfolio = self.portfolio_monitor.poll(research_symbols)
+        self._news = self.news_monitor.poll(research_symbols)
         if self.runtime is not None:
             self.runtime.market = self._market.model_dump(mode="json")
         self._ingest_news()
@@ -907,7 +920,10 @@ class DailyLoop:
         views: dict[str, SymbolView] = {}
         watch = self._portfolio.watch if self._portfolio else {}
         news_items = self._rebuild_news_items()
-        for symbol in self.symbols:
+        discovered = [
+            row.symbol for row in (self._discovery.candidates if self._discovery else [])
+        ]
+        for symbol in dict.fromkeys([*self.symbols, *discovered]):
             state = watch.get(symbol)
             if state is None:
                 continue
@@ -1069,6 +1085,7 @@ class DailyLoop:
                 now=self.clock(),
                 earnings=(self._earnings
                           if self.earnings_provider is not None else None),
+                discovery=self._discovery,
             )
             dump = brief.model_dump(mode="json")
             self.runtime.latest_brief = dump

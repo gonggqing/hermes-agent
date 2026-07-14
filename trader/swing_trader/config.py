@@ -75,12 +75,17 @@ class Settings(BaseSettings):
 
     # --- China morning RESEARCH session (Loop.md two-session extension) ---
     # A second daily session that runs a lighter, tech-focused research brief on
-    # the China/HK market in the CN morning. Report-only for now (NO orders),
+    # mainland China market in the CN morning. Report-only for now (NO orders),
     # but wired so it can gain order authority later. ``cn_symbols`` overrides
     # the default CN/HK universe (comma-separated; empty = built-in default).
     cn_session_enabled: bool = True
     cn_market_tz: str = "Asia/Shanghai"
     cn_symbols: str = ""
+
+    # --- Independent Hong Kong RESEARCH session (Phase 0.95) ---
+    hk_session_enabled: bool = True
+    hk_market_tz: str = "Asia/Hong_Kong"
+    hk_symbols: str = ""
 
     # --- KR (Korea) semiconductor RESEARCH session (Loop.md two-session ext) ---
     # A narrow, semiconductor-only KR read (memory giants + HBM chain): KR semi

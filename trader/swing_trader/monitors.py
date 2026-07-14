@@ -498,14 +498,15 @@ class PortfolioMonitor(_BaseMonitor):
         )
         self._last_watch: dict[str, WatchState] = {}
 
-    def poll(self) -> PortfolioSnapshot:
+    def poll(self, symbols: Sequence[str] | None = None) -> PortfolioSnapshot:
         ts = self._clock()
         account = self._broker.get_account()
         positions = _retag_positions(self._broker.get_positions())
         exposure = _pool_exposure_pct(positions, account.equity)
 
         watch: dict[str, WatchState] = {}
-        for symbol in self._symbols:
+        active_symbols = list(symbols) if symbols is not None else self._symbols
+        for symbol in active_symbols:
             try:
                 bars = self._feed.get_bars(symbol, "1d", limit=WATCH_BARS_LIMIT)
             except DataFeedError as exc:

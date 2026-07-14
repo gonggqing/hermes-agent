@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { api, FinanceKnowledgeOfflineError } from "@/lib/api";
 import type {
+  FinanceDiscoveryPool,
   FinanceBriefMover,
   FinanceBriefRegime,
   FinanceBriefRisk,
@@ -448,6 +449,123 @@ function ThemesCard({
   );
 }
 
+function DiscoveryCard({
+  pool,
+  ft,
+}: {
+  pool: FinanceDiscoveryPool | null;
+  ft: FinanceTranslations;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-center gap-2">
+          <Radar className="h-5 w-5 text-muted-foreground" />
+          <CardTitle className="text-base">{ft.brief.discovery.title}</CardTitle>
+          {pool !== null && (
+            <Badge tone="secondary">
+              {pool.candidates.length}/{pool.source_count}
+            </Badge>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent>
+        {pool === null || pool.candidates.length === 0 ? (
+          <p className="font-mondwest normal-case py-2 text-sm text-muted-foreground">
+            {ft.brief.discovery.empty}
+          </p>
+        ) : (
+          <ol className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {pool.candidates.map((candidate) => (
+              <li key={candidate.symbol} className="border border-border/70 bg-secondary/10 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="font-mono-ui text-sm text-foreground">
+                      #{candidate.rank} {candidate.symbol}
+                    </div>
+                    <div className="truncate font-mondwest normal-case text-sm text-muted-foreground">
+                      {candidate.display_name}
+                    </div>
+                  </div>
+                  <Badge tone="secondary">
+                    {ft.brief.discovery.score} {candidate.score.toFixed(1)}
+                  </Badge>
+                </div>
+                <p className="mt-2 font-mondwest normal-case text-xs text-foreground">
+                  {candidate.theme} · {candidate.component}
+                </p>
+                <p className="mt-1 line-clamp-3 font-mondwest normal-case text-xs text-muted-foreground">
+                  {candidate.relationship}
+                </p>
+                {candidate.evidence.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {candidate.evidence.slice(0, 2).map((evidence) => (
+                      <a
+                        key={evidence.url}
+                        href={evidence.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={`${evidence.summary} · ${evidence.observed_at}`}
+                        className="font-mondwest normal-case text-xs text-primary hover:underline"
+                      >
+                        {ft.brief.discovery.sources}: {evidence.source}
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ol>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function SynthesisCard({
+  synthesis,
+  ft,
+}: {
+  synthesis: FinanceResearchBrief["cross_market_synthesis"];
+  ft: FinanceTranslations;
+}) {
+  if (synthesis === undefined) return null;
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Layers className="h-5 w-5 text-muted-foreground" />
+          <CardTitle className="text-base">{ft.brief.synthesis.title}</CardTitle>
+          <Badge tone="secondary">{synthesis.status}</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <div className="flex flex-wrap gap-2">
+          {Object.values(synthesis.markets).map((market) => (
+            <span key={market.market} className="border border-border px-2 py-1 font-mono-ui text-xs">
+              {market.market}: {market.available ? `${market.regime ?? "unknown"} · ${market.freshness_status}` : "missing"}
+            </span>
+          ))}
+        </div>
+        {synthesis.shared_themes.length === 0 ? (
+          <p className="font-mondwest normal-case text-sm text-muted-foreground">{ft.brief.synthesis.empty}</p>
+        ) : (
+          <ul className="grid gap-2 md:grid-cols-2">
+            {synthesis.shared_themes.map((theme) => (
+              <li key={theme.theme} className="border border-border/70 bg-secondary/10 p-3 font-mondwest normal-case text-sm">
+                <div className="text-foreground">{theme.theme}</div>
+                <div className="mt-1 font-mono-ui text-xs text-muted-foreground">
+                  CN {theme.cn_symbols.join(", ") || "—"} · HK {theme.hk_symbols.join(", ") || "—"}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── News digest ───────────────────────────────────────────────────────
 
 function NewsCard({
@@ -773,7 +891,7 @@ export function ResearchBrief({
   onMarketChange?: (m: FinanceResearchMarket) => void;
 }) {
   const ft = useFinanceT();
-  const researchOnly = market === "cn";
+  const researchOnly = market !== "us";
 
   if (brief === null) {
     return (
@@ -864,6 +982,8 @@ export function ResearchBrief({
           research-only with no account (`risk` is null). */}
       {!researchOnly && <RiskStrip risk={brief.risk} ft={ft} />}
       <RegimeChips regime={brief.regime} ft={ft} />
+      <DiscoveryCard pool={brief.discovery} ft={ft} />
+      {researchOnly && <SynthesisCard synthesis={brief.cross_market_synthesis} ft={ft} />}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <MoversCard movers={brief.movers} ft={ft} />

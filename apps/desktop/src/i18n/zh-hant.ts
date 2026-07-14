@@ -23,7 +23,7 @@ export const zhHant = defineLocale({
       comingSoon: '即將推出',
       phaseBadge: '階段 0.9',
       regionNote:
-        '目前中國與香港共用同一份 CN 晨間簡報，依上市地拆分（.SS/.SZ 與 .HK）。市場狀態、新聞與主題為共用；分區簡報是階段 0.9 的改進項。',
+        'A 股與港股使用獨立的研究會話、交易日曆、市場狀態與新鮮度；跨市場關聯只在明確的中港綜合中呈現。',
       runResearch: '立即更新研究',
       runningResearch: '更新中…',
       runResearchDone: '研究已更新',

@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
   type FinanceBriefPendingCandidate,
+  type FinanceDiscoveryPool,
   type FinanceFreshness,
   type FinanceMover,
   type FinanceNewsDigestItem,
@@ -95,25 +96,6 @@ const MODULE_GLYPH: Record<WatchModuleId, { color: string; icon: React.Component
   crypto: { color: '#F7931A', icon: Bitcoin }
 }
 
-// China & Hong Kong derive from the ONE CN brief (research-only). China shows
-// mainland listings (.SS/.SZ); HK shows .HK. Regime/news/themes/freshness are
-// shared — per-region briefs are a Phase 0.9 refinement.
-function partitionCnBrief(brief: FinanceResearchBrief, region: 'china' | 'hk'): FinanceResearchBrief {
-  const match =
-    region === 'hk'
-      ? (symbol: string) => symbol.endsWith('.HK')
-      : (symbol: string) => symbol.endsWith('.SS') || symbol.endsWith('.SZ')
-
-  return {
-    ...brief,
-    movers: {
-      top: brief.movers.top.filter(mover => match(mover.symbol)),
-      bottom: brief.movers.bottom.filter(mover => match(mover.symbol))
-    },
-    signals_today: brief.signals_today.filter(signal => match(signal.symbol))
-  }
-}
-
 interface FinanceViewCommonProps {
   bottomBar: React.ReactNode
   enabled: boolean
@@ -128,26 +110,19 @@ export function FinanceResearchView({
   const copy = t.finance.research
   const [desk, setDesk] = useRouteEnumParam('desk', RESEARCH_DESKS, 'us')
   const marketDesk = isMarketDesk(desk)
-  // China & HK share ONE fetch: keyed by 'cn' (not the desk) so switching
-  // between them never refetches. US sends no market param; KR fetches ?market=kr.
-  const isCn = desk === 'china' || desk === 'hk'
-  const isKr = desk === 'korea'
-  const marketKey = desk === 'us' ? 'us' : isKr ? 'kr' : 'cn'
+  const isCnHk = desk === 'china' || desk === 'hk'
+  const researchOnly = marketDesk && desk !== 'us'
+  const marketKey = desk === 'us' ? 'us' : desk === 'korea' ? 'kr' : desk === 'hk' ? 'hk' : 'cn'
 
   const briefQuery = useQuery({
     enabled: enabled && marketDesk,
-    queryFn: () => getFinanceResearchBrief(desk === 'us' ? undefined : isKr ? 'kr' : 'cn'),
+    queryFn: () => getFinanceResearchBrief(desk === 'us' ? undefined : marketKey as 'cn' | 'hk' | 'kr'),
     queryKey: financeKey('research', 'brief', marketKey),
     refetchInterval: BRIEF_POLL_MS,
     retry: 1
   })
 
-  const rawBrief = briefQuery.data
-
-  // KR is its own single-region brief (no CN-style partition); only china/hk
-  // partition the shared CN brief.
-  const brief =
-    rawBrief && isCn ? partitionCnBrief(rawBrief, desk === 'hk' ? 'hk' : 'china') : rawBrief
+  const brief = briefQuery.data
 
   const marketLabel: Record<(typeof ACTIVE_MARKETS)[number], string> = {
     us: copy.marketUs,
@@ -164,7 +139,7 @@ export function FinanceResearchView({
   const canRun = marketDesk && desk !== 'us'
 
   const runMutation = useMutation({
-    mutationFn: () => postFinanceResearchRun(isKr ? 'kr' : 'cn'),
+    mutationFn: () => postFinanceResearchRun(marketKey as 'cn' | 'hk' | 'kr'),
     onError: error =>
       notifyError(error instanceof Error ? error : new Error(String(error)), copy.runResearchFailed),
     onSuccess: result => {
@@ -223,14 +198,14 @@ export function FinanceResearchView({
                 </Button>
               </div>
             )}
-            {isCn && <RegionNote note={copy.regionNote} />}
+            {isCnHk && <RegionNote note={copy.regionNote} />}
             <QuerySection
               empty={copy.briefError}
               error={briefQuery.isError ? briefQuery.error : undefined}
               isEmpty={!brief}
               loading={briefQuery.isPending}
             >
-              {brief && <BriefBody brief={brief} onOpenQueue={onOpenQueue} researchOnly={isCn} />}
+              {brief && <BriefBody brief={brief} onOpenQueue={onOpenQueue} researchOnly={researchOnly} />}
             </QuerySection>
             <KnowledgeSearchSection enabled={enabled} />
           </div>
@@ -276,6 +251,8 @@ export function BriefBody({
           research-only note takes their place. */}
       {researchOnly ? <ResearchOnlyNote /> : <RiskSection risk={brief.risk} />}
       <RegimeSection regime={brief.regime} />
+      <DiscoverySection pool={brief.discovery} />
+      {researchOnly && <SynthesisSection synthesis={brief.cross_market_synthesis} />}
       <MoversSection bottom={brief.movers.bottom} top={brief.movers.top} />
       <ThemesSection themes={brief.themes} />
       <NewsSection news={brief.news} />
@@ -284,6 +261,82 @@ export function BriefBody({
       <UncertaintySection items={brief.uncertainty} />
       <ProvenanceFooter links={brief.provenance} />
     </div>
+  )
+}
+
+function SynthesisSection({ synthesis }: { synthesis: FinanceResearchBrief['cross_market_synthesis'] }) {
+  const { t } = useI18n()
+  const copy = t.finance.research
+
+  if (!synthesis) {
+    return null
+  }
+
+  return (
+    <section className="space-y-2">
+      <div className="flex items-center gap-2">
+        <FinanceSectionLabel>{copy.synthesisTitle}</FinanceSectionLabel>
+        <FinancePill>{synthesis.status}</FinancePill>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {Object.values(synthesis.markets).map(market => (
+          <FinancePill key={market.market}>
+            {market.market}: {market.available ? `${market.regime ?? 'unknown'} · ${market.freshness_status}` : 'missing'}
+          </FinancePill>
+        ))}
+      </div>
+      {synthesis.shared_themes.length === 0 ? (
+        <div className="py-1 text-xs text-muted-foreground">{copy.synthesisEmpty}</div>
+      ) : (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {synthesis.shared_themes.map(theme => (
+            <FinanceCard key={theme.theme}>
+              <div className="text-xs font-medium text-foreground">{theme.theme}</div>
+              <div className="mt-1 text-[0.62rem] text-muted-foreground">
+                CN {theme.cn_symbols.join(', ') || '—'} · HK {theme.hk_symbols.join(', ') || '—'}
+              </div>
+            </FinanceCard>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function DiscoverySection({ pool }: { pool: FinanceDiscoveryPool | null }) {
+  const { t } = useI18n()
+  const copy = t.finance.research
+
+  return (
+    <section className="space-y-2">
+      <FinanceSectionLabel>{copy.discoveryTitle}</FinanceSectionLabel>
+      {!pool || pool.candidates.length === 0 ? (
+        <div className="py-1 text-xs text-muted-foreground">{copy.discoveryEmpty}</div>
+      ) : (
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {pool.candidates.map(candidate => (
+            <FinanceCard className="space-y-2" key={candidate.symbol}>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold text-foreground">#{candidate.rank} {candidate.symbol}</div>
+                  <div className="truncate text-[0.65rem] text-muted-foreground">{candidate.display_name}</div>
+                </div>
+                <FinancePill>{copy.discoveryScore(candidate.score.toFixed(1))}</FinancePill>
+              </div>
+              <div className="text-[0.68rem] text-foreground">{candidate.theme} · {candidate.component}</div>
+              <div className="line-clamp-3 text-[0.65rem] leading-5 text-muted-foreground">{candidate.relationship}</div>
+              <div className="flex flex-wrap gap-2">
+                {candidate.evidence.slice(0, 2).map(evidence => (
+                  <ExternalLink className="text-[0.62rem] text-primary" href={evidence.url} key={evidence.url}>
+                    {copy.discoverySource(evidence.source)}
+                  </ExternalLink>
+                ))}
+              </div>
+            </FinanceCard>
+          ))}
+        </div>
+      )}
+    </section>
   )
 }
 

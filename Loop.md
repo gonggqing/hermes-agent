@@ -265,12 +265,12 @@ Python 3.11 · `ib_async` (later) · `alpaca-py` (optional) · `yfinance` · `pa
 - [x] The dedicated Finance Telegram bot provides allowlist-gated interactive approvals while the general Hermes bot remains the gateway.
 - [x] The official `upstream` remote, reviewed sync reports and weekly integration-branch workflow are established.
 
-### Phase 0.5+ backlog — CN research session and dual-bot roles (completed)
+### Phase 0.5+ backlog — regional research sessions and dual-bot roles (completed)
 
 - [x] Reporter and gatekeeper transports are separated: the reporter sends summaries while only the Finance bot handles interactive cards.
-- [x] `SessionSchedule` supports the US trading session and an Asia/Shanghai CN research calendar without changing US behavior.
-- [x] The CN/HK morning `ResearchSession` runs research-only monitors and analysis with no decision, risk, confirmation or broker authority.
-- [x] CN research builds from isolated in-memory inputs, serves `/v1/research/brief?market=cn`, and renders bilingual Telegram briefs.
+- [x] `SessionSchedule` supports independent US, mainland CN, HK and KR calendars without changing US behavior.
+- [x] CN/HK/KR `ResearchSession` instances run isolated research-only monitors and analysis with no broker or approval authority.
+- [x] Regional research serves independent persisted briefs and bilingual Telegram summaries without cross-market state inheritance.
 - [x] Search/summary inference is independently pinned to a low-cost high-speed model.
 - [x] Finance Web/Desktop strings are translated and the research view supports US and China/HK market selection.
 
@@ -313,6 +313,16 @@ Python 3.11 · `ib_async` (later) · `alpaca-py` (optional) · `yfinance` · `pa
 - [x] Conversational holdings updates create versioned drafts that only authenticated humans can confirm.
 - [x] Reconciliation preserves IBKR authority for connected US/HK accounts and human-confirmed authority for mainland holdings without silent merging.
 - [x] Source-tagged aggregate holdings feed read-side analysis while execution remains broker-account scoped and live exposure wiring stays deferred to IBKR.
+
+### Phase 0.95 backlog — dynamic discovery and pre-live validation
+
+- [x] A deterministic US/HK/CN discovery funnel validates instruments, dated source evidence, freshness, trend and liquidity before ranking a research-only pool.
+- [x] Emerging-industry and supply-chain edges retain company↔theme↔component provenance; malformed, stale, unresolved and LLM-only seeds fail closed.
+- [x] Discovered symbols enter normal research and can reach execution only through Decision → Risk → human confirmation; discovery itself has no order authority.
+- [x] Mainland CN and HK now use disjoint universes, indices, calendars, snapshots, schedules, archives, API routes, Web/Desktop desks and Telegram briefs.
+- [x] The explicit CN↔HK synthesis preserves both markets' independent regime/freshness and joins only shared themes with evidence.
+- [x] Web/Desktop retain Hermes components, responsive layout and translated discovery/synthesis copy; the legacy suffix partition was removed.
+- [ ] Exit evidence remains external: complete the uninterrupted US paper day, real IBKR Paper dry run and human go-live sign-off before Phase 1.
 
 ---
 
@@ -364,7 +374,7 @@ Each symbol is tagged `{theme, ai_phase(infra|memory|network|power|application|c
 
 ## 13. Progress log (building agent appends; newest first)
 
-- 2026-07-15 — **Persistent market regime + Phase 0.95 research expansion.** Market cards now fall back to the latest persisted US brief with explicit provenance, while Phase 0.95 adds auditable dynamic discovery and independent CN/HK research sessions.
+- 2026-07-15 — **Phase 0.95 local build.** Added provenance-gated dynamic discovery, independent CN/HK sessions and explicit cross-market synthesis across API, Web, Desktop and Telegram; external paper-day/IBKR/human exit evidence remains pending.
 - 2026-07-14 — **CI and analysis-date integrity.** Restored cross-platform lockfile dependencies, cleared repository lint failures and surfaced each signal's source-bar timestamp across API, brief, Web and Desktop.
 - 2026-07-14 — **KR research + upstream sync.** Added the Korean semiconductor desk and manual research refresh, structured mover regions, and completed the reviewed `upstream/main` merge documented in `docs/upstream-sync/2026-07-14.md`.
 - 2026-07-14 — **IBKR backbone + P0.95 safety gate.** Built the offline-tested IBKR lifecycle, settled-cash enforcement, broker factory, persistent kill switch, go-live runbook, regime walk-forward analysis and paper/live parity harness; real IBKR-paper validation and human sign-off remain required.

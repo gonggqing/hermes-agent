@@ -65,6 +65,7 @@ class FinanceRuntime:
     confirmation: Optional[ConfirmationService] = None
     market: dict = field(default_factory=dict)  # latest MarketSnapshot dump
     market_cn: dict = field(default_factory=dict)  # latest CN MarketSnapshot dump
+    market_snapshots: dict = field(default_factory=dict)  # cn/hk/kr independent
     latest_reports: dict = field(default_factory=dict)  # kind -> text
     latest_brief: dict = field(default_factory=dict)  # US ResearchBrief dump
     latest_brief_cn: dict = field(default_factory=dict)  # CN ResearchBrief dump
@@ -425,9 +426,26 @@ def create_app(runtime: FinanceRuntime):
     #: Research markets served off the US brief (Loop.md two-session extension):
     #: market_id -> (trading tz, human label) for the degraded-brief fallback.
     _RESEARCH_MARKETS = {
-        "cn": ("Asia/Shanghai", "China / HK"),
+        "cn": ("Asia/Shanghai", "Mainland China"),
+        "hk": ("Asia/Hong_Kong", "Hong Kong"),
         "kr": ("Asia/Seoul", "Korea semiconductors"),
     }
+
+    def _with_cn_hk_synthesis(key: str, payload: dict) -> dict:
+        if key not in {"cn", "hk"}:
+            return payload
+        from swing_trader.research_synthesis import build_cn_hk_synthesis
+
+        cn = payload if key == "cn" else (runtime.latest_briefs.get("cn") or
+                                          _archived_brief("cn"))
+        hk = payload if key == "hk" else (runtime.latest_briefs.get("hk") or
+                                          _archived_brief("hk"))
+        return {
+            **payload,
+            "cross_market_synthesis": build_cn_hk_synthesis(
+                cn, hk, now=runtime.clock()
+            ).model_dump(mode="json"),
+        }
 
     @app.get(f"/{API_VERSION}/research/brief")
     def research_brief(market: Optional[str] = Query(default=None)) -> dict:
@@ -443,13 +461,13 @@ def create_app(runtime: FinanceRuntime):
             cached = runtime.latest_briefs.get(key) or (
                 runtime.latest_brief_cn if key == "cn" else None)
             if cached:
-                return cached
+                return _with_cn_hk_synthesis(key, cached)
             archived = _archived_brief(key)
             if archived:
                 runtime.latest_briefs[key] = archived
                 if key == "cn":
                     runtime.latest_brief_cn = archived
-                return archived
+                return _with_cn_hk_synthesis(key, archived)
             from zoneinfo import ZoneInfo
 
             tz_name, label = _RESEARCH_MARKETS[key]
@@ -462,7 +480,7 @@ def create_app(runtime: FinanceRuntime):
                     "showing an empty degraded brief"
                 ],
             )
-            return brief.model_dump(mode="json")
+            return _with_cn_hk_synthesis(key, brief.model_dump(mode="json"))
 
         if runtime.latest_brief:
             return runtime.latest_brief
@@ -507,6 +525,15 @@ def create_app(runtime: FinanceRuntime):
         threading.Thread(target=_run, daemon=True, name=f"research-run-{key}").start()
         return {"status": "started", "market": key,
                 "note": "research refreshing in the background (~1 min)"}
+
+    @app.get(f"/{API_VERSION}/research/synthesis")
+    def research_synthesis() -> dict:
+        """Explicit CN↔HK synthesis; source briefs keep independent state."""
+        from swing_trader.research_synthesis import build_cn_hk_synthesis
+
+        cn = runtime.latest_briefs.get("cn") or _archived_brief("cn")
+        hk = runtime.latest_briefs.get("hk") or _archived_brief("hk")
+        return build_cn_hk_synthesis(cn, hk, now=runtime.clock()).model_dump(mode="json")
 
     @app.get(f"/{API_VERSION}/research/history")
     def research_history(

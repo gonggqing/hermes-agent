@@ -69,6 +69,16 @@ export const financeEn: FinanceTranslations = {
       leaders: "leaders",
       empty: "No theme data yet.",
     },
+    discovery: {
+      title: "New opportunities discovered",
+      empty: "No validated symbols entered today's discovery pool.",
+      score: "research score",
+      sources: "evidence",
+    },
+    synthesis: {
+      title: "China ↔ Hong Kong synthesis",
+      empty: "Waiting for both independent market briefs.",
+    },
     news: {
       title: "News digest",
       empty: "No news items in the latest snapshot.",
@@ -99,6 +109,7 @@ export const financeEn: FinanceTranslations = {
       label: "Market",
       us: "US",
       cn: "China·HK",
+      hk: "Hong Kong",
       researchOnly: "Research only — no orders",
     },
   },
@@ -268,7 +279,7 @@ export const financeEn: FinanceTranslations = {
     marketJapan: "Japan",
     comingSoon: "Phase 0.9",
     perRegionNote:
-      "China and Hong Kong are partitioned from one shared CN brief; regime, news and themes are shared. Independent regional briefs are planned for Phase 0.95.",
+      "Mainland China and Hong Kong run independent research sessions, calendars, regimes and freshness checks. Cross-market links appear only in the explicit synthesis.",
     selectDesk: "Research desk",
     runResearch: "Update research",
     runningResearch: "Running…",

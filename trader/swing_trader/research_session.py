@@ -31,6 +31,7 @@ from swing_trader.api import FinanceRuntime
 from swing_trader.brief import build_research_brief
 from swing_trader.brief_telegram import render_research_brief
 from swing_trader.datafeed import DataFeedError
+from swing_trader.discovery import DiscoveryPool, MarketDiscoveryScanner
 from swing_trader.interfaces import DataFeed, NewsItem
 from swing_trader.ledger import Ledger
 from swing_trader.log import get_logger
@@ -83,6 +84,7 @@ class ResearchSession:
         focus_note: str = "",
         lang: str = "zh",
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        discovery_scanner: Optional[MarketDiscoveryScanner] = None,
     ) -> None:
         self.market_id = market_id
         self.market_label = market_label
@@ -102,6 +104,7 @@ class ResearchSession:
         self.focus_note = focus_note
         self.lang = lang
         self.clock = clock
+        self.discovery_scanner = discovery_scanner
 
         self._broker = PaperBroker(starting_cash=_STUB_CASH)
         self.market_monitor = MarketMonitor(
@@ -119,6 +122,7 @@ class ResearchSession:
         self._portfolio = None
         self._news = None
         self._signals: list[Signal] = []
+        self._discovery: Optional[DiscoveryPool] = None
 
     # ---------------------------------------------------------------- events
 
@@ -129,18 +133,34 @@ class ResearchSession:
         except Exception:  # a research session must never crash the process
             logger.exception("cn market monitor failed")
             self._market = None
+        if self.discovery_scanner is not None:
+            try:
+                self._discovery = self.discovery_scanner.scan(self.market_id)
+            except Exception:
+                logger.exception("research discovery scan failed",
+                                 extra={"market": self.market_id})
+                self._discovery = None
+        discovered = [
+            row.symbol for row in (self._discovery.candidates if self._discovery else [])
+        ]
+        research_symbols = list(dict.fromkeys([*self.symbols, *discovered]))
         try:
-            self._portfolio = self.portfolio_monitor.poll()
+            self._portfolio = self.portfolio_monitor.poll(research_symbols)
         except Exception:
-            logger.exception("cn portfolio monitor failed")
+            logger.exception("research portfolio monitor failed",
+                             extra={"market": self.market_id})
             self._portfolio = None
         try:
-            self._news = self.news_monitor.poll(self.symbols)
+            self._news = self.news_monitor.poll(research_symbols)
         except Exception:
-            logger.exception("cn news monitor failed")
+            logger.exception("research news monitor failed",
+                             extra={"market": self.market_id})
             self._news = None
         if self.runtime is not None and self._market is not None:
-            self.runtime.market_cn = self._market.model_dump(mode="json")
+            market_dump = self._market.model_dump(mode="json")
+            self.runtime.market_snapshots[self.market_id.lower()] = market_dump
+            if self.market_id.upper() == "CN":
+                self.runtime.market_cn = market_dump
         self._ingest_news()
         self._publish_brief()
 
@@ -224,8 +244,12 @@ class ResearchSession:
         watch = self._portfolio.watch if self._portfolio else {}
         news_items = self._news_items()
         regime = self._market.risk_on_off if self._market else "neutral"
-        for symbol in self.symbols:
-            if watch.get(symbol) is None:
+        discovered = {
+            row.symbol for row in (self._discovery.candidates if self._discovery else [])
+        }
+        analysis_symbols = list(dict.fromkeys([*self.symbols, *sorted(discovered)]))
+        for symbol in analysis_symbols:
+            if symbol not in discovered and watch.get(symbol) is None:
                 continue
             try:
                 bars = self.feed.get_bars(symbol, "1d", limit=_ANALYSIS_BARS)
@@ -294,6 +318,7 @@ class ResearchSession:
                     f"{self.market_label} session is RESEARCH-ONLY — no orders "
                     "are placed (Loop.md two-session extension)",
                 ],
+                discovery=self._discovery,
             )
         except Exception:  # brief must never break the loop
             logger.exception("cn research brief build failed")

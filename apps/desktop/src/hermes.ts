@@ -1550,6 +1550,50 @@ export interface FinanceProvenanceLink {
   url: string
 }
 
+export interface FinanceDiscoveryEvidence {
+  source: string
+  url: string
+  observed_at: string
+  summary: string
+}
+
+export interface FinanceDiscoveryCandidate {
+  symbol: string
+  display_name: string
+  theme: string
+  component: string
+  relationship: string
+  score: number
+  rank: number
+  reasons: string[]
+  evidence: FinanceDiscoveryEvidence[]
+}
+
+export interface FinanceDiscoveryPool {
+  market: string
+  as_of: string
+  candidates: FinanceDiscoveryCandidate[]
+  rejected: { symbol: string; reason: string }[]
+  source_count: number
+}
+
+export interface FinanceResearchSynthesis {
+  status: string
+  markets: Record<string, {
+    market: string
+    available: boolean
+    freshness_status: string
+    regime: string | null
+  }>
+  shared_themes: {
+    theme: string
+    cn_symbols: string[]
+    hk_symbols: string[]
+    evidence_urls: string[]
+  }[]
+  notes: string[]
+}
+
 export interface FinanceResearchBrief {
   as_of: string
   trading_date: string
@@ -1563,6 +1607,8 @@ export interface FinanceResearchBrief {
   news: { items: FinanceNewsDigestItem[]; per_symbol_sentiment: Record<string, number> }
   signals_today: FinanceSignalView[]
   candidates_today: { counts: Record<string, number>; pending: FinanceBriefPendingCandidate[] }
+  discovery: FinanceDiscoveryPool | null
+  cross_market_synthesis?: FinanceResearchSynthesis
   uncertainty: string[]
   provenance: FinanceProvenanceLink[]
 }
@@ -1818,7 +1864,7 @@ export function postFinanceSessionFinalize(payload: { actor: string }): Promise<
 // brief (?market=cn). Same ResearchBrief shape, but research-only — risk is
 // null and candidates_today.pending is empty (that session never proposes
 // orders). Omit for the US brief (no query param).
-export type FinanceResearchMarket = 'cn' | 'kr'
+export type FinanceResearchMarket = 'cn' | 'hk' | 'kr'
 
 // Result of POST /v1/research/run (ResearchSession.run_now summary).
 export interface FinanceRunResearchResult {
