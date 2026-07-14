@@ -86,6 +86,9 @@ class FinanceRuntime:
     # Phase 0.9 (missed-session catch-up): manual trading-session trigger.
     run_session: Any = None  # Callable[[], dict] — loop.run_session_now
     finalize_session: Any = None  # Callable[[], dict] — loop.finalize_session_now
+    # Manual research refresh, keyed by lowercase market_id (cn/kr/…) →
+    # Callable[[], dict] (ResearchSession.run_now). Read-only, ungated.
+    run_research: dict = field(default_factory=dict)
     nav_provider: Any = None  # swing_trader.fund_nav.NavProvider — 场外基金 NAV
     gold_provider: Any = None  # swing_trader.sge_gold.GoldProvider — 国内金价 (SGE)
     # Phase 0.95 (go-live gate): manual operator kill-switch (halts NEW entries).
@@ -397,6 +400,19 @@ def create_app(runtime: FinanceRuntime):
             runtime.ledger, runtime.mode, now=runtime.clock()
         )
         return brief.model_dump(mode="json")
+
+    @app.post(f"/{API_VERSION}/research/run")
+    def research_run(market: str = Query(min_length=2, max_length=8)) -> dict:
+        """Manually re-run a market's RESEARCH session NOW (off-schedule refresh
+        button). Refreshes ?market=<market>'s brief. Read-only — places NO
+        orders — so it is NOT human-gated (unlike /session/run). 404 when that
+        research market is disabled/unknown."""
+        fn = runtime.run_research.get(market.lower())
+        if fn is None:
+            raise HTTPException(
+                404, f"no research session for market {market!r} "
+                     f"(available: {sorted(runtime.run_research) or 'none'})")
+        return fn()
 
     # --------------------------------------------- on-demand market analysis
     # Phase 0.75 thrust B: READ/ANALYSIS-ONLY endpoints for the conversational

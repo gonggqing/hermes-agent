@@ -11,8 +11,6 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-import pytest
-
 from swing_trader.brief import build_research_brief
 from swing_trader.brief_telegram import render_research_brief
 from swing_trader.cn_watchlist import CN_UNIVERSE, build_cn_watchlist
@@ -247,6 +245,37 @@ def test_research_session_publishes_brief_and_sends():
     assert runtime.latest_brief_cn["trading_date"] == "2026-07-13"
     assert runtime.latest_brief_cn["risk"] is None  # research-only
     assert len(sent) == 1 and "China / HK" in sent[0]
+
+
+def test_research_session_run_now_refreshes_brief():
+    from swing_trader.api import FinanceRuntime
+
+    runtime = FinanceRuntime(ledger=Ledger(url="sqlite:///:memory:"), mode=Mode.PAPER)
+    sent: list[str] = []
+    session = _make_session(make_cn_feed(), runtime=runtime, sent=sent)
+
+    summary = session.run_now()  # off-schedule manual refresh (no push)
+    assert summary["market"] == "CN" and summary["brief_ready"] is True
+    assert summary["sent"] is False
+    assert runtime.latest_briefs["cn"]  # per-market slot populated
+    assert runtime.latest_brief_cn  # CN back-compat slot too
+    assert sent == []  # send=False → no group push
+
+    summary2 = session.run_now(send=True)  # refresh AND push
+    assert summary2["sent"] is True
+    assert len(sent) == 1 and "China / HK" in sent[0]
+
+
+def test_movers_carry_region_cn_vs_hk():
+    from swing_trader.api import FinanceRuntime
+
+    runtime = FinanceRuntime(ledger=Ledger(url="sqlite:///:memory:"), mode=Mode.PAPER)
+    session = _make_session(make_cn_feed(), runtime=runtime)  # 0700.HK/0981.HK/9988.HK
+    session.run_now()
+    brief = runtime.latest_briefs["cn"]
+    movers = brief["movers"]["top"] + brief["movers"]["bottom"]
+    assert movers  # some movers present
+    assert all(m["region"] == "HK" for m in movers)  # all .HK in this fixture
 
 
 def test_research_session_skips_empty_push_on_mid_day_restart():

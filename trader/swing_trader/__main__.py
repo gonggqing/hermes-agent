@@ -306,6 +306,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         cn_runner = DailyLoopRunner(
             cn_session.callbacks(), clock=runtime.clock, schedule=CN_SCHEDULE
         )
+        runtime.run_research["cn"] = cn_session.run_now  # manual refresh button
         logger.info("cn research session enabled",
                     extra={"n_symbols": len(cn_wl.symbols)})
 
@@ -345,6 +346,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         kr_runner = DailyLoopRunner(
             kr_session.callbacks(), clock=runtime.clock, schedule=KR_SCHEDULE
         )
+        runtime.run_research["kr"] = kr_session.run_now  # manual refresh button
         logger.info("kr research session enabled",
                     extra={"n_symbols": len(kr_wl.symbols)})
 

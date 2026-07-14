@@ -181,6 +181,33 @@ class TestReads:
         assert client.get("/v1/research/brief",
                           params={"market": "cn"}).json()["marker"] == "cn-legacy"
 
+    def test_research_run_triggers_hook(self, env):
+        _, _, runtime, client = env
+        called = {"n": 0}
+
+        def _run():
+            called["n"] += 1
+            return {"market": "KR", "brief_ready": True}
+
+        runtime.run_research["kr"] = _run
+        r = client.post("/v1/research/run", params={"market": "kr"})
+        assert r.status_code == 200 and r.json()["market"] == "KR"
+        assert called["n"] == 1
+
+    def test_research_run_404_for_unknown_market(self, env):
+        _, _, runtime, client = env
+        runtime.run_research["cn"] = lambda: {}
+        r = client.post("/v1/research/run", params={"market": "kr"})
+        assert r.status_code == 404 and "no research session" in r.json()["detail"]
+
+    def test_research_run_is_ungated(self, env):
+        # research is read-only → no human-surface gate (unlike /session/run)
+        _, _, runtime, client = env
+        runtime.run_research["cn"] = lambda: {"ok": True}
+        r = client.post("/v1/research/run", params={"market": "cn"},
+                        headers={"X-Finance-Surface": "system"})
+        assert r.status_code == 200  # system surface allowed for research
+
     def test_knowledge_search_503_when_unconfigured(self, env):
         _, _, _, client = env
         assert client.get("/v1/knowledge/search", params={"q": "nvda"}).status_code == 503

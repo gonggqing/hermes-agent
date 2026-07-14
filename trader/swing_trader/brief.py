@@ -167,6 +167,19 @@ class RiskView(BaseModel):
     stats: dict[str, float] = Field(default_factory=dict)
 
 
+def _region_of(symbol: str) -> str:
+    """Market region from the yfinance symbol suffix (mirrors the API's split):
+    ``.HK`` → HK, ``.SS`` / ``.SZ`` → CN mainland A-share, ``.KS`` → KR, else US."""
+    s = symbol.upper()
+    if s.endswith(".HK"):
+        return "HK"
+    if s.endswith((".SS", ".SZ")):
+        return "CN"
+    if s.endswith(".KS"):
+        return "KR"
+    return "US"
+
+
 class Mover(BaseModel):
     """One watchlist symbol ranked by distance to its SMA20 (Loop.md §11)."""
 
@@ -177,6 +190,10 @@ class Mover(BaseModel):
     theme: str
     ai_phase: str
     role: str
+    #: Market region derived from the symbol suffix (CN mainland / HK / US / KR)
+    #: so a CN brief's movers can be split into China vs Hong Kong. Optional +
+    #: default so US briefs and existing consumers are unaffected.
+    region: Optional[str] = None
 
 
 class MoversView(BaseModel):
@@ -500,6 +517,7 @@ def _build_movers(
                     item.ai_phase.value if item is not None else AiPhase.NONE.value
                 ),
                 role=item.role.value if item is not None else Role.ROTATION.value,
+                region=_region_of(symbol),
             )
         )
     top = sorted(movers, key=lambda m: (-m.dist_sma20_pct, m.symbol))[:TOP_MOVERS]

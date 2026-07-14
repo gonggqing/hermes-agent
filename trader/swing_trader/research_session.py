@@ -180,6 +180,31 @@ class ResearchSession:
         self.notify(text)
         logger.info("cn research brief sent", extra={"market": self.market_id})
 
+    def run_now(self, *, send: bool = False) -> dict:
+        """Manually re-run this research market NOW (off-schedule catch-up /
+        refresh button). Forces fresh monitors + rebuilds the brief (which
+        refreshes ``runtime.latest_briefs[market_id]`` via ``_publish_brief``);
+        ``send=True`` also pushes it to the REPORTER bot. Returns a summary.
+
+        Read-only (no orders): safe to trigger from any surface (Loop.md §3 is
+        not implicated), unlike the human-gated trading-session trigger."""
+        self.on_monitor()
+        self.on_research()
+        if send:
+            self.on_send()
+        ready = (
+            self.runtime is not None
+            and self.market_id.lower() in self.runtime.latest_briefs
+        )
+        return {
+            "market": self.market_id,
+            "market_label": self.market_label,
+            "ran_at": self.clock().isoformat(),
+            "signals": len(self._signals),
+            "sent": bool(send),
+            "brief_ready": ready,
+        }
+
     def callbacks(self) -> dict[Event, Callable[[], None]]:
         return {
             Event.MONITOR_START: self.on_monitor,
