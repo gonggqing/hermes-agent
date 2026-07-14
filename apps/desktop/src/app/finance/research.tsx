@@ -561,6 +561,9 @@ function MoversColumn({ movers, title }: { movers: FinanceMover[]; title: string
         <div className="flex items-baseline justify-between gap-2 text-xs tabular-nums" key={mover.symbol}>
           <span className="min-w-0 truncate">
             <span className="font-medium text-foreground">{mover.symbol}</span>{' '}
+            {mover.display_name && (
+              <span className="text-[0.62rem] text-muted-foreground">{mover.display_name}</span>
+            )}{' '}
             <span className="text-[0.62rem] text-muted-foreground/80">{mover.theme}</span>
           </span>
           <span className="flex shrink-0 items-baseline gap-2">
@@ -684,6 +687,9 @@ function SignalsSection({ signals }: { signals: FinanceSignalView[] }) {
             <FinanceCard className="space-y-1" key={`${signal.symbol}-${signal.source_agent}-${index}`}>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-semibold text-foreground">{signal.symbol}</span>
+                {signal.display_name && (
+                  <span className="text-[0.62rem] text-muted-foreground">{signal.display_name}</span>
+                )}
                 <FinancePill variant={signal.direction.toLowerCase().includes('long') ? 'default' : 'warn'}>
                   {enumLabel(t.finance.enums.direction, signal.direction)}
                 </FinancePill>

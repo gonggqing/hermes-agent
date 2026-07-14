@@ -248,19 +248,29 @@ export interface DraftEditForm {
   qty: string;
   price: string;
   commission: string;
-  note: string;
+  occurredAt: string; // YYYY-MM-DD (trade date) — editable so a draft missing
+  note: string; //       "time" can be completed and then confirmed.
+}
+
+/** A datetime ISO string → the YYYY-MM-DD value an <input type="date"> wants. */
+function isoToDateInput(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
 }
 
 export function draftEditFrom(draft: {
   qty: number | null;
   price: number | null;
   commission: number | null;
+  occurred_at: string | null;
   note: string;
 }): DraftEditForm {
   return {
     qty: draft.qty === null ? "" : String(draft.qty),
     price: draft.price === null ? "" : String(draft.price),
     commission: draft.commission === null ? "" : String(draft.commission),
+    occurredAt: isoToDateInput(draft.occurred_at),
     note: draft.note ?? "",
   };
 }
@@ -295,6 +305,13 @@ export function parseDraftEdits(
     const commission = Number(commRaw);
     if (!Number.isFinite(commission) || commission < 0) return d.errCommission;
     edits.commission = commission;
+  }
+
+  const occurred = (form.occurredAt ?? "").trim();
+  if (occurred !== "") {
+    const when = new Date(occurred);
+    if (Number.isNaN(when.getTime())) return d.errOccurredAt;
+    edits.occurred_at = when.toISOString();
   }
 
   const note = form.note.trim();

@@ -1840,13 +1840,13 @@ function DraftCard({
 
         {editing ? (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {(["qty", "price", "commission", "note"] as const).map((field) => (
+            {(["qty", "price", "commission"] as const).map((field) => (
               <label key={field} className="flex flex-col gap-1">
                 <span className="text-xs text-text-tertiary">
                   {d.fields[field]}
                 </span>
                 <Input
-                  type={field === "note" ? "text" : "number"}
+                  type="number"
                   step="any"
                   min="0"
                   value={edit[field]}
@@ -1856,6 +1856,30 @@ function DraftCard({
                 />
               </label>
             ))}
+            {/* Trade date — editable so a draft missing "time" can be
+                completed and then confirmed (was previously unfixable). */}
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-text-tertiary">
+                {ft.portfolio.record.occurredAt}
+              </span>
+              <Input
+                type="date"
+                value={edit.occurredAt}
+                onChange={(e) =>
+                  setEdit((s) => ({ ...s, occurredAt: e.target.value }))
+                }
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-text-tertiary">{d.fields.note}</span>
+              <Input
+                type="text"
+                value={edit.note}
+                onChange={(e) =>
+                  setEdit((s) => ({ ...s, note: e.target.value }))
+                }
+              />
+            </label>
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">

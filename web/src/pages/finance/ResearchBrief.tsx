@@ -286,6 +286,11 @@ function MoversTable({
               <tr key={m.symbol} className="border-b border-border/50">
                 <td className="py-1.5 pr-3">
                   <span className="font-mono-ui text-xs">{m.symbol}</span>
+                  {m.display_name && (
+                    <span className="ml-1.5 font-mondwest normal-case text-xs text-muted-foreground">
+                      {m.display_name}
+                    </span>
+                  )}
                 </td>
                 <td className="text-right py-1.5 px-3">{fmtMoney(m.last)}</td>
                 <td
@@ -545,6 +550,11 @@ function SignalsCard({
                   <span className="font-mono-ui text-sm font-semibold text-foreground">
                     {s.symbol}
                   </span>
+                  {s.display_name && (
+                    <span className="font-mondwest normal-case text-xs text-muted-foreground">
+                      {s.display_name}
+                    </span>
+                  )}
                   <Badge tone={directionTone(s.direction)}>{s.direction}</Badge>
                   <Badge tone={s.source_agent === "debate" ? "default" : "outline"}>
                     {s.source_agent}

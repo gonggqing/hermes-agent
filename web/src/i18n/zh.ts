@@ -1121,6 +1121,7 @@ export const zh: Translations = {
         errQty: "数量必须为正数",
         errPrice: "价格必须为正数",
         errCommission: "佣金必须为零或正数",
+        errOccurredAt: "请输入有效的成交日期",
         outcome: {
           requestFailed: "{symbol}：请求失败（{error}）—— 重试以重新发送",
           confirmed: "{symbol} 已确认",

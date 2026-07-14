@@ -104,10 +104,19 @@ describe("parseDraftEdits", () => {
 
   it("collects only the touched fields", () => {
     const res = parseDraftEdits(
-      { qty: "12", price: "", commission: "0", note: "adjust" },
+      { qty: "12", price: "", commission: "0", note: "adjust", occurredAt: "" },
       ft,
     );
     expect(res).toEqual({ qty: 12, commission: 0, note: "adjust" });
+  });
+
+  it("sets occurred_at from an edited trade date (unblocks a draft missing time)", () => {
+    const res = parseDraftEdits(
+      { qty: "", price: "", commission: "", note: "", occurredAt: "2026-07-14" },
+      ft,
+    );
+    expect(res).toHaveProperty("occurred_at");
+    expect((res as { occurred_at: string }).occurred_at).toContain("2026-07-14");
   });
 });
 

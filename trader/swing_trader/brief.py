@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from swing_trader import watchlist
+from swing_trader.instrument_names import name_for
 from swing_trader.ledger import Ledger, TradeStats
 from swing_trader.log import get_logger
 from swing_trader.monitors import (
@@ -184,6 +185,9 @@ class Mover(BaseModel):
     """One watchlist symbol ranked by distance to its SMA20 (Loop.md §11)."""
 
     symbol: str
+    #: Human name (e.g. "三星电子") so the desk shows more than an opaque code;
+    #: "" when unknown (never guessed).
+    display_name: str = ""
     last: float
     dist_sma20_pct: float
     dist_sma50_pct: Optional[float] = None
@@ -233,6 +237,7 @@ class SignalView(BaseModel):
     """Analysis/debate signal summary (thesis truncated for the brief)."""
 
     symbol: str
+    display_name: str = ""  # human name (or "" when unknown); see instrument_names
     direction: str
     confidence: float
     source_agent: str
@@ -513,6 +518,7 @@ def _build_movers(
         movers.append(
             Mover(
                 symbol=symbol,
+                display_name=name_for(symbol),
                 last=state.last,
                 dist_sma20_pct=dist20,
                 dist_sma50_pct=_dist_pct(state.last, state.sma50),
@@ -615,6 +621,7 @@ def _signal_views(
     return [
         SignalView(
             symbol=s.symbol,
+            display_name=name_for(s.symbol),
             direction=s.direction.value,
             confidence=s.confidence,
             source_agent=s.source_agent,

@@ -3299,6 +3299,8 @@ export interface FinanceBriefRisk {
 
 export interface FinanceBriefMover {
   symbol: string;
+  /** Human name (e.g. "三星电子"); "" when unknown — show the code only. */
+  display_name?: string;
   last: number;
   dist_sma20_pct: number;
   dist_sma50_pct: number | null;
@@ -3326,6 +3328,8 @@ export interface FinanceBriefNewsItem {
 
 export interface FinanceBriefSignal {
   symbol: string;
+  /** Human name (e.g. "三星电子"); "" when unknown — show the code only. */
+  display_name?: string;
   direction: string;
   confidence: number;
   source_agent: string;

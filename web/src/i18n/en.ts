@@ -544,6 +544,7 @@ export const financeEn: FinanceTranslations = {
       errQty: "qty must be a positive number",
       errPrice: "price must be a positive number",
       errCommission: "commission must be zero or positive",
+      errOccurredAt: "enter a valid trade date",
       outcome: {
         requestFailed: "{symbol}: request failed ({error}) — retry to resend",
         confirmed: "{symbol} confirmed",

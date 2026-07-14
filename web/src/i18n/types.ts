@@ -563,6 +563,7 @@ export interface FinanceTranslations {
       errQty: string;
       errPrice: string;
       errCommission: string;
+      errOccurredAt: string;
       outcome: {
         requestFailed: string;
         confirmed: string; // "{symbol} confirmed"
