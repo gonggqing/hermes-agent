@@ -3,7 +3,6 @@
 import pytest
 
 from swing_trader.decision import (
-    DecisionParams,
     JsonMemory,
     LLMDecisionCore,
     RuleBasedDecisionCore,

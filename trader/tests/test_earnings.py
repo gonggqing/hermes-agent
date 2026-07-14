@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
 from swing_trader.brief import EARNINGS_NOT_WIRED_NOTE, build_research_brief
 from swing_trader.earnings import YFinanceEarnings, upcoming_earnings

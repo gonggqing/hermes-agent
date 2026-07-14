@@ -97,7 +97,6 @@ class TestBacktester:
         fills = ledger.get_fills("paper")
         assert fills
         bar_ts = {b.ts for b in uptrend["NVDA"]} | {b.ts for b in uptrend["SPY"]}
-        decision_days = {uptrend["NVDA"][i].ts for i in range(60, 100)}
         for f in fills:
             assert f.ts in bar_ts
             # a fill can never carry the ts of the day it was DECIDED

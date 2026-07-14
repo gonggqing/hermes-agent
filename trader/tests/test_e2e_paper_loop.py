@@ -19,7 +19,7 @@ from swing_trader.api import FinanceRuntime, create_app
 from swing_trader.dailyloop import DailyLoop, TelegramSurfaceAdapter
 from swing_trader.ledger import Ledger
 from swing_trader.paper_broker import PaperBroker
-from swing_trader.schemas import CandidateStatus, Mode, OrderStatus, OrderType, Side
+from swing_trader.schemas import CandidateStatus, Mode, OrderType, Side
 from swing_trader.simulate import (
     MutableClock,
     SimFeed,

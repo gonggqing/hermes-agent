@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 import pytest
 
 from swing_trader.confirmation import (
-    ActResult,
     ConfirmationService,
     ResultCode,
     Surface,
@@ -104,7 +103,7 @@ class TestApproveRejectFlow:
     def test_idempotent_replay_same_key(self, env):
         ledger, service = env
         c = publish_one(ledger, service)
-        first = service.act(c.id, "approve", "u", Surface.WEB, "k1", IN_WINDOW)
+        service.act(c.id, "approve", "u", Surface.WEB, "k1", IN_WINDOW)  # first approve
         replay = service.act(c.id, "approve", "u", Surface.WEB, "k1", IN_WINDOW)
         assert replay.code is ResultCode.REPLAYED
         assert replay.ok

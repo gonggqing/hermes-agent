@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from swing_trader.analysis import (
     DebateAgent,

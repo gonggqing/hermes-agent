@@ -31,7 +31,6 @@ from swing_trader.log import get_logger
 from swing_trader.paper_broker import PaperBroker
 from swing_trader.risk import RiskParams
 from swing_trader.scheduler import is_trading_day
-from swing_trader.schemas import Mode
 
 logger = get_logger(__name__)
 

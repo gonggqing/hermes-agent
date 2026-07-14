@@ -49,7 +49,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     import uvicorn
     from dotenv import load_dotenv
 
-    from swing_trader.api import DEFAULT_SERVICE_PORT, FinanceRuntime, create_app
+    from swing_trader.api import FinanceRuntime, create_app
     from swing_trader.dailyloop import DailyLoop, TelegramSurfaceAdapter
     from swing_trader.datafeed import RetryingFeed, YFinanceFeed
     from swing_trader.ledger import Ledger
@@ -178,7 +178,10 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         # Reporter prefers the shared gateway token; falls back to the finance
         # token only if the gateway one is absent.
         report_transport = HttpTransport(SecretStr(shared_token or dedicated_token))
-        notify = lambda text: report_transport.send_message(chat_id, text)
+
+        def notify(text: str) -> None:
+            report_transport.send_message(chat_id, text)
+
         logger.info("reporter bot attached (outbound-only)",
                     extra={"using_shared": bool(shared_token)})
     else:

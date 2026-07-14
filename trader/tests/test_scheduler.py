@@ -18,7 +18,6 @@ July 2026 (EDT, UTC-4: 11:30 ET == 15:30 UTC) and January 2026
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 import pytest
 

@@ -1,6 +1,5 @@
 """Tests for the watchlist universe (Loop.md §11)."""
 
-from swing_trader import watchlist
 from swing_trader.schemas import AiPhase, Role
 from swing_trader.watchlist import UNIVERSE, by_phase, by_role, enabled_symbols, get
 

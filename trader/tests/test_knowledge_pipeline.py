@@ -189,12 +189,12 @@ def test_facts_archive_lines_parseable(stack):
     ingest_news_snapshot(knowledge, index, make_snapshot(), D0)
     path = config.root_dir / "facts" / "2026" / "2026-07-10" / "news.jsonl"
     assert path.exists()
-    lines = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    lines = [json.loads(ln) for ln in path.read_text().splitlines() if ln.strip()]
     # 4 provenance-complete raw items retained (incl. the duplicate; layer-1
     # retention is append-only and independent of layer-2 dedupe).
     assert len(lines) == 4
-    assert {l["headline"] for l in lines} == {NVDA_HEADLINE, MU_HEADLINE, FED_HEADLINE}
-    assert all(l["source"] and l["url"] for l in lines)
+    assert {ln["headline"] for ln in lines} == {NVDA_HEADLINE, MU_HEADLINE, FED_HEADLINE}
+    assert all(ln["source"] and ln["url"] for ln in lines)
 
 
 def test_documents_queryable_with_provenance(stack):

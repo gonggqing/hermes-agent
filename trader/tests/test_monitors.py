@@ -182,7 +182,7 @@ class TestJsonlSink:
         sink.write("market", {"ts": "2026-07-10T15:30:00+00:00", "n": 1})
         sink.write("market", {"ts": "2026-07-10T16:30:00+00:00", "n": 2})
         lines = (tmp_path / "market-20260710.jsonl").read_text().splitlines()
-        assert [json.loads(l)["n"] for l in lines] == [1, 2]
+        assert [json.loads(ln)["n"] for ln in lines] == [1, 2]
 
     def test_filename_date_is_utc(self, tmp_path):
         sink = JsonlSink(tmp_path)

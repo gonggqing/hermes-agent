@@ -10,7 +10,7 @@ charge (§3). Retrieval NEVER raises into the trading loop.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from swing_trader.log import get_logger
 

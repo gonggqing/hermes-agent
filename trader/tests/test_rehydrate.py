@@ -122,8 +122,6 @@ class TestRoundTrip:
         # try to spend almost all remaining cash: must be rejected because
         # the MU order still reserves 3*80 + commission
         cash = fresh.get_account().cash
-        big = candidate(symbol="AMD", qty=int(cash // 100), limit=100.0,
-                        stop=95.0, tp=112.0)
         from swing_trader.schemas import Order
         result = fresh.place_order(Order(
             mode=Mode.PAPER, symbol="AMD", side=Side.BUY,

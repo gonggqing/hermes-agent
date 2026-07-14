@@ -6,11 +6,10 @@ confirmations, and replies ONLY on a DM or an @mention — allowlist-gated.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from swing_trader.dailyloop import TelegramSurfaceAdapter
 from swing_trader.datafeed import DataFeedError
-from swing_trader.interfaces import Bar, DataFeed, NewsItem, Quote
+from swing_trader.interfaces import Bar, DataFeed, Quote
 from swing_trader.on_demand import analyze_symbol, extract_symbols, render_analysis_zh
 
 UTC = timezone.utc
