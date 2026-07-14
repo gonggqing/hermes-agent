@@ -101,3 +101,30 @@ class TestRunSessionNow:
         loop.run_session_now(now=run_at, window_minutes=60)
         # window clamped to same ET day; still valid at run time
         assert runtime.confirmation.in_window(run_at) is True
+
+
+class TestResearchRefresh:
+    def test_us_brief_is_archived_when_published(self, loop_env):
+        loop, runtime, _, _ = loop_env
+        saved = []
+
+        class _Store:
+            def save(self, market, payload):
+                saved.append((market, payload))
+
+        runtime.brief_store = _Store()
+        loop._publish_brief()
+
+        assert saved and saved[0][0] == "us"
+        assert saved[0][1] == runtime.latest_brief
+
+    def test_run_research_now_never_enters_decision_path(self, loop_env):
+        loop, runtime, _, _ = loop_env
+        decided = []
+        loop.on_decide = lambda: decided.append(True)
+
+        result = loop.run_research_now()
+
+        assert result["market"] == "US"
+        assert result["brief_ready"] is True
+        assert decided == []

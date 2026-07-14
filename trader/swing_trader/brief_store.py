@@ -133,3 +133,21 @@ class BriefStore:
             )
             row = s.exec(q).first()
             return json.loads(row.payload_json) if row else None
+
+    def get_latest(self, market: str) -> Optional[dict]:
+        """Newest archived full brief for ``market``, across all dates.
+
+        This is the restart-recovery path for the Finance desk: rendered
+        briefs remain useful immediately after a container rebuild while a
+        fresh research run is pending.  The original ``as_of`` is preserved so
+        consumers can still make an honest freshness decision.
+        """
+        with Session(self._engine) as s:
+            q = (
+                select(BriefSnapshotRow)
+                .where(BriefSnapshotRow.market == market.strip().lower())
+                .order_by(BriefSnapshotRow.generated_at.desc())
+                .limit(1)
+            )
+            row = s.exec(q).first()
+            return json.loads(row.payload_json) if row else None

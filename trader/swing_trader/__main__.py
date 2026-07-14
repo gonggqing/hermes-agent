@@ -21,6 +21,52 @@ from swing_trader.log import get_logger, setup_logging
 logger = get_logger(__name__)
 
 
+def _runtime_brief(runtime, market: str):
+    key = market.lower()
+    return runtime.latest_brief if key == "us" else runtime.latest_briefs.get(key)
+
+
+def _restore_latest_briefs(runtime, markets=("us", "cn", "kr")) -> list[str]:
+    """Hydrate volatile FinanceRuntime slots from the durable brief archive."""
+    store = getattr(runtime, "brief_store", None)
+    restored: list[str] = []
+    if store is None:
+        return restored
+    for market in markets:
+        key = market.lower()
+        try:
+            payload = store.get_latest(key)
+        except Exception:  # archive damage must not prevent service startup
+            logger.warning("brief restore failed", extra={"market": key})
+            continue
+        if not payload:
+            continue
+        if key == "us":
+            runtime.latest_brief = payload
+        else:
+            runtime.latest_briefs[key] = payload
+            if key == "cn":
+                runtime.latest_brief_cn = payload
+        restored.append(key)
+    if restored:
+        logger.info("research briefs restored", extra={"markets": restored})
+    return restored
+
+
+def _markets_missing_today(runtime, market_timezones: dict[str, str]) -> list[str]:
+    """Markets with no archived/in-memory brief for their current local date."""
+    from zoneinfo import ZoneInfo
+
+    missing = []
+    now = runtime.clock()
+    for market, tz_name in market_timezones.items():
+        payload = _runtime_brief(runtime, market) or {}
+        today = now.astimezone(ZoneInfo(tz_name)).date().isoformat()
+        if str(payload.get("trading_date") or "") != today:
+            missing.append(market)
+    return missing
+
+
 def _cmd_simulate(args: argparse.Namespace) -> None:
     from swing_trader.schemas import Mode
     from swing_trader.simulate import run_simulation
@@ -123,14 +169,15 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     runtime.portfolio = PortfolioJournal(url=db_url)
     runtime.portfolio_drafts = PortfolioDraftService(runtime.portfolio, clock=runtime.clock)
     # Durable research-brief history (own DB file, own MetaData — never the
-    # ledger's tables): archives each published brief so it survives restart and
-    # the agent can read a past day's brief (latest_briefs is in-memory only).
+    # ledger's tables): archives each published brief and hydrates the volatile
+    # runtime cache immediately after a rebuild.
     from pathlib import Path as _DbPath
 
     from swing_trader.brief_store import BriefStore
 
     _briefs_url = f"sqlite:///{_DbPath(args.db or settings.db_path).parent / 'briefs.db'}"
     runtime.brief_store = BriefStore(url=_briefs_url)
+    _restore_latest_briefs(runtime)
     # User-set display-name overrides (finance-bot DM "改名"): own DB, highest
     # precedence in _symbol_names. Lets the user fix a name with no code deploy.
     from swing_trader.name_override import NameOverrideStore
@@ -374,6 +421,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     runtime.run_session = loop.run_session_now
     runtime.finalize_session = loop.finalize_session_now
     runtime.execution = loop.execution  # Phase 0.95: /orders/cancel-all
+    runtime.run_research["us"] = loop.run_research_now
 
     # CN MORNING research session (Loop.md two-session extension): a lighter,
     # technology-focused research brief on the China/HK market, on the CN
@@ -466,6 +514,43 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     logger.info("finance service listening", extra={"port": args.port})
     print(f"Finance service on http://127.0.0.1:{args.port} "
           f"(dashboard proxies /api/finance/*). Ctrl-C to stop.", flush=True)
+
+    # Rebuilds can happen after a market's scheduled research event. Restore
+    # archived briefs synchronously above so the portal is never blank, then
+    # catch up ONLY markets without a brief for their current local date. This
+    # is read-only and sequential to avoid hammering the free Yahoo endpoint.
+    if not args.check_now:
+        market_timezones = {
+            "us": settings.market_tz,
+            "cn": settings.cn_market_tz,
+            "kr": settings.kr_market_tz,
+        }
+        missing_markets = [
+            market for market in _markets_missing_today(runtime, market_timezones)
+            if market in runtime.run_research
+        ]
+        if missing_markets:
+            logger.info("startup research refresh queued",
+                        extra={"markets": missing_markets})
+
+            def _refresh_missing_research() -> None:
+                for market in missing_markets:
+                    if market in runtime.research_running:
+                        continue
+                    runtime.research_running.add(market)
+                    try:
+                        runtime.run_research[market]()
+                    except Exception:
+                        logger.exception("startup research refresh failed",
+                                         extra={"market": market})
+                    finally:
+                        runtime.research_running.discard(market)
+
+            threading.Thread(
+                target=_refresh_missing_research,
+                daemon=True,
+                name="finance-research-catchup",
+            ).start()
 
     if args.check_now:
         # One-shot finance check (demo/verification): poll monitors, record a

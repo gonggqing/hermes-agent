@@ -562,6 +562,25 @@ class DailyLoop:
         self._ingest_research()
         self._publish_brief()
 
+    def run_research_now(self) -> dict:
+        """Refresh the US research desk without entering the decision loop.
+
+        Safe for startup catch-up and the research API: it gathers market,
+        portfolio, news and earnings context and publishes a brief, but never
+        proposes candidates, opens a confirmation window or places orders.
+        """
+        try:
+            self.on_monitor()
+        except Exception:  # a refresh failure must not crash the service
+            logger.exception("US research refresh failed; publishing degraded brief")
+            self._publish_brief()
+        ready = bool(self.runtime is not None and self.runtime.latest_brief)
+        return {
+            "market": "US",
+            "ran_at": self.clock().isoformat(),
+            "brief_ready": ready,
+        }
+
     def on_decide(self) -> None:
         if self._portfolio is None:  # monitors have not run (fresh start mid-day)
             self.on_monitor()
@@ -946,7 +965,15 @@ class DailyLoop:
                 earnings=(self._earnings
                           if self.earnings_provider is not None else None),
             )
-            self.runtime.latest_brief = brief.model_dump(mode="json")
+            dump = brief.model_dump(mode="json")
+            self.runtime.latest_brief = dump
+            store = getattr(self.runtime, "brief_store", None)
+            if store is not None:
+                try:
+                    store.save("us", dump)
+                except Exception:  # archive failure must not break the loop
+                    logger.warning("brief snapshot archive failed",
+                                   extra={"market": "us"})
         except Exception:  # brief must never break the trading loop
             logger.exception("research brief build failed")
 

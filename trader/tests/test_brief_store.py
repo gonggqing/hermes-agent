@@ -63,6 +63,20 @@ def test_get_by_date_returns_latest_run_of_the_day(tmp_path):
     assert got["as_of"] == "2026-07-14T06:00:00Z"
 
 
+def test_get_latest_returns_newest_snapshot_across_dates(tmp_path):
+    st = _store(tmp_path)
+    st.save("kr", _kr_brief(as_of="2026-07-13T09:11:00Z",
+                             trading_date="2026-07-13"))
+    st.save("kr", _kr_brief(as_of="2026-07-14T09:11:00Z",
+                             trading_date="2026-07-14"))
+    st.save("cn", {"as_of": "2026-07-15T01:00:00Z",
+                   "trading_date": "2026-07-15", "marker": "other-market"})
+
+    got = st.get_latest("KR")
+    assert got is not None and got["trading_date"] == "2026-07-14"
+    assert st.get_latest("us") is None
+
+
 def test_snapshot_table_isolated_from_ledger(tmp_path):
     """Own MetaData: the snapshot table must NOT be creatable by the ledger and
     vice versa (same DB-file could otherwise cross-pollute)."""

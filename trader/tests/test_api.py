@@ -181,6 +181,38 @@ class TestReads:
         assert client.get("/v1/research/brief",
                           params={"market": "cn"}).json()["marker"] == "cn-legacy"
 
+    def test_research_brief_restores_market_from_archive(self, env, tmp_path):
+        from swing_trader.brief_store import BriefStore
+
+        _, _, runtime, client = env
+        runtime.brief_store = BriefStore(url=f"sqlite:///{tmp_path/'briefs.db'}")
+        runtime.brief_store.save("kr", {
+            "as_of": "2026-07-14T06:00:00Z",
+            "trading_date": "2026-07-14",
+            "mode": "paper",
+            "marker": "kr-archive",
+        })
+
+        body = client.get("/v1/research/brief", params={"market": "kr"}).json()
+        assert body["marker"] == "kr-archive"
+        assert runtime.latest_briefs["kr"]["marker"] == "kr-archive"
+
+    def test_research_brief_restores_us_from_archive(self, env, tmp_path):
+        from swing_trader.brief_store import BriefStore
+
+        _, _, runtime, client = env
+        runtime.brief_store = BriefStore(url=f"sqlite:///{tmp_path/'us-briefs.db'}")
+        runtime.brief_store.save("us", {
+            "as_of": "2026-07-14T15:00:00Z",
+            "trading_date": "2026-07-14",
+            "mode": "paper",
+            "marker": "us-archive",
+        })
+
+        body = client.get("/v1/research/brief").json()
+        assert body["marker"] == "us-archive"
+        assert runtime.latest_brief["marker"] == "us-archive"
+
     def test_research_run_triggers_hook(self, env):
         _, _, runtime, client = env
         import threading

@@ -93,7 +93,7 @@ class FinanceRuntime:
     research_running: set = field(default_factory=set)
     nav_provider: Any = None  # swing_trader.fund_nav.NavProvider — 场外基金 NAV
     gold_provider: Any = None  # swing_trader.sge_gold.GoldProvider — 国内金价 (SGE)
-    # Durable per-market brief history (latest_briefs is in-memory only).
+    # Durable per-market brief history and restart source for volatile slots.
     brief_store: Any = None  # swing_trader.brief_store.BriefStore | None
     # User-set display-name overrides (finance-bot DM "改名"). Highest precedence.
     name_overrides: Any = None  # swing_trader.name_override.NameOverrideStore | None
@@ -374,6 +374,19 @@ def create_app(runtime: FinanceRuntime):
         "kr": ("Asia/Seoul", "Korea semiconductors"),
     }
 
+    def _archived_brief(market_key: str) -> Optional[dict]:
+        """Best-effort restart fallback; never turn a readable API into 500."""
+        store = runtime.brief_store
+        if store is None:
+            return None
+        try:
+            return store.get_latest(market_key)
+        except Exception:  # noqa: BLE001 — corrupt archive degrades honestly
+            logger.warning(
+                "latest brief archive read failed", extra={"market": market_key}
+            )
+            return None
+
     @app.get(f"/{API_VERSION}/research/brief")
     def research_brief(market: Optional[str] = Query(default=None)) -> dict:
         """Investment Research brief (Loop.md Phase 0.5). ``market=cn`` /
@@ -389,6 +402,12 @@ def create_app(runtime: FinanceRuntime):
                 runtime.latest_brief_cn if key == "cn" else None)
             if cached:
                 return cached
+            archived = _archived_brief(key)
+            if archived:
+                runtime.latest_briefs[key] = archived
+                if key == "cn":
+                    runtime.latest_brief_cn = archived
+                return archived
             from zoneinfo import ZoneInfo
 
             tz_name, label = _RESEARCH_MARKETS[key]
@@ -405,6 +424,10 @@ def create_app(runtime: FinanceRuntime):
 
         if runtime.latest_brief:
             return runtime.latest_brief
+        archived = _archived_brief("us")
+        if archived:
+            runtime.latest_brief = archived
+            return archived
         brief = build_research_brief(
             runtime.ledger, runtime.mode, now=runtime.clock()
         )
