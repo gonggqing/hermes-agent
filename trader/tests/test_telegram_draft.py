@@ -34,6 +34,7 @@ class MockTransport:
 
     def __init__(self):
         self.sent: list[tuple[str, dict | None]] = []
+        self.targets: list[str] = []  # chat id per send (routing assertions)
         self.queue: list[dict] = []
         self.answered: list[tuple[str, str]] = []
         self._mid = 0
@@ -41,6 +42,7 @@ class MockTransport:
     def send_message(self, chat_id, text, reply_markup=None):
         self._mid += 1
         self.sent.append((text, reply_markup))
+        self.targets.append(str(chat_id))
         return self._mid
 
     def get_updates(self, offset=None, timeout=0):
@@ -211,3 +213,60 @@ def test_empty_allowlist_refuses_everyone(tmp_path):
     transport.queue.append(_draft_cb(d, {"id": 1, "username": "gongqing"}, "ok"))
     adapter.poll(None, NOW)
     assert svc.get_draft(d.id).status is DraftStatus.DRAFT
+
+
+# ------------------------------------------------- DM recording (记账) routing
+
+def _dm(text, cid=55501, username="gongqing"):
+    return {"update_id": 1, "message": {
+        "text": text, "chat": {"id": cid, "type": "private"},
+        "from": {"id": 1, "username": username}}}
+
+
+def test_dm_trade_pushes_card_to_dm_not_group(tmp_path):
+    _, account, svc, transport, adapter = _setup(tmp_path, {"gongqing"})
+    adapter.set_trade_recorder(
+        lambda text: (_complete_buy(svc, account.id), "平安证券", "📝 已识别，请确认"))
+    adapter.set_text_responder(lambda text: "should not be used")
+    transport.queue.append(_dm("卖了 513310 200股 @5.762"))
+    adapter.poll(None, NOW)
+    # the ack + the card both went to the DM chat, never the group ("42")
+    assert "55501" in transport.targets and "42" not in transport.targets
+    assert any(kb is not None for _, kb in transport.sent)  # a card keyboard
+    assert any("已识别" in t for t, _ in transport.sent)     # the ack
+
+
+def test_dm_non_trade_falls_through_to_analysis(tmp_path):
+    _, account, svc, transport, adapter = _setup(tmp_path, {"gongqing"})
+    adapter.set_trade_recorder(lambda text: None)  # not a trade
+    adapter.set_text_responder(lambda text: "分析结果")
+    transport.queue.append(_dm("分析 NVDA"))
+    adapter.poll(None, NOW)
+    assert ("分析结果", None) in transport.sent
+    assert transport.targets == ["55501"]  # analysis reply in the DM
+
+
+def test_learned_dm_chat_routes_later_api_card(tmp_path):
+    _, account, svc, transport, adapter = _setup(tmp_path, {"gongqing"})
+    adapter.set_trade_recorder(lambda text: None)
+    adapter.set_text_responder(lambda text: None)
+    transport.queue.append(_dm("hi"))  # any DM teaches the private chat id
+    adapter.poll(None, NOW)
+    # an API-created draft card (no explicit chat) now routes to the DM, not group
+    adapter.push_draft_card(_complete_buy(svc, account.id))
+    assert transport.targets[-1] == "55501"
+
+
+def test_recording_only_in_dm_not_group_mention(tmp_path):
+    _, account, svc, transport, adapter = _setup(tmp_path, {"gongqing"})
+    calls = []
+    adapter.set_trade_recorder(lambda text: calls.append(text) or None)
+    adapter.set_text_responder(lambda text: "analysis")
+    # an @mention in a GROUP with a trade-looking message must NOT record
+    adapter._bot_username = "financebot"
+    transport.queue.append({"update_id": 1, "message": {
+        "text": "@financebot 卖了 513310 200股 @5.762",
+        "chat": {"id": 42, "type": "group"},
+        "from": {"id": 1, "username": "gongqing"}}})
+    adapter.poll(None, NOW)
+    assert calls == []  # recorder never invoked for a group @mention

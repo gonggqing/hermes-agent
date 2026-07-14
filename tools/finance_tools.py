@@ -542,5 +542,10 @@ registry.register(name="account_view", schema=_ACCOUNT_VIEW_SCHEMA, handler=_han
 registry.register(name="portfolio_accounts", schema=_PORTFOLIO_ACCOUNTS_SCHEMA, handler=_handle_portfolio_accounts, **_F)
 registry.register(name="portfolio_holdings", schema=_PORTFOLIO_HOLDINGS_SCHEMA, handler=_handle_portfolio_holdings, **_F)
 registry.register(name="portfolio_valuation", schema=_PORTFOLIO_VALUATION_SCHEMA, handler=_handle_portfolio_valuation, **_F)
-registry.register(name="draft_portfolio_trade", schema=_DRAFT_TRADE_SCHEMA, handler=_handle_draft_portfolio_trade, **_F)
-registry.register(name="draft_close_position", schema=_DRAFT_CLOSE_SCHEMA, handler=_handle_draft_close_position, **_F)
+# NOTE (2026-07-14, user decision): the general agent is ANALYSIS-ONLY for the
+# real portfolio — it no longer drafts trades. Portfolio recording (记账/买卖)
+# is the finance-bot's job: DM it in plain language ("卖了 159813 200股 @1.893")
+# → it parses → draft → confirm card. So draft_portfolio_trade / draft_close_position
+# are intentionally NOT registered here (their handlers/schemas above are dead
+# code, left for reference / possible reuse). The general agent keeps all READ
+# tools (holdings/valuation/quotes/research) so it can analyze fully.

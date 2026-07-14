@@ -268,6 +268,12 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             return render_analysis_zh(result)
 
         telegram.set_text_responder(_finance_responder)
+        # Recording (记账) is the finance bot's job (user decision 2026-07-14):
+        # a DM trade message ("卖了 159813 200股 @1.893") → draft → confirm card
+        # in the DM. Analysis DMs still fall through to _finance_responder above.
+        from swing_trader.trade_record import make_trade_recorder
+
+        telegram.set_trade_recorder(make_trade_recorder(runtime))
     loop = DailyLoop(
         feed, broker, ledger, mode=settings.mode,
         live_orders_allowed=settings.live_orders_allowed,

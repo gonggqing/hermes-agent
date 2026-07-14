@@ -117,6 +117,13 @@ class TelegramSurfaceAdapter:
         self._draft_by_short_id: dict[str, str] = {}
         self._draft_lock = threading.Lock()
         self._drafts: Any = None  # PortfolioDraftService, wired post-construction
+        # Recording (记账) happens in the user's DM with the finance bot (user
+        # decision 2026-07-14). We learn the private chat id the first time an
+        # allowlisted user DMs, and route draft cards there (keeping the group
+        # for candidate-order confirmations only). ``_record_trade`` parses a DM
+        # trade message into a draft; None disables recording.
+        self._dm_chat_id: Optional[str] = None
+        self._record_trade: Optional[Callable[[str], Any]] = None
 
     def set_text_responder(
         self, fn: Optional[Callable[[str], Optional[str]]]
@@ -129,13 +136,18 @@ class TelegramSurfaceAdapter:
         reject real-holdings drafts in Telegram (Loop.md P0.9 boundary #4)."""
         self._drafts = service
 
-    def push_draft_card(self, draft: Any, account_label: str = "") -> None:
+    def push_draft_card(
+        self, draft: Any, account_label: str = "", chat_id: Optional[str] = None
+    ) -> None:
         """Push a portfolio-draft confirmation card so an allowlisted human can
-        confirm the trade IN Telegram — no portal round-trip (user request:
-        "telegram 直接确认"). The LLM only DRAFTED it; the confirmer is still an
-        authenticated human (boundary #4), and confirm goes through the SAME
-        PortfolioDraftService.confirm_draft the portal uses (same audit trail,
-        same idempotency, same incomplete-draft refusal).
+        confirm the trade IN Telegram — no portal round-trip. The LLM/parser only
+        DRAFTED it; the confirmer is still an authenticated human (boundary #4),
+        and confirm goes through the SAME PortfolioDraftService.confirm_draft the
+        portal uses (same audit trail, idempotency, incomplete-draft refusal).
+
+        Recording is private: the card goes to ``chat_id`` if given, else the
+        learned DM chat, else the group as a last resort. (Candidate-order cards
+        still go to the group via push_cards — that flow is unchanged.)
 
         Best-effort: only the INTERACTIVE (dedicated) bot long-polls callbacks,
         so an outbound-only adapter skips the push; any transport error is
@@ -143,11 +155,12 @@ class TelegramSurfaceAdapter:
         """
         if not self.interactive:
             return
+        target = chat_id or self._dm_chat_id or self._chat_id
         try:
             with self._draft_lock:
                 self._draft_by_short_id[draft.id[:CALLBACK_ID_LEN]] = draft.id
             self._transport.send_message(
-                self._chat_id,
+                target,
                 render_draft_card(draft, account_label),
                 reply_markup=build_draft_keyboard(draft),
             )
@@ -156,6 +169,12 @@ class TelegramSurfaceAdapter:
         except Exception:  # best-effort: never break the draft-create request
             logger.warning("failed to push telegram draft card",
                            extra={"draft_id": getattr(draft, "id", "?")})
+
+    def set_trade_recorder(self, fn: Optional[Callable[[str], Any]]) -> None:
+        """Wire the DM trade-record parser: ``text -> (draft, account_label, ack)``
+        or None if the text isn't a trade record. Recording happens only in a DM
+        with the finance bot (see _handle_message)."""
+        self._record_trade = fn
 
     def _is_authorized(self, sender: dict) -> bool:
         username = str(sender.get("username", "")).lower()
@@ -340,8 +359,9 @@ class TelegramSurfaceAdapter:
     def _handle_message(self, message: dict) -> None:
         """Reply ONLY when directly addressed: a DM, or an @mention of this bot
         in a group — and only for allowlisted users. Otherwise stay quiet (the
-        finance bot is the confirmation channel, not a group chatterbox)."""
-        if self._respond_text is None:
+        finance bot is the confirmation channel, not a group chatterbox). A DM
+        also records trades (see _record_trade); analysis is _respond_text."""
+        if self._respond_text is None and self._record_trade is None:
             return
         text = str(message.get("text") or "").strip()
         if not text:
@@ -354,16 +374,38 @@ class TelegramSurfaceAdapter:
             return  # group message not addressed to the finance bot
         if not self._is_authorized(message.get("from", {}) or {}):
             return  # only allowlisted users get a finance-bot reply
+        chat_id = str(chat.get("id") or self._chat_id)
+        if is_dm:
+            # Learn the private chat so ALL draft cards (DM-recorded or API-made)
+            # route here instead of the group (recording stays private).
+            self._dm_chat_id = chat_id
         if mentioned and username:
             text = re.sub(rf"@{re.escape(username)}", "", text,
                           flags=re.IGNORECASE).strip()
+        # Recording (记账) — DM ONLY: parse a trade → draft → confirm card here.
+        # The card IS the human safety net, so a rough parse is corrected/rejected
+        # there, never silently recorded (boundary #4). Falls through to analysis
+        # when the text isn't a trade record.
+        if is_dm and self._record_trade is not None:
+            try:
+                rec = self._record_trade(text)
+            except Exception:
+                logger.exception("finance bot trade recorder failed")
+                rec = None
+            if rec is not None:
+                draft, account_label, ack = rec
+                self.push_draft_card(draft, account_label=account_label,
+                                     chat_id=chat_id)
+                if ack:
+                    self._transport.send_message(chat_id, ack)
+                return
         try:
-            reply = self._respond_text(text)
+            reply = self._respond_text(text) if self._respond_text else None
         except Exception:
             logger.exception("finance bot text responder failed")
             reply = None
         if reply:
-            self._transport.send_message(str(chat.get("id") or self._chat_id), reply)
+            self._transport.send_message(chat_id, reply)
 
 
 class DailyLoop:
