@@ -119,10 +119,11 @@ export function watchModuleName(
 }
 
 /** Active research markets shown in the "Markets" sidebar group. */
-export const ACTIVE_MARKETS: FinanceDesk[] = ["us", "china", "hk"];
+export const ACTIVE_MARKETS: FinanceDesk[] = ["us", "china", "hk", "korea"];
 
-/** Disabled Phase 0.9 market placeholders (badged, not selectable). */
-export const PLACEHOLDER_MARKETS: FinanceDesk[] = ["uk", "korea", "japan"];
+/** Disabled market placeholders (badged, not selectable). UK/Japan were
+ *  dropped (human directive 2026-07-14: keep only KR, semiconductor-focused). */
+export const PLACEHOLDER_MARKETS: FinanceDesk[] = [];
 
 /** Localized label for a market desk entry. */
 export function marketName(desk: FinanceDesk, ft: FinanceTranslations): string {

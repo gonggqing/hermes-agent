@@ -281,6 +281,11 @@ export interface FinanceTranslations {
     comingSoon: string; // disabled placeholder badge, e.g. "Phase 0.9"
     perRegionNote: string; // China/HK derived from one CN brief note
     selectDesk: string; // aria-label for the narrow-screen desk select
+    // Manual "re-run this market's research session now" button.
+    runResearch: string; // "Run research now"
+    runningResearch: string; // "Running…"
+    runResearchDone: string; // "{market} research refreshed"
+    runResearchFailed: string; // "Could not run research: {error}"
     // Bottom mode switcher.
     modeLabel: string; // aria-label "Trading mode"
     modePaper: string;

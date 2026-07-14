@@ -1327,7 +1327,18 @@ export const api = {
    */
   financeResearchBrief: (market: FinanceResearchMarket = "us") =>
     fetchJSON<FinanceResearchBrief>(
-      `/api/finance/v1/research/brief${market === "cn" ? "?market=cn" : ""}`,
+      `/api/finance/v1/research/brief${market === "us" ? "" : `?market=${market}`}`,
+    ),
+  /**
+   * Manually re-run a market's RESEARCH session NOW (the "refresh research"
+   * button), refreshing that desk's brief with fresh data instead of just
+   * re-reading the cached one. Read-only (no orders) so it is ungated. 404s
+   * when that research market's session is disabled.
+   */
+  financeRunResearch: (market: Exclude<FinanceResearchMarket, "us">) =>
+    fetchJSON<FinanceRunResearchResult>(
+      `/api/finance/v1/research/run?market=${market}`,
+      { method: "POST" },
     ),
   /**
    * Source-linked semantic research search (Loop.md §5.10). The service
@@ -2968,7 +2979,17 @@ export type FinanceMode = "paper" | "live";
 /** Research desk for the Investment Research brief: the default US desk or
  * the China/HK (Asia/Shanghai) morning desk. The CN brief is research-only
  * (risk null, no pending candidates). */
-export type FinanceResearchMarket = "us" | "cn";
+export type FinanceResearchMarket = "us" | "cn" | "kr";
+
+/** Result of POST /v1/research/run (ResearchSession.run_now summary). */
+export interface FinanceRunResearchResult {
+  market: string;
+  market_label: string;
+  ran_at: string;
+  signals: number;
+  sent: boolean;
+  brief_ready: boolean;
+}
 
 export type FinanceBreakerState = "NORMAL" | "TRIPPED";
 
@@ -3286,6 +3307,8 @@ export interface FinanceBriefMover {
   theme: string;
   ai_phase: string;
   role: string;
+  /** Market region from the symbol suffix (CN/HK/KR/US); null on older briefs. */
+  region?: string | null;
 }
 
 export interface FinanceBriefTheme {

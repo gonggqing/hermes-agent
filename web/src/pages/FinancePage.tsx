@@ -5,6 +5,7 @@ import {
   Globe,
   Newspaper,
   PlugZap,
+  RefreshCw,
   TrendingUp,
   Wallet,
 } from "lucide-react";
@@ -585,7 +586,11 @@ function ResearchDetail({
   ft,
 }: {
   desk: FinanceDesk;
-  briefs: { us: FinanceResearchBriefData | null; cn: FinanceResearchBriefData | null };
+  briefs: {
+    us: FinanceResearchBriefData | null;
+    cn: FinanceResearchBriefData | null;
+    kr: FinanceResearchBriefData | null;
+  };
   ft: FinanceTranslations;
 }) {
   if (isWatchDesk(desk)) {
@@ -595,6 +600,10 @@ function ResearchDetail({
   }
   if (desk === "us") {
     return <ResearchBrief brief={briefs.us} market="us" />;
+  }
+  if (desk === "korea") {
+    // KR is its own single-region semiconductor brief (no CN-style partition).
+    return <ResearchBrief brief={briefs.kr} market="cn" />;
   }
   // China / HK both derive from the ONE CN brief, partitioned by symbol
   // suffix. Regime/news/themes/freshness are shared. Research-only.
@@ -616,12 +625,24 @@ function ResearchView({
   onDeskChange,
   briefs,
   ft,
+  onRunResearch,
+  researchRunning,
 }: {
   desk: FinanceDesk;
   onDeskChange: (desk: FinanceDesk) => void;
-  briefs: { us: FinanceResearchBriefData | null; cn: FinanceResearchBriefData | null };
+  briefs: {
+    us: FinanceResearchBriefData | null;
+    cn: FinanceResearchBriefData | null;
+    kr: FinanceResearchBriefData | null;
+  };
   ft: FinanceTranslations;
+  onRunResearch: () => void;
+  researchRunning: boolean;
 }) {
+  // The manual "run research now" button only applies to markets with their
+  // own research session (China/HK → CN, Korea → KR); US research is driven by
+  // the trading loop and watch modules are cross-asset, so no button there.
+  const canRun = desk === "china" || desk === "hk" || desk === "korea";
   const sidebar = (
     <>
       <SidebarGroup label={ft.layout.marketsGroup}>
@@ -660,7 +681,30 @@ function ResearchView({
   );
   return (
     <MasterDetail sidebar={sidebar}>
-      <ResearchDetail desk={desk} briefs={briefs} ft={ft} />
+      <div className="flex flex-col gap-3">
+        {canRun && (
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={onRunResearch}
+              disabled={researchRunning}
+              className={cn(
+                "inline-flex items-center gap-1.5 border border-border/60 px-3 py-1.5",
+                "font-mondwest normal-case text-xs text-foreground",
+                "hover:bg-secondary/40 disabled:opacity-50 disabled:cursor-not-allowed",
+              )}
+            >
+              <RefreshCw
+                className={cn("h-3.5 w-3.5", researchRunning && "animate-spin")}
+              />
+              {researchRunning
+                ? ft.layout.runningResearch
+                : ft.layout.runResearch}
+            </button>
+          </div>
+        )}
+        <ResearchDetail desk={desk} briefs={briefs} ft={ft} />
+      </div>
     </MasterDetail>
   );
 }
@@ -872,7 +916,8 @@ export default function FinancePage() {
   const [briefs, setBriefs] = useState<{
     us: FinanceResearchBriefData | null;
     cn: FinanceResearchBriefData | null;
-  }>({ us: null, cn: null });
+    kr: FinanceResearchBriefData | null;
+  }>({ us: null, cn: null, kr: null });
   const [account, setAccount] = useState<FinanceAccountResponse | null>(null);
   const [snapshots, setSnapshots] = useState<FinanceSnapshot[]>([]);
   const [market, setMarket] = useState<FinanceMarketSnapshot | null>(null);
@@ -928,12 +973,14 @@ export default function FinancePage() {
 
   // The brief the Research desk needs: US, the shared CN brief, or none
   // (watch modules). Threaded into the loader so switching desks refetches.
-  const briefMarket: "us" | "cn" | null =
+  const briefMarket: "us" | "cn" | "kr" | null =
     researchDesk === "us"
       ? "us"
       : researchDesk === "china" || researchDesk === "hk"
         ? "cn"
-        : null;
+        : researchDesk === "korea"
+          ? "kr"
+          : null;
   // Mode threaded into the mode-scoped read endpoints. `undefined` lets the
   // service pick (follows /health.mode); an explicit override forces one.
   const modeParam: FinanceMode | undefined = modeOverride ?? undefined;
@@ -998,6 +1045,30 @@ export default function FinancePage() {
     setLoading(true);
     load();
   }, [load]);
+
+  // Manual "run research now" for the current desk: force the backend to
+  // RE-RUN the market's research session (fresh data), then refetch. Only
+  // meaningful for markets with their own session (CN via china/hk, KR).
+  const [researchRunning, setResearchRunning] = useState(false);
+  const runResearch = useCallback(async () => {
+    if (briefMarket !== "cn" && briefMarket !== "kr") return;
+    setResearchRunning(true);
+    try {
+      const res = await api.financeRunResearch(briefMarket);
+      showToast(
+        ft.layout.runResearchDone.replace("{market}", res.market_label),
+        "success",
+      );
+      refresh();
+    } catch (err) {
+      showToast(
+        ft.layout.runResearchFailed.replace("{error}", String(err)),
+        "error",
+      );
+    } finally {
+      setResearchRunning(false);
+    }
+  }, [briefMarket, refresh, showToast, ft]);
 
   const ledgerFallback = account !== null && "source" in account;
   const liveView = account !== null && !("source" in account) ? account : null;
@@ -1085,6 +1156,8 @@ export default function FinancePage() {
           onDeskChange={setResearchDesk}
           briefs={briefs}
           ft={ft}
+          onRunResearch={runResearch}
+          researchRunning={researchRunning}
         />
       )}
 

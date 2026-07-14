@@ -104,3 +104,48 @@ describe("api OAuth helpers", () => {
     }
   });
 });
+
+describe("api finance research", () => {
+  it("fetches the US brief with no market param", async () => {
+    vi.stubGlobal("window", {});
+    const fetchMock = jsonFetchMock({ mode: "paper" });
+    vi.stubGlobal("fetch", fetchMock);
+    await api.financeResearchBrief("us");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/finance/v1/research/brief",
+      expect.anything(),
+    );
+  });
+
+  it("passes ?market=kr for the Korea desk", async () => {
+    vi.stubGlobal("window", {});
+    const fetchMock = jsonFetchMock({ mode: "paper" });
+    vi.stubGlobal("fetch", fetchMock);
+    await api.financeResearchBrief("kr");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/finance/v1/research/brief?market=kr",
+      expect.anything(),
+    );
+  });
+
+  it("POSTs to /research/run to re-run a market's session", async () => {
+    vi.stubGlobal("window", {});
+    const fetchMock = jsonFetchMock({ market: "KR", brief_ready: true });
+    vi.stubGlobal("fetch", fetchMock);
+    await api.financeRunResearch("kr");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/finance/v1/research/run?market=kr",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+});
+
+describe("finance market desks", () => {
+  it("has Korea active and no UK/Japan placeholders", async () => {
+    const { ACTIVE_MARKETS, PLACEHOLDER_MARKETS } = await import(
+      "@/pages/finance/constants"
+    );
+    expect(ACTIVE_MARKETS).toContain("korea");
+    expect(PLACEHOLDER_MARKETS).toEqual([]);
+  });
+});
