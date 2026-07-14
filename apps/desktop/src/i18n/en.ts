@@ -1724,6 +1724,7 @@ export const en: Translations = {
       signalsTitle: 'Signals today',
       signalsEmpty: 'No signals for this trading day.',
       signalConfidence: pct => `confidence ${pct}`,
+      signalAsOfBar: date => `data as of ${date}`,
       candidatesTitle: 'Candidates today',
       candidatesEmpty: 'No candidates for this trading day.',
       pendingRow: (side, qty, confidence) => `${side} ${qty} · confidence ${confidence}`,

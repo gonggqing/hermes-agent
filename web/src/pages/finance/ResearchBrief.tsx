@@ -555,6 +555,16 @@ function SignalsCard({
                       (s.confidence * 100).toFixed(0),
                     )}
                   </span>
+                  {s.as_of_bar && (
+                    // DATA as-of (§5.10): the bar these numbers rest on, distinct
+                    // from the brief's as_of — so a stale verdict can't mislead.
+                    <span className="font-mondwest normal-case text-xs text-muted-foreground/70">
+                      {ft.brief.signals.asOfBar.replace(
+                        "{date}",
+                        s.as_of_bar.slice(0, 10),
+                      )}
+                    </span>
+                  )}
                 </div>
                 <p className="font-mondwest normal-case text-sm text-muted-foreground">
                   {s.thesis}

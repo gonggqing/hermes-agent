@@ -670,6 +670,7 @@ export const zh: Translations = {
         title: "今日信号",
         empty: "今日交易日尚无信号记录。",
         confidence: "置信度 {pct}%",
+        asOfBar: "数据截至 {date}",
       },
       uncertainty: {
         title: "未知与不确定性",

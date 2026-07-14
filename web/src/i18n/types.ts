@@ -96,6 +96,7 @@ export interface FinanceTranslations {
       title: string;
       empty: string;
       confidence: string; // "confidence {pct}%"
+      asOfBar: string; // "data as of {date}" — the bar the verdict rests on
     };
     uncertainty: {
       title: string;

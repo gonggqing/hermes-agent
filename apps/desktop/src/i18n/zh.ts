@@ -1896,6 +1896,7 @@ export const zh: Translations = {
       signalsTitle: '今日信号',
       signalsEmpty: '本交易日暂无信号。',
       signalConfidence: pct => `置信度 ${pct}`,
+      signalAsOfBar: date => `数据截至 ${date}`,
       candidatesTitle: '今日候选单',
       candidatesEmpty: '本交易日暂无候选单。',
       pendingRow: (side, qty, confidence) => `${side} ${qty} · 置信度 ${confidence}`,

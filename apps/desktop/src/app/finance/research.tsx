@@ -691,6 +691,13 @@ function SignalsSection({ signals }: { signals: FinanceSignalView[] }) {
                 <span className="text-[0.62rem] tabular-nums text-muted-foreground">
                   {copy.signalConfidence(fmtPct(signal.confidence * 100, 0))}
                 </span>
+                {signal.as_of_bar && (
+                  // DATA as-of (§5.10): the bar these numbers rest on, distinct
+                  // from the brief's as_of — so a stale verdict can't mislead.
+                  <span className="text-[0.62rem] tabular-nums text-muted-foreground/70">
+                    {copy.signalAsOfBar(signal.as_of_bar.slice(0, 10))}
+                  </span>
+                )}
               </div>
               {signal.thesis && <p className="text-xs leading-5 text-(--ui-text-secondary)">{signal.thesis}</p>}
             </FinanceCard>

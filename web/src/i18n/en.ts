@@ -78,6 +78,7 @@ export const financeEn: FinanceTranslations = {
       title: "Signals today",
       empty: "No signals recorded for today's trading date.",
       confidence: "confidence {pct}%",
+      asOfBar: "data as of {date}",
     },
     uncertainty: {
       title: "Unknowns & uncertainty",

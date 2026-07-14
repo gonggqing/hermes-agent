@@ -1443,6 +1443,7 @@ export interface Translations {
       signalsTitle: string
       signalsEmpty: string
       signalConfidence: (pct: string) => string
+      signalAsOfBar: (date: string) => string
       candidatesTitle: string
       candidatesEmpty: string
       pendingRow: (side: string, qty: string, confidence: string) => string

@@ -3332,6 +3332,9 @@ export interface FinanceBriefSignal {
   confidence: number;
   source_agent: string;
   thesis: string;
+  /** DATA as-of (ISO): the last price-bar date the verdict rests on (§5.10).
+   *  Distinct from the brief's as_of. null for sentiment/macro (no price bar). */
+  as_of_bar?: string | null;
 }
 
 /** Compact "actions requiring attention" row (`PendingCandidate`). */
