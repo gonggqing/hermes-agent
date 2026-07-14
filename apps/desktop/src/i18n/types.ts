@@ -1472,6 +1472,11 @@ export interface Translations {
       comingSoon: string
       phaseBadge: string
       regionNote: string
+      // Manual "re-run this market's research session now" button.
+      runResearch: string
+      runningResearch: string
+      runResearchDone: string
+      runResearchFailed: string
     }
     // Read-only cross-asset watch modules (Gold/Oil/Rates/Crypto, Loop.md §3).
     watch: {

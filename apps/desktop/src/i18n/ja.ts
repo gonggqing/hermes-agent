@@ -18,12 +18,16 @@ export const ja = defineLocale({
       marketChina: '中国',
       marketHk: '香港',
       marketUk: '英国',
-      marketKorea: '韓国',
+      marketKorea: '韓国半導体',
       marketJapan: '日本',
       comingSoon: '近日公開',
       phaseBadge: 'フェーズ 0.9',
       regionNote:
-        '現在、中国と香港は 1 つの CN モーニングブリーフを共有し、上場市場（.SS/.SZ と .HK）で分割しています。レジーム・ニュース・テーマは共通で、地域別ブリーフはフェーズ 0.9 の改善項目です。'
+        '現在、中国と香港は 1 つの CN モーニングブリーフを共有し、上場市場（.SS/.SZ と .HK）で分割しています。レジーム・ニュース・テーマは共通で、地域別ブリーフはフェーズ 0.9 の改善項目です。',
+      runResearch: '調査を今すぐ更新',
+      runningResearch: '更新中…',
+      runResearchDone: '調査を更新しました',
+      runResearchFailed: '調査の更新に失敗しました'
     },
     watch: {
       readOnlyNote: 'ウォッチ専用 — 読み取り専用のマーケットデータです。ここでは発注も承認も行いません（Loop.md §3）。',

@@ -1919,12 +1919,16 @@ export const zh: Translations = {
       marketChina: '中国',
       marketHk: '香港',
       marketUk: '英国',
-      marketKorea: '韩国',
+      marketKorea: '韩国半导体',
       marketJapan: '日本',
       comingSoon: '即将推出',
       phaseBadge: '阶段 0.9',
       regionNote:
-        '目前中国与香港共用同一份 CN 晨间简报，按上市地拆分（.SS/.SZ 与 .HK）。市场状态、新闻与主题为共用；分区简报是阶段 0.9 的改进项。'
+        '目前中国与香港共用同一份 CN 晨间简报，按上市地拆分（.SS/.SZ 与 .HK）。市场状态、新闻与主题为共用；分区简报是阶段 0.9 的改进项。',
+      runResearch: '立即更新研究',
+      runningResearch: '更新中…',
+      runResearchDone: '研究已更新',
+      runResearchFailed: '无法更新研究'
     },
     watch: {
       readOnlyNote: '仅关注 — 只读市场数据。此处不下单也不审批（Loop.md §3）。',

@@ -1748,12 +1748,16 @@ export const en: Translations = {
       marketChina: 'China',
       marketHk: 'Hong Kong',
       marketUk: 'UK',
-      marketKorea: 'Korea',
+      marketKorea: 'Korea semis',
       marketJapan: 'Japan',
       comingSoon: 'Coming soon',
       phaseBadge: 'Phase 0.9',
       regionNote:
-        'China and Hong Kong share one CN morning brief today, split by listing venue (.SS/.SZ vs .HK). Regime, news and themes are shared; per-region briefs are a Phase 0.9 refinement.'
+        'China and Hong Kong share one CN morning brief today, split by listing venue (.SS/.SZ vs .HK). Regime, news and themes are shared; per-region briefs are a Phase 0.9 refinement.',
+      runResearch: 'Run research now',
+      runningResearch: 'Running…',
+      runResearchDone: 'Research refreshed',
+      runResearchFailed: 'Could not run research'
     },
     watch: {
       readOnlyNote: 'Watch-only — read-only market data. No orders or approvals here (Loop.md §3).',

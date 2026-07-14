@@ -1810,7 +1810,29 @@ export function postFinanceSessionFinalize(payload: { actor: string }): Promise<
 // brief (?market=cn). Same ResearchBrief shape, but research-only — risk is
 // null and candidates_today.pending is empty (that session never proposes
 // orders). Omit for the US brief (no query param).
-export type FinanceResearchMarket = 'cn'
+export type FinanceResearchMarket = 'cn' | 'kr'
+
+// Result of POST /v1/research/run (ResearchSession.run_now summary).
+export interface FinanceRunResearchResult {
+  market: string
+  market_label: string
+  ran_at: string
+  signals: number
+  sent: boolean
+  brief_ready: boolean
+}
+
+// Manually RE-RUN a market's research session NOW (the "run research" button):
+// refreshes that desk's brief with fresh data. Read-only (no orders) → ungated;
+// 404s when that research market's session is disabled.
+export function postFinanceResearchRun(
+  market: FinanceResearchMarket
+): Promise<FinanceRunResearchResult> {
+  return window.hermesDesktop.api<FinanceRunResearchResult>({
+    path: `/api/finance/v1/research/run${financeQuery({ market })}`,
+    method: 'POST'
+  })
+}
 
 // The daily Investment Research brief (Loop.md §7 Phase 0.5). Always answers
 // while the service is up: when the loop has not published a brief yet the

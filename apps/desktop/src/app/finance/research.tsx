@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type * as React from 'react'
 import { useState } from 'react'
 
@@ -17,17 +17,19 @@ import {
   type FinanceSignalView,
   type FinanceThemeView,
   getFinanceResearchBrief,
+  postFinanceResearchRun,
   searchFinanceKnowledge
 } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { ExternalLink } from '@/lib/external-link'
-import { AlertTriangle, Bitcoin, Coin, GasStation, Info, Landmark, Search } from '@/lib/icons'
+import { AlertTriangle, Bitcoin, Coin, GasStation, Info, Landmark, RefreshCw, Search } from '@/lib/icons'
 import { cn } from '@/lib/utils'
+import { notify, notifyError } from '@/store/notifications'
 
 import { useRouteEnumParam } from '../hooks/use-route-enum-param'
 import { DetailColumn, ListColumn, MasterDetail } from '../master-detail'
 
-import { FinanceComingSoonBadge, FinanceListGroup, FinanceNavRow, FinanceRowGlyph } from './chrome'
+import { FinanceListGroup, FinanceNavRow, FinanceRowGlyph } from './chrome'
 import {
   enumLabel,
   financeKey,
@@ -59,14 +61,14 @@ const SEARCH_K = 5
 // Selectable sidebar items. The three ACTIVE markets (US, China, HK) plus the
 // read-only watch modules; disabled market placeholders (UK/Korea/Japan) are
 // NOT selectable so they stay out of the enum.
-const ACTIVE_MARKETS = ['us', 'china', 'hk'] as const
+const ACTIVE_MARKETS = ['us', 'china', 'hk', 'korea'] as const
 
 const RESEARCH_DESKS = [...ACTIVE_MARKETS, ...WATCH_MODULE_IDS] as const
 
 type ResearchDesk = (typeof RESEARCH_DESKS)[number]
 
-// Placeholder markets — badged "Phase 0.9", never selectable (Loop.md §7).
-const COMING_SOON_MARKETS = ['uk', 'korea', 'japan'] as const
+// UK/Japan placeholders were dropped (human directive 2026-07-14 — keep only
+// KR, semiconductor-focused); KR is now an active desk above.
 
 const isMarketDesk = (desk: ResearchDesk): desk is (typeof ACTIVE_MARKETS)[number] =>
   (ACTIVE_MARKETS as readonly string[]).includes(desk)
@@ -127,13 +129,14 @@ export function FinanceResearchView({
   const [desk, setDesk] = useRouteEnumParam('desk', RESEARCH_DESKS, 'us')
   const marketDesk = isMarketDesk(desk)
   // China & HK share ONE fetch: keyed by 'cn' (not the desk) so switching
-  // between them never refetches. US sends no market param.
+  // between them never refetches. US sends no market param; KR fetches ?market=kr.
   const isCn = desk === 'china' || desk === 'hk'
-  const marketKey = desk === 'us' ? 'us' : 'cn'
+  const isKr = desk === 'korea'
+  const marketKey = desk === 'us' ? 'us' : isKr ? 'kr' : 'cn'
 
   const briefQuery = useQuery({
     enabled: enabled && marketDesk,
-    queryFn: () => getFinanceResearchBrief(isCn ? 'cn' : undefined),
+    queryFn: () => getFinanceResearchBrief(desk === 'us' ? undefined : isKr ? 'kr' : 'cn'),
     queryKey: financeKey('research', 'brief', marketKey),
     refetchInterval: BRIEF_POLL_MS,
     retry: 1
@@ -141,14 +144,38 @@ export function FinanceResearchView({
 
   const rawBrief = briefQuery.data
 
+  // KR is its own single-region brief (no CN-style partition); only china/hk
+  // partition the shared CN brief.
   const brief =
     rawBrief && isCn ? partitionCnBrief(rawBrief, desk === 'hk' ? 'hk' : 'china') : rawBrief
 
   const marketLabel: Record<(typeof ACTIVE_MARKETS)[number], string> = {
     us: copy.marketUs,
     china: copy.marketChina,
-    hk: copy.marketHk
+    hk: copy.marketHk,
+    korea: copy.marketKorea
   }
+
+  // Manual "run research now": force the backend to RE-RUN this market's
+  // research session (fresh data), then refetch. Only markets with their own
+  // session (China/HK → cn, Korea → kr); US is loop-driven, watch modules are
+  // cross-asset. Read-only (no orders) so it is ungated.
+  const queryClient = useQueryClient()
+  const canRun = marketDesk && desk !== 'us'
+
+  const runMutation = useMutation({
+    mutationFn: () => postFinanceResearchRun(isKr ? 'kr' : 'cn'),
+    onError: error =>
+      notifyError(error instanceof Error ? error : new Error(String(error)), copy.runResearchFailed),
+    onSuccess: result => {
+      void queryClient.invalidateQueries({ queryKey: financeKey('research', 'brief', marketKey) })
+      notify({
+        kind: 'success',
+        message: result.market_label,
+        title: copy.runResearchDone
+      })
+    }
+  })
 
   return (
     <MasterDetail>
@@ -161,17 +188,6 @@ export function FinanceResearchView({
               leading={<FinanceRowGlyph color={MARKET_GLYPH[id].color} emoji={MARKET_GLYPH[id].emoji} />}
               onSelect={() => setDesk(id)}
               title={marketLabel[id]}
-            />
-          ))}
-          {COMING_SOON_MARKETS.map(id => (
-            <FinanceNavRow
-              active={false}
-              badge={<FinanceComingSoonBadge>{copy.phaseBadge}</FinanceComingSoonBadge>}
-              disabled
-              key={id}
-              leading={<FinanceRowGlyph emoji={MARKET_GLYPH[id].emoji} muted />}
-              onSelect={() => undefined}
-              title={id === 'uk' ? copy.marketUk : id === 'korea' ? copy.marketKorea : copy.marketJapan}
             />
           ))}
         </FinanceListGroup>
@@ -194,6 +210,19 @@ export function FinanceResearchView({
       <DetailColumn actionBar={bottomBar} bleed={!marketDesk}>
         {marketDesk ? (
           <div className="space-y-5">
+            {canRun && (
+              <div className="flex justify-end">
+                <Button
+                  disabled={!enabled || runMutation.isPending}
+                  onClick={() => runMutation.mutate()}
+                  size="xs"
+                  variant="outline"
+                >
+                  <RefreshCw className={cn('h-3.5 w-3.5', runMutation.isPending && 'animate-spin')} />
+                  {runMutation.isPending ? copy.runningResearch : copy.runResearch}
+                </Button>
+              </div>
+            )}
             {isCn && <RegionNote note={copy.regionNote} />}
             <QuerySection
               empty={copy.briefError}

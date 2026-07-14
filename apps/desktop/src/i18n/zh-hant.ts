@@ -18,12 +18,16 @@ export const zhHant = defineLocale({
       marketChina: '中國',
       marketHk: '香港',
       marketUk: '英國',
-      marketKorea: '南韓',
+      marketKorea: '南韓半導體',
       marketJapan: '日本',
       comingSoon: '即將推出',
       phaseBadge: '階段 0.9',
       regionNote:
-        '目前中國與香港共用同一份 CN 晨間簡報，依上市地拆分（.SS/.SZ 與 .HK）。市場狀態、新聞與主題為共用；分區簡報是階段 0.9 的改進項。'
+        '目前中國與香港共用同一份 CN 晨間簡報，依上市地拆分（.SS/.SZ 與 .HK）。市場狀態、新聞與主題為共用；分區簡報是階段 0.9 的改進項。',
+      runResearch: '立即更新研究',
+      runningResearch: '更新中…',
+      runResearchDone: '研究已更新',
+      runResearchFailed: '無法更新研究'
     },
     watch: {
       readOnlyNote: '僅關注 — 唯讀市場資料。此處不下單也不審批（Loop.md §3）。',
