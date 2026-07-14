@@ -59,5 +59,8 @@ def test_research_command_renders_movers(tmp_path):
 
 
 def test_command_menu_shape():
+    # Telegram requires lowercase-latin command names; descriptions carry 中文.
     cmds = [c for c, _ in COMMAND_MENU]
-    assert cmds == ["持仓", "研究", "记账", "帮助"]
+    assert cmds == ["holdings", "brief", "record", "help"]
+    assert all(c.isascii() and c.islower() for c in cmds)
+    assert all("·" in d for _, d in COMMAND_MENU)  # 中文 label in the description

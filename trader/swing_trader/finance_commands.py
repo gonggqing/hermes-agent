@@ -13,11 +13,14 @@ from typing import Any, Callable, Optional
 __all__ = ["COMMAND_MENU", "make_command_handler"]
 
 #: (command, description) for Telegram setMyCommands — shown in the "/" menu.
+#: Telegram REQUIRES command names be lowercase [a-z0-9_] (no Chinese), so the
+#: NAMES are latin and the DESCRIPTIONS carry the Chinese labels. The handler
+#: also accepts the Chinese aliases (/持仓 …) typed by hand.
 COMMAND_MENU: list[tuple[str, str]] = [
-    ("持仓", "我的真实持仓 + 成本"),
-    ("研究", "今日市场研究简报（CN/KR）"),
-    ("记账", "怎么记一笔买卖（示例）"),
-    ("帮助", "这个 bot 能做什么"),
+    ("holdings", "持仓 · 我的真实持仓 + 成本"),
+    ("brief", "研究 · 今日市场简报（CN/KR）"),
+    ("record", "记账 · 怎么记一笔买卖（示例）"),
+    ("help", "帮助 · 这个 bot 能做什么"),
 ]
 
 _HELP = (
