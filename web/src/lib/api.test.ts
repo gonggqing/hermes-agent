@@ -148,4 +148,11 @@ describe("finance market desks", () => {
     expect(ACTIVE_MARKETS).toContain("korea");
     expect(PLACEHOLDER_MARKETS).toEqual([]);
   });
+
+  it("isActiveMarketDesk validates Korea (else ?desk=korea falls back to US)", async () => {
+    const { isActiveMarketDesk } = await import("@/pages/finance/constants");
+    expect(isActiveMarketDesk("korea")).toBe(true);
+    expect(isActiveMarketDesk("us")).toBe(true);
+    expect(isActiveMarketDesk("gold")).toBe(false);
+  });
 });

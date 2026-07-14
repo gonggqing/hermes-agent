@@ -154,5 +154,8 @@ export function isWatchDesk(desk: FinanceDesk): desk is WatchModuleKey {
 
 /** True for a selectable, live research market (US/China/HK). */
 export function isActiveMarketDesk(desk: FinanceDesk): boolean {
-  return desk === "us" || desk === "china" || desk === "hk";
+  // Derive from ACTIVE_MARKETS (not a hardcoded list) so newly-activated desks
+  // like Korea validate — otherwise ?desk=korea fails the guard and the page
+  // silently falls back to the US desk.
+  return (ACTIVE_MARKETS as readonly FinanceDesk[]).includes(desk);
 }

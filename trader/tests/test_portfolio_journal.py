@@ -39,6 +39,29 @@ def journal(tmp_path) -> PortfolioJournal:
     return PortfolioJournal(url=f"sqlite:///{tmp_path/'portfolio.db'}")
 
 
+def test_migration_adds_missing_column(tmp_path):
+    """An existing DB whose portfolio_drafts table predates reverses_event_id
+    (create_all never ALTERs) must get the column added on init, else draft
+    writes fail with 'no such column' (the live-service bug)."""
+    import sqlite3
+
+    dbfile = tmp_path / "old.db"
+    url = f"sqlite:///{dbfile}"
+    PortfolioJournal(url=url)  # create current schema
+    # Simulate an OLD DB: drop the column SQLite-style (rebuild without it).
+    con = sqlite3.connect(dbfile)
+    con.execute("ALTER TABLE portfolio_drafts DROP COLUMN reverses_event_id")
+    con.commit()
+    con.close()
+    def cols():
+        return [r[1] for r in sqlite3.connect(dbfile).execute(
+            "PRAGMA table_info(portfolio_drafts)")]
+
+    assert "reverses_event_id" not in cols()  # old schema
+    PortfolioJournal(url=url)  # re-open → migration runs
+    assert "reverses_event_id" in cols()  # column restored
+
+
 def _us_account(journal: PortfolioJournal):
     return journal.create_account(
         name="IBKR US", market_scope=MarketScope.US, base_currency="USD",

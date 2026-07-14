@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Optional
 
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import text
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 from swing_trader.log import get_logger
@@ -410,7 +412,38 @@ class PortfolioJournal:
     def __init__(self, url: str = "sqlite:///portfolio.db") -> None:
         self._engine = create_engine(url)
         SQLModel.metadata.create_all(self._engine)
+        self._migrate_add_missing_columns()
         logger.info("portfolio journal ready", extra={"url": url})
+
+    def _migrate_add_missing_columns(self) -> None:
+        """Additive schema catch-up for existing DBs (no migration framework —
+        ``create_all`` only CREATES tables, never ALTERs them). A model column
+        added after a table was first created (e.g. ``reverses_event_id`` on
+        ``portfolio_drafts``) is missing from the live DB, so writes fail with
+        'no such column'. Add any nullable model columns the table lacks. Only
+        ADDs columns (never drops/retypes) — append-only-safe; runs once at init.
+        """
+        insp = sa_inspect(self._engine)
+        for table in SQLModel.metadata.tables.values():
+            if not insp.has_table(table.name):
+                continue
+            existing = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in existing or col.primary_key:
+                    continue
+                # SQLite ADD COLUMN can't add a NOT NULL column without a
+                # constant default; only auto-add nullable columns (all the
+                # optional model fields are), else surface the gap loudly.
+                if not col.nullable and col.default is None and col.server_default is None:
+                    logger.error("cannot auto-add NOT NULL column",
+                                 extra={"table": table.name, "column": col.name})
+                    continue
+                coltype = col.type.compile(self._engine.dialect)
+                with self._engine.begin() as conn:
+                    conn.execute(text(
+                        f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {coltype}'))
+                logger.warning("added missing column (schema catch-up)",
+                               extra={"table": table.name, "column": col.name})
 
     # ----------------------------------------------------------- accounts
 
