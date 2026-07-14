@@ -1767,10 +1767,10 @@ export const zh: Translations = {
       atLeastOneEdit: '请至少填写一个要修改的值。',
       saving: '保存中…',
       saveApprove: '保存并批准',
-      sessionTitle: '手动补跑 Session',
+      sessionTitle: '交易 Session',
       sessionHint:
-        '错过了 11:30（美东）的 Session？立即补跑，将风控通过的候选单推入新的审批窗口，然后在下方批准。补跑不会下单。',
-      sessionRun: '手动补跑交易 Session',
+        '立即运行 监控 → 决策 → 推送，将风控通过的候选单推入新的审批窗口，然后在下方批准（也可用于补跑错过的 11:30 美东 Session）。运行不会下单。',
+      sessionRun: 'Run Session',
       sessionRunning: '运行中…',
       sessionFinalize: '结算并下单',
       sessionRunDone: 'Session 已完成',

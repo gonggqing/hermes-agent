@@ -1593,10 +1593,10 @@ export const en: Translations = {
       atLeastOneEdit: 'Enter at least one value to edit.',
       saving: 'Saving…',
       saveApprove: 'Save & approve',
-      sessionTitle: 'Manual session catch-up',
+      sessionTitle: 'Trading session',
       sessionHint:
-        'Missed the 11:30 ET session? Run it now to push risk-approved candidates into a fresh approval window, then approve them below. Running does not place orders.',
-      sessionRun: 'Run session now',
+        'Run monitor → decide → push now to put risk-approved candidates into a fresh approval window, then approve them below (also catches up a missed 11:30 ET session). Running does not place orders.',
+      sessionRun: 'Run Session',
       sessionRunning: 'Running…',
       sessionFinalize: 'Finalize & place approved',
       sessionRunDone: 'Session complete',
