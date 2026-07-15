@@ -49,8 +49,30 @@ export interface FinanceTranslations {
     asOf: string; // "as of {time}"
     unavailable: string;
     staleWarningsTitle: string;
+    summary: {
+      title: string;
+      subtitle: string;
+      marketLabel: string;
+      focusLabel: string;
+      opportunityLabel: string;
+      riskLabel: string;
+      marketRiskOn: string;
+      marketNeutral: string;
+      marketRiskOff: string;
+      marketUnknown: string;
+      marketFacts: string;
+      themeFocus: string;
+      moverFocus: string;
+      focusUnknown: string;
+      opportunity: string;
+      opportunityNone: string;
+      riskClear: string;
+      riskSummary: string;
+      action: string;
+    };
     risk: {
       title: string;
+      description: string;
       equity: string;
       cash: string;
       dayPnl: string;
@@ -65,12 +87,14 @@ export interface FinanceTranslations {
     };
     regime: {
       title: string;
+      description: string;
       vix: string;
       breadth: string;
       unavailable: string;
     };
     movers: {
       title: string;
+      description: string;
       top: string;
       bottom: string;
       symbol: string;
@@ -83,14 +107,22 @@ export interface FinanceTranslations {
     };
     themes: {
       title: string;
+      description: string;
       symbols: string; // "{n} symbols"
       leaders: string;
       empty: string;
     };
     discovery: {
       title: string;
+      description: string;
       empty: string;
       score: string;
+      scoreMeaning: string;
+      reasons: string;
+      noReasons: string;
+      reasonTrend: string;
+      reasonRelativeStrength: string;
+      reasonVolume: string;
       sources: string;
     };
     synthesis: {
@@ -99,17 +131,20 @@ export interface FinanceTranslations {
     };
     news: {
       title: string;
+      description: string;
       empty: string;
       sentiment: string;
     };
     signals: {
       title: string;
+      description: string;
       empty: string;
       confidence: string; // "confidence {pct}%"
       asOfBar: string; // "data as of {date}" — the bar the verdict rests on
     };
     uncertainty: {
       title: string;
+      description: string;
       empty: string;
     };
     provenance: {

@@ -30,8 +30,30 @@ export const financeEn: FinanceTranslations = {
     unavailable:
       "Research brief unavailable — the research endpoint did not answer.",
     staleWarningsTitle: "Data freshness warnings",
+    summary: {
+      title: "Researcher's brief",
+      subtitle: "A plain-language reading of today's evidence — what matters, why it matters, and what still needs checking.",
+      marketLabel: "Market view",
+      focusLabel: "What is leading",
+      opportunityLabel: "What deserves research",
+      riskLabel: "Risk and next step",
+      marketRiskOn: "Risk appetite is supportive, but this is not a blanket buy signal.",
+      marketNeutral: "The market is mixed; prefer selective positions over broad exposure.",
+      marketRiskOff: "Risk appetite is weak; capital preservation and tighter entry discipline come first.",
+      marketUnknown: "There is not enough current market data to make a reliable regime call.",
+      marketFacts: "VIX {vix}; {breadth}% of the observed universe is above its 50-day average.",
+      themeFocus: "{theme} is the strongest observed theme ({distance} vs its 50-day average); current leaders: {leaders}.",
+      moverFocus: "{symbol} is the clearest observed mover ({distance} vs its 20-day average).",
+      focusUnknown: "No sufficiently complete theme or mover snapshot is available yet.",
+      opportunity: "{symbol} ranks first in the discovery pool at {score}. Main reasons: {reasons}.",
+      opportunityNone: "No new symbol passed today's evidence, trend and liquidity checks.",
+      riskClear: "No additional monitor warning is present in this snapshot.",
+      riskSummary: "This snapshot has {freshness} freshness warning(s), {risk} portfolio warning(s), and {unknown} research gap(s) to verify.",
+      action: "Treat discovery scores as research priority, not expected return. Verify the evidence and valuation before any order decision.",
+    },
     risk: {
       title: "Risk",
+      description: "Shows whether the portfolio can absorb new risk. Breaker, drawdown, cash and warnings take priority over an attractive idea.",
       equity: "Equity",
       cash: "Cash",
       dayPnl: "Day PnL",
@@ -47,6 +69,7 @@ export const financeEn: FinanceTranslations = {
     },
     regime: {
       title: "Market regime",
+      description: "Combines volatility, breadth and major-index trend to show whether the backdrop is supportive, mixed or defensive.",
       vix: "VIX",
       breadth: "Breadth >50dma",
       unavailable:
@@ -54,6 +77,7 @@ export const financeEn: FinanceTranslations = {
     },
     movers: {
       title: "Watchlist movers",
+      description: "Ranks unusual trend extension versus 20- and 50-day averages. A large deviation is an attention signal, not proof of value.",
       top: "Top",
       bottom: "Bottom",
       symbol: "Symbol",
@@ -66,14 +90,22 @@ export const financeEn: FinanceTranslations = {
     },
     themes: {
       title: "Themes",
+      description: "Groups related instruments to show where strength or weakness is broad enough to be a theme rather than a single-stock move.",
       symbols: "{n} symbols",
       leaders: "leaders",
       empty: "No theme data yet.",
     },
     discovery: {
       title: "New opportunities discovered",
+      description: "Research-only candidates that passed source, identity, trend and liquidity checks. They have not passed portfolio risk or human approval.",
       empty: "No validated symbols entered today's discovery pool.",
       score: "research score",
+      scoreMeaning: "The score ranks research priority from retained evidence and screening factors; it is not a return forecast or buy rating.",
+      reasons: "Why it ranked",
+      noReasons: "No granular scoring reasons were retained for this candidate.",
+      reasonTrend: "20-day price trend {value}",
+      reasonRelativeStrength: "relative strength {value}",
+      reasonVolume: "volume is {value} the 20-day average",
       sources: "evidence",
     },
     synthesis: {
@@ -82,17 +114,20 @@ export const financeEn: FinanceTranslations = {
     },
     news: {
       title: "News digest",
+      description: "Highlights the most material cited headlines. Sentiment is a routing aid; read the source before changing a thesis.",
       empty: "No news items in the latest snapshot.",
       sentiment: "sentiment",
     },
     signals: {
       title: "Signals today",
+      description: "Summarizes the agents' direction, confidence and thesis. A signal remains research until risk and approval gates are complete.",
       empty: "No signals recorded for today's trading date.",
       confidence: "confidence {pct}%",
       asOfBar: "data as of {date}",
     },
     uncertainty: {
       title: "Unknowns & uncertainty",
+      description: "Lists missing, stale or unresolved evidence that can weaken the brief. These are decision constraints, not footnotes.",
       empty: "Nothing flagged.",
     },
     provenance: {

@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
+  BookOpen,
   HelpCircle,
   Layers,
   Microscope,
@@ -50,6 +51,150 @@ const SEARCH_MIN_CHARS = 2;
 /** Results requested per search. */
 const SEARCH_K = 5;
 
+function interpolate(
+  template: string,
+  values: Record<string, string | number>,
+): string {
+  return Object.entries(values).reduce(
+    (text, [key, value]) => text.replaceAll(`{${key}}`, String(value)),
+    template,
+  );
+}
+
+function explainDiscoveryReason(
+  reason: string,
+  ft: FinanceTranslations,
+): string {
+  const trend = reason.match(/^20d trend\s+(.+)$/i);
+  if (trend) {
+    return interpolate(ft.brief.discovery.reasonTrend, { value: trend[1] });
+  }
+  const relative = reason.match(/^relative strength\s+(.+)$/i);
+  if (relative) {
+    return interpolate(ft.brief.discovery.reasonRelativeStrength, {
+      value: relative[1],
+    });
+  }
+  const volume = reason.match(/^volume\s+(.+)\s+20d average$/i);
+  if (volume) {
+    return interpolate(ft.brief.discovery.reasonVolume, { value: volume[1] });
+  }
+  return reason;
+}
+
+function NarrativeBrief({
+  brief,
+  ft,
+}: {
+  brief: FinanceResearchBrief;
+  ft: FinanceTranslations;
+}) {
+  const copy = ft.brief.summary;
+  const regime = brief.regime?.risk_on_off.toLowerCase();
+  const marketView =
+    regime === "risk_on"
+      ? copy.marketRiskOn
+      : regime === "risk_off"
+        ? copy.marketRiskOff
+        : regime === "neutral"
+          ? copy.marketNeutral
+          : copy.marketUnknown;
+  const marketFacts = brief.regime
+    ? interpolate(copy.marketFacts, {
+        vix: brief.regime.vix?.toFixed(1) ?? "—",
+        breadth: brief.regime.breadth_pct_above_50dma.toFixed(0),
+      })
+    : "";
+
+  const leadTheme = [...brief.themes].sort(
+    (a, b) => b.avg_dist_sma50_pct - a.avg_dist_sma50_pct,
+  )[0];
+  const leadMover = [...brief.movers.top, ...brief.movers.bottom].sort(
+    (a, b) => Math.abs(b.dist_sma20_pct) - Math.abs(a.dist_sma20_pct),
+  )[0];
+  const focus = leadTheme
+    ? interpolate(copy.themeFocus, {
+        theme: leadTheme.theme,
+        distance: fmtSignedPct(leadTheme.avg_dist_sma50_pct),
+        leaders: leadTheme.leaders.join(", ") || "—",
+      })
+    : leadMover
+      ? interpolate(copy.moverFocus, {
+          symbol: leadMover.display_name || leadMover.symbol,
+          distance: fmtSignedPct(leadMover.dist_sma20_pct),
+        })
+      : copy.focusUnknown;
+
+  const opportunity = discoveryCandidates(brief.discovery).sort(
+    (a, b) => a.rank - b.rank,
+  )[0];
+  const opportunityText = opportunity
+    ? interpolate(copy.opportunity, {
+        symbol: opportunity.display_name || opportunity.symbol,
+        score: opportunity.score.toFixed(1),
+        reasons:
+          opportunity.reasons
+            .slice(0, 2)
+            .map((reason) => explainDiscoveryReason(reason, ft))
+            .join(" · ") ||
+          opportunity.relationship,
+      })
+    : copy.opportunityNone;
+  const warningCount =
+    brief.freshness.warnings.length +
+    (brief.risk?.warnings.length ?? 0) +
+    brief.uncertainty.length;
+  const riskSummary =
+    warningCount === 0
+      ? copy.riskClear
+      : interpolate(copy.riskSummary, {
+          freshness: brief.freshness.warnings.length,
+          risk: brief.risk?.warnings.length ?? 0,
+          unknown: brief.uncertainty.length,
+        });
+
+  const sections = [
+    {
+      label: copy.marketLabel,
+      body: `${marketView}${marketFacts ? ` ${marketFacts}` : ""}`,
+    },
+    { label: copy.focusLabel, body: focus },
+    { label: copy.opportunityLabel, body: opportunityText },
+    {
+      label: copy.riskLabel,
+      body: `${riskSummary} ${copy.action}`,
+    },
+  ];
+
+  return (
+    <Card className="border-primary/30 bg-primary/[0.03]">
+      <CardHeader>
+        <div className="flex items-start gap-3">
+          <BookOpen className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+          <div>
+            <CardTitle className="text-base">{copy.title}</CardTitle>
+            <p className="mt-1 font-mondwest normal-case text-sm text-muted-foreground">
+              {copy.subtitle}
+            </p>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-4 md:grid-cols-2">
+        {sections.map((section) => (
+          <div key={section.label} className="border-l-2 border-primary/30 pl-3">
+            <div className="text-xs uppercase tracking-wide text-text-tertiary">
+              {section.label}
+            </div>
+            <p className="mt-1 font-mondwest normal-case text-sm leading-6 text-foreground">
+              {section.body}
+            </p>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── Risk strip ────────────────────────────────────────────────────────
 
 function RiskStrip({
@@ -74,6 +219,9 @@ function RiskStrip({
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
+        <p className="font-mondwest normal-case text-sm leading-6 text-muted-foreground">
+          {ft.brief.risk.description}
+        </p>
         {risk === null ? (
           <p className="font-mondwest normal-case py-2 text-sm text-muted-foreground">
             {ft.brief.risk.unavailable}
@@ -202,7 +350,10 @@ function RegimeChips({
           <CardTitle className="text-base">{ft.brief.regime.title}</CardTitle>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="flex flex-col gap-3">
+        <p className="font-mondwest normal-case text-sm leading-6 text-muted-foreground">
+          {ft.brief.regime.description}
+        </p>
         {regime === null ? (
           <p className="font-mondwest normal-case py-2 text-sm text-muted-foreground">
             {ft.brief.regime.unavailable}
@@ -343,6 +494,9 @@ function MoversCard({
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        <p className="font-mondwest normal-case text-sm leading-6 text-muted-foreground">
+          {ft.brief.movers.description}
+        </p>
         {empty ? (
           <p className="font-mondwest normal-case py-2 text-sm text-muted-foreground">
             {ft.brief.movers.empty}
@@ -395,7 +549,10 @@ function ThemesCard({
           <CardTitle className="text-base">{ft.brief.themes.title}</CardTitle>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="flex flex-col gap-3">
+        <p className="font-mondwest normal-case text-sm leading-6 text-muted-foreground">
+          {ft.brief.themes.description}
+        </p>
         {themes.length === 0 ? (
           <p className="font-mondwest normal-case py-2 text-sm text-muted-foreground">
             {ft.brief.themes.empty}
@@ -471,7 +628,15 @@ function DiscoveryCard({
           )}
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="flex flex-col gap-3">
+        <div className="space-y-1">
+          <p className="font-mondwest normal-case text-sm leading-6 text-muted-foreground">
+            {ft.brief.discovery.description}
+          </p>
+          <p className="font-mondwest normal-case text-xs leading-5 text-text-tertiary">
+            {ft.brief.discovery.scoreMeaning}
+          </p>
+        </div>
         {candidates.length === 0 ? (
           <p className="font-mondwest normal-case py-2 text-sm text-muted-foreground">
             {ft.brief.discovery.empty}
@@ -499,6 +664,22 @@ function DiscoveryCard({
                 <p className="mt-1 line-clamp-3 font-mondwest normal-case text-xs text-muted-foreground">
                   {candidate.relationship}
                 </p>
+                <div className="mt-2 font-mondwest normal-case text-xs">
+                  <div className="text-text-tertiary">
+                    {ft.brief.discovery.reasons}
+                  </div>
+                  {candidate.reasons.length > 0 ? (
+                    <ul className="mt-1 list-disc space-y-0.5 pl-4 text-muted-foreground">
+                      {candidate.reasons.slice(0, 3).map((reason) => (
+                        <li key={reason}>{explainDiscoveryReason(reason, ft)}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-1 text-muted-foreground">
+                      {ft.brief.discovery.noReasons}
+                    </p>
+                  )}
+                </div>
                 {candidate.evidence.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-2">
                     {candidate.evidence.slice(0, 2).map((evidence) => (
@@ -585,7 +766,10 @@ function NewsCard({
           <CardTitle className="text-base">{ft.brief.news.title}</CardTitle>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="flex flex-col gap-3">
+        <p className="font-mondwest normal-case text-sm leading-6 text-muted-foreground">
+          {ft.brief.news.description}
+        </p>
         {news.items.length === 0 ? (
           <p className="font-mondwest normal-case py-2 text-sm text-muted-foreground">
             {ft.brief.news.empty}
@@ -653,7 +837,10 @@ function SignalsCard({
           <CardTitle className="text-base">{ft.brief.signals.title}</CardTitle>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="flex flex-col gap-3">
+        <p className="font-mondwest normal-case text-sm leading-6 text-muted-foreground">
+          {ft.brief.signals.description}
+        </p>
         {signals.length === 0 ? (
           <p className="font-mondwest normal-case py-2 text-sm text-muted-foreground">
             {ft.brief.signals.empty}
@@ -980,6 +1167,8 @@ export function ResearchBrief({
         </div>
       )}
 
+      <NarrativeBrief brief={brief} ft={ft} />
+
       {/* Account-risk strip is US-desk only — the China/HK desk is
           research-only with no account (`risk` is null). */}
       {!researchOnly && <RiskStrip risk={brief.risk} ft={ft} />}
@@ -1008,7 +1197,10 @@ export function ResearchBrief({
             </CardTitle>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-3">
+          <p className="font-mondwest normal-case text-sm leading-6 text-muted-foreground">
+            {ft.brief.uncertainty.description}
+          </p>
           {brief.uncertainty.length === 0 ? (
             <p className="font-mondwest normal-case py-2 text-sm text-muted-foreground">
               {ft.brief.uncertainty.empty}

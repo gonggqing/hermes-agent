@@ -1699,34 +1699,81 @@ export const en: Translations = {
       briefAsOf: ts => `brief as of ${ts}`,
       briefError: 'Could not load the research brief.',
       staleTitle: 'Data freshness warnings',
+      narrativeTitle: "Researcher's brief",
+      narrativeSubtitle:
+        "A plain-language reading of today's evidence — what matters, why it matters, and what still needs checking.",
+      narrativeMarketLabel: 'Market view',
+      narrativeFocusLabel: 'What is leading',
+      narrativeOpportunityLabel: 'What deserves research',
+      narrativeRiskLabel: 'Risk and next step',
+      narrativeMarketRiskOn: 'Risk appetite is supportive, but this is not a blanket buy signal.',
+      narrativeMarketNeutral: 'The market is mixed; prefer selective positions over broad exposure.',
+      narrativeMarketRiskOff: 'Risk appetite is weak; capital preservation and tighter entry discipline come first.',
+      narrativeMarketUnknown: 'There is not enough current market data to make a reliable regime call.',
+      narrativeMarketFacts: (vix, breadth) =>
+        `VIX ${vix}; ${breadth}% of the observed universe is above its 50-day average.`,
+      narrativeThemeFocus: (theme, distance, leaders) =>
+        `${theme} is the strongest observed theme (${distance} vs its 50-day average); current leaders: ${leaders}.`,
+      narrativeMoverFocus: (symbol, distance) =>
+        `${symbol} is the clearest observed mover (${distance} vs its 20-day average).`,
+      narrativeFocusUnknown: 'No sufficiently complete theme or mover snapshot is available yet.',
+      narrativeOpportunity: (symbol, score, reasons) =>
+        `${symbol} ranks first in the discovery pool at ${score}. Main reasons: ${reasons}.`,
+      narrativeOpportunityNone: "No new symbol passed today's evidence, trend and liquidity checks.",
+      narrativeRiskClear: 'No additional monitor warning is present in this snapshot.',
+      narrativeRiskSummary: (freshness, risk, unknown) =>
+        `This snapshot has ${freshness} freshness warning(s), ${risk} portfolio warning(s), and ${unknown} research gap(s) to verify.`,
+      narrativeAction:
+        'Treat discovery scores as research priority, not expected return. Verify the evidence and valuation before any order decision.',
       freshMarket: 'market',
       freshNews: 'news',
       freshPortfolio: 'portfolio',
       freshMissing: 'missing',
       freshAge: minutes => `${minutes} min old`,
       riskTitle: 'Risk',
+      riskDescription:
+        'Shows whether the portfolio can absorb new risk. Breaker, drawdown, cash and warnings take priority over an attractive idea.',
       riskEmpty: 'No risk data — neither the risk monitor nor a ledger snapshot is available yet.',
       poolExposure: 'Pool exposure',
+      regimeDescription:
+        'Combines volatility, breadth and major-index trend to show whether the backdrop is supportive, mixed or defensive.',
       moversTitle: 'Watchlist movers',
+      moversDescription:
+        'Ranks unusual trend extension versus 20- and 50-day averages. A large deviation is an attention signal, not proof of value.',
       moversTop: 'Top (vs SMA20)',
       moversBottom: 'Bottom (vs SMA20)',
       moversEmpty: 'No movers yet — the portfolio monitor has not produced a watch snapshot.',
       vsSma20: delta => `${delta} vs SMA20`,
       vsSma50: delta => `${delta} vs SMA50`,
       themesTitle: 'Themes',
+      themesDescription:
+        'Groups related instruments to show where strength or weakness is broad enough to be a theme rather than a single-stock move.',
       themesEmpty: 'No theme data yet.',
       discoveryTitle: 'New opportunities discovered',
+      discoveryDescription:
+        'Research-only candidates that passed source, identity, trend and liquidity checks. They have not passed portfolio risk or human approval.',
       discoveryEmpty: 'No validated symbols entered today’s discovery pool.',
       discoveryScore: score => `research score ${score}`,
+      discoveryScoreMeaning:
+        'The score ranks research priority from retained evidence and screening factors; it is not a return forecast or buy rating.',
+      discoveryReasons: 'Why it ranked',
+      discoveryNoReasons: 'No granular scoring reasons were retained for this candidate.',
+      discoveryReasonTrend: value => `20-day price trend ${value}`,
+      discoveryReasonRelativeStrength: value => `relative strength ${value}`,
+      discoveryReasonVolume: value => `volume is ${value} the 20-day average`,
       discoverySource: source => `evidence: ${source}`,
       synthesisTitle: 'China ↔ Hong Kong synthesis',
       synthesisEmpty: 'Waiting for both independent market briefs.',
       themeMeta: (count, avg) => `${count} symbols · avg ${avg} vs SMA50`,
       themeLeaders: symbols => `leaders: ${symbols}`,
       newsTitle: 'News digest',
+      newsDescription:
+        'Highlights the most material cited headlines. Sentiment is a routing aid; read the source before changing a thesis.',
       newsEmpty: 'No news items in the latest snapshot.',
       sentiment: value => `sentiment ${value}`,
       signalsTitle: 'Signals today',
+      signalsDescription:
+        "Summarizes the agents' direction, confidence and thesis. A signal remains research until risk and approval gates are complete.",
       signalsEmpty: 'No signals for this trading day.',
       signalConfidence: pct => `confidence ${pct}`,
       signalAsOfBar: date => `data as of ${date}`,
@@ -1735,6 +1782,8 @@ export const en: Translations = {
       pendingRow: (side, qty, confidence) => `${side} ${qty} · confidence ${confidence}`,
       openQueue: 'Open action queue',
       uncertaintyTitle: 'Uncertainty & unknowns',
+      uncertaintyDescription:
+        'Lists missing, stale or unresolved evidence that can weaken the brief. These are decision constraints, not footnotes.',
       provenanceTitle: 'Sources',
       searchTitle: 'Research search',
       searchPlaceholder: 'Search collected research (news, filings, notes)…',

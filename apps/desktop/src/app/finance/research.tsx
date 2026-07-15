@@ -64,6 +64,24 @@ const BRIEF_POLL_MS = 60_000
 // Knowledge search results per query (server clamps k to 1..25).
 const SEARCH_K = 5
 
+type ResearchCopy = ReturnType<typeof useI18n>['t']['finance']['research']
+
+function explainDiscoveryReason(reason: string, copy: ResearchCopy): string {
+  const trend = reason.match(/^20d trend\s+(.+)$/i)
+
+  if (trend) {return copy.discoveryReasonTrend(trend[1])}
+
+  const relative = reason.match(/^relative strength\s+(.+)$/i)
+
+  if (relative) {return copy.discoveryReasonRelativeStrength(relative[1])}
+
+  const volume = reason.match(/^volume\s+(.+)\s+20d average$/i)
+
+  if (volume) {return copy.discoveryReasonVolume(volume[1])}
+
+  return reason
+}
+
 // Selectable sidebar items. The three ACTIVE markets (US, China, HK) plus the
 // read-only watch modules; disabled market placeholders (UK/Korea/Japan) are
 // NOT selectable so they stay out of the enum.
@@ -353,6 +371,7 @@ export function BriefBody({
     <div className="space-y-5">
       <BriefHeader brief={brief} researchOnly={researchOnly} />
       <FreshnessBanner freshness={brief.freshness} />
+      <NarrativeBrief brief={brief} />
       {/* Research-only markets carry no account/positions (risk===null), so the
           account-risk strip and the order-approval hand-off are hidden and a
           research-only note takes their place. */}
@@ -368,6 +387,102 @@ export function BriefBody({
       <UncertaintySection items={brief.uncertainty} />
       <ProvenanceFooter links={brief.provenance} />
     </div>
+  )
+}
+
+function NarrativeBrief({ brief }: { brief: FinanceResearchBrief }) {
+  const { t } = useI18n()
+  const copy = t.finance.research
+  const regime = brief.regime?.risk_on_off.toLowerCase()
+
+  const marketView =
+    regime === 'risk_on'
+      ? copy.narrativeMarketRiskOn
+      : regime === 'risk_off'
+        ? copy.narrativeMarketRiskOff
+        : regime === 'neutral'
+          ? copy.narrativeMarketNeutral
+          : copy.narrativeMarketUnknown
+
+  const marketFacts = brief.regime
+    ? copy.narrativeMarketFacts(
+        brief.regime.vix?.toFixed(1) ?? '—',
+        brief.regime.breadth_pct_above_50dma.toFixed(0)
+      )
+    : ''
+
+  const leadTheme = [...brief.themes].sort((a, b) => b.avg_dist_sma50_pct - a.avg_dist_sma50_pct)[0]
+
+  const leadMover = [...brief.movers.top, ...brief.movers.bottom].sort(
+    (a, b) => Math.abs(b.dist_sma20_pct) - Math.abs(a.dist_sma20_pct)
+  )[0]
+
+  const focus = leadTheme
+    ? copy.narrativeThemeFocus(
+        leadTheme.theme,
+        fmtSignedPct(leadTheme.avg_dist_sma50_pct),
+        leadTheme.leaders.join(', ') || '—'
+      )
+    : leadMover
+      ? copy.narrativeMoverFocus(leadMover.display_name || leadMover.symbol, fmtSignedPct(leadMover.dist_sma20_pct))
+      : copy.narrativeFocusUnknown
+
+  const opportunity = [...(brief.discovery?.candidates ?? [])].sort((a, b) => a.rank - b.rank)[0]
+
+  const opportunityText = opportunity
+    ? copy.narrativeOpportunity(
+        opportunity.display_name || opportunity.symbol,
+        opportunity.score.toFixed(1),
+        opportunity.reasons
+          .slice(0, 2)
+          .map(reason => explainDiscoveryReason(reason, copy))
+          .join(' · ') || opportunity.relationship
+      )
+    : copy.narrativeOpportunityNone
+
+  const warningCount =
+    brief.freshness.warnings.length + (brief.risk?.warnings.length ?? 0) + brief.uncertainty.length
+
+  const riskSummary =
+    warningCount === 0
+      ? copy.narrativeRiskClear
+      : copy.narrativeRiskSummary(
+          brief.freshness.warnings.length,
+          brief.risk?.warnings.length ?? 0,
+          brief.uncertainty.length
+        )
+
+  const sections = [
+    {
+      body: `${marketView}${marketFacts ? ` ${marketFacts}` : ''}`,
+      label: copy.narrativeMarketLabel
+    },
+    { body: focus, label: copy.narrativeFocusLabel },
+    { body: opportunityText, label: copy.narrativeOpportunityLabel },
+    {
+      body: `${riskSummary} ${copy.narrativeAction}`,
+      label: copy.narrativeRiskLabel
+    }
+  ]
+
+  return (
+    <FinanceCard className="space-y-4 border-primary/30 bg-primary/5">
+      <div className="flex items-start gap-2.5">
+        <Info className="mt-0.5 size-4 shrink-0 text-primary" />
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-foreground">{copy.narrativeTitle}</div>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">{copy.narrativeSubtitle}</p>
+        </div>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {sections.map(section => (
+          <div className="border-l-2 border-primary/30 pl-3" key={section.label}>
+            <FinanceSectionLabel>{section.label}</FinanceSectionLabel>
+            <p className="mt-1 text-xs leading-5 text-foreground">{section.body}</p>
+          </div>
+        ))}
+      </div>
+    </FinanceCard>
   )
 }
 
@@ -418,6 +533,8 @@ function DiscoverySection({ pool }: { pool?: FinanceDiscoveryPool | null }) {
   return (
     <section className="space-y-2">
       <FinanceSectionLabel>{copy.discoveryTitle}</FinanceSectionLabel>
+      <p className="text-xs leading-5 text-muted-foreground">{copy.discoveryDescription}</p>
+      <p className="text-[0.62rem] leading-5 text-muted-foreground/80">{copy.discoveryScoreMeaning}</p>
       {!pool || pool.candidates.length === 0 ? (
         <div className="py-1 text-xs text-muted-foreground">{copy.discoveryEmpty}</div>
       ) : (
@@ -438,6 +555,18 @@ function DiscoverySection({ pool }: { pool?: FinanceDiscoveryPool | null }) {
               </div>
               <div className="line-clamp-3 text-[0.65rem] leading-5 text-muted-foreground">
                 {candidate.relationship}
+              </div>
+              <div className="text-[0.65rem] leading-5">
+                <div className="text-muted-foreground/80">{copy.discoveryReasons}</div>
+                {candidate.reasons.length > 0 ? (
+                  <ul className="list-disc pl-4 text-muted-foreground">
+                    {candidate.reasons.slice(0, 3).map(reason => (
+                      <li key={reason}>{explainDiscoveryReason(reason, copy)}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="text-muted-foreground">{copy.discoveryNoReasons}</div>
+                )}
               </div>
               <div className="flex flex-wrap gap-2">
                 {candidate.evidence.slice(0, 2).map(evidence => (
@@ -565,6 +694,7 @@ function RiskSection({ risk }: { risk: FinanceRiskView | null }) {
   return (
     <section className="space-y-2">
       <FinanceSectionLabel>{copy.riskTitle}</FinanceSectionLabel>
+      <p className="text-xs leading-5 text-muted-foreground">{copy.riskDescription}</p>
 
       {!risk ? (
         <div className="py-1 text-xs text-muted-foreground">{copy.riskEmpty}</div>
@@ -658,6 +788,7 @@ function RegimeSection({ regime }: { regime: FinanceRegimeView | null }) {
   return (
     <section className="space-y-2">
       <FinanceSectionLabel>{market.regimeTitle}</FinanceSectionLabel>
+      <p className="text-xs leading-5 text-muted-foreground">{t.finance.research.regimeDescription}</p>
 
       {!regime ? (
         <div className="py-1 text-xs text-muted-foreground">{market.regimeEmpty}</div>
@@ -712,6 +843,7 @@ function MoversSection({ bottom, top }: { bottom: FinanceMover[]; top: FinanceMo
   return (
     <section className="space-y-2">
       <FinanceSectionLabel>{copy.moversTitle}</FinanceSectionLabel>
+      <p className="text-xs leading-5 text-muted-foreground">{copy.moversDescription}</p>
 
       {top.length === 0 && bottom.length === 0 ? (
         <div className="py-1 text-xs text-muted-foreground">{copy.moversEmpty}</div>
@@ -760,6 +892,7 @@ function ThemesSection({ themes }: { themes: FinanceThemeView[] }) {
   return (
     <section className="space-y-2">
       <FinanceSectionLabel>{copy.themesTitle}</FinanceSectionLabel>
+      <p className="text-xs leading-5 text-muted-foreground">{copy.themesDescription}</p>
 
       {themes.length === 0 ? (
         <div className="py-1 text-xs text-muted-foreground">{copy.themesEmpty}</div>
@@ -796,6 +929,7 @@ function NewsSection({ news }: { news: FinanceResearchBrief['news'] }) {
   return (
     <section className="space-y-2">
       <FinanceSectionLabel>{copy.newsTitle}</FinanceSectionLabel>
+      <p className="text-xs leading-5 text-muted-foreground">{copy.newsDescription}</p>
 
       {news.items.length === 0 ? (
         <div className="py-1 text-xs text-muted-foreground">{copy.newsEmpty}</div>
@@ -846,6 +980,7 @@ function SignalsSection({ signals }: { signals: FinanceSignalView[] }) {
   return (
     <section className="space-y-2">
       <FinanceSectionLabel>{copy.signalsTitle}</FinanceSectionLabel>
+      <p className="text-xs leading-5 text-muted-foreground">{copy.signalsDescription}</p>
 
       {signals.length === 0 ? (
         <div className="py-1 text-xs text-muted-foreground">{copy.signalsEmpty}</div>
@@ -955,21 +1090,21 @@ function PendingRow({ pending }: { pending: FinanceBriefPendingCandidate }) {
 
 function UncertaintySection({ items }: { items: string[] }) {
   const { t } = useI18n()
-
-  if (items.length === 0) {
-    return null
-  }
+  const copy = t.finance.research
 
   return (
     <section className="space-y-2">
-      <FinanceSectionLabel>{t.finance.research.uncertaintyTitle}</FinanceSectionLabel>
-      <FinanceCard>
-        <ul className="list-inside list-disc space-y-0.5 text-xs leading-5 text-(--ui-text-secondary)">
-          {items.map(item => (
-            <li key={item}>{item}</li>
-          ))}
-        </ul>
-      </FinanceCard>
+      <FinanceSectionLabel>{copy.uncertaintyTitle}</FinanceSectionLabel>
+      <p className="text-xs leading-5 text-muted-foreground">{copy.uncertaintyDescription}</p>
+      {items.length > 0 && (
+        <FinanceCard>
+          <ul className="list-inside list-disc space-y-0.5 text-xs leading-5 text-(--ui-text-secondary)">
+            {items.map(item => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </FinanceCard>
+      )}
     </section>
   )
 }

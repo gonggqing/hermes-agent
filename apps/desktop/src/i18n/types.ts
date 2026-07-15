@@ -1420,34 +1420,66 @@ export interface Translations {
       briefAsOf: (ts: string) => string
       briefError: string
       staleTitle: string
+      narrativeTitle: string
+      narrativeSubtitle: string
+      narrativeMarketLabel: string
+      narrativeFocusLabel: string
+      narrativeOpportunityLabel: string
+      narrativeRiskLabel: string
+      narrativeMarketRiskOn: string
+      narrativeMarketNeutral: string
+      narrativeMarketRiskOff: string
+      narrativeMarketUnknown: string
+      narrativeMarketFacts: (vix: string, breadth: string) => string
+      narrativeThemeFocus: (theme: string, distance: string, leaders: string) => string
+      narrativeMoverFocus: (symbol: string, distance: string) => string
+      narrativeFocusUnknown: string
+      narrativeOpportunity: (symbol: string, score: string, reasons: string) => string
+      narrativeOpportunityNone: string
+      narrativeRiskClear: string
+      narrativeRiskSummary: (freshness: number, risk: number, unknown: number) => string
+      narrativeAction: string
       freshMarket: string
       freshNews: string
       freshPortfolio: string
       freshMissing: string
       freshAge: (minutes: number) => string
       riskTitle: string
+      riskDescription: string
       riskEmpty: string
       poolExposure: string
+      regimeDescription: string
       moversTitle: string
+      moversDescription: string
       moversTop: string
       moversBottom: string
       moversEmpty: string
       vsSma20: (delta: string) => string
       vsSma50: (delta: string) => string
       themesTitle: string
+      themesDescription: string
       themesEmpty: string
       discoveryTitle: string
+      discoveryDescription: string
       discoveryEmpty: string
       discoveryScore: (score: string) => string
+      discoveryScoreMeaning: string
+      discoveryReasons: string
+      discoveryNoReasons: string
+      discoveryReasonTrend: (value: string) => string
+      discoveryReasonRelativeStrength: (value: string) => string
+      discoveryReasonVolume: (value: string) => string
       discoverySource: (source: string) => string
       synthesisTitle: string
       synthesisEmpty: string
       themeMeta: (count: number, avg: string) => string
       themeLeaders: (symbols: string) => string
       newsTitle: string
+      newsDescription: string
       newsEmpty: string
       sentiment: (value: string) => string
       signalsTitle: string
+      signalsDescription: string
       signalsEmpty: string
       signalConfidence: (pct: string) => string
       signalAsOfBar: (date: string) => string
@@ -1456,6 +1488,7 @@ export interface Translations {
       pendingRow: (side: string, qty: string, confidence: string) => string
       openQueue: string
       uncertaintyTitle: string
+      uncertaintyDescription: string
       provenanceTitle: string
       searchTitle: string
       searchPlaceholder: string
