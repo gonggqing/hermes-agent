@@ -102,6 +102,49 @@ def cache_sticker_metadata(
         _save_cache(cache)
 
 
+def cache_sticker_palette(
+    stickers: list[dict],
+    *,
+    source_group_id: str = "",
+) -> int:
+    """Import a Telegram sticker set into the approved outbound palette.
+
+    Group sticker sets can contain dozens of entries.  Persisting them in one
+    locked, atomic write avoids rewriting the cache once per sticker while
+    preserving any vision descriptions learned from earlier messages.
+    Invalid entries are ignored.  The returned count is the number of valid
+    stickers imported or refreshed.
+    """
+    now = time.time()
+    imported = 0
+    with _CACHE_LOCK:
+        cache = _load_cache()
+        for raw in stickers:
+            if not isinstance(raw, dict):
+                continue
+            file_unique_id = str(raw.get("file_unique_id") or "").strip()
+            file_id = str(raw.get("file_id") or "").strip()
+            if not file_unique_id or not file_id:
+                continue
+            entry = dict(cache.get(file_unique_id) or {})
+            entry.update({
+                "file_id": file_id,
+                "emoji": str(raw.get("emoji") or ""),
+                "set_name": str(raw.get("set_name") or ""),
+                "is_animated": bool(raw.get("is_animated", False)),
+                "is_video": bool(raw.get("is_video", False)),
+                "last_imported_at": now,
+                "palette_source": "group_sticker_set",
+            })
+            if source_group_id:
+                entry["source_group_id"] = str(source_group_id)
+            cache[file_unique_id] = entry
+            imported += 1
+        if imported:
+            _save_cache(cache)
+    return imported
+
+
 def get_sendable_stickers() -> list[dict]:
     """Return only user-observed stickers that Telegram can send again."""
     with _CACHE_LOCK:
@@ -113,7 +156,12 @@ def get_sendable_stickers() -> list[dict]:
         out.append({"file_unique_id": file_unique_id, **raw})
     out.sort(
         key=lambda item: (
-            float(item.get("last_received_at") or item.get("cached_at") or 0),
+            float(
+                item.get("last_received_at")
+                or item.get("last_imported_at")
+                or item.get("cached_at")
+                or 0
+            ),
             item["file_unique_id"],
         ),
         reverse=True,

@@ -7,6 +7,7 @@ from gateway.sticker_cache import (
     _save_cache,
     get_cached_description,
     cache_sticker_metadata,
+    cache_sticker_palette,
     cache_sticker_description,
     get_sendable_stickers,
     build_sticker_injection,
@@ -97,6 +98,30 @@ class TestCacheSticker:
         with patch("gateway.sticker_cache.CACHE_PATH", cache_file):
             cache_sticker_description("uid_1", "Legacy cached sticker")
             assert get_sendable_stickers() == []
+
+    def test_bulk_palette_import_preserves_description(self, tmp_path):
+        cache_file = tmp_path / "cache.json"
+        with patch("gateway.sticker_cache.CACHE_PATH", cache_file):
+            cache_sticker_description("uid_1", "A friendly wave", "👋", "Old")
+            imported = cache_sticker_palette(
+                [
+                    {
+                        "file_unique_id": "uid_1",
+                        "file_id": "current-file-id",
+                        "emoji": "👋",
+                        "set_name": "GroupPack",
+                    },
+                    {"file_unique_id": "", "file_id": "invalid"},
+                ],
+                source_group_id="-100123",
+            )
+            palette = get_sendable_stickers()
+
+        assert imported == 1
+        assert palette[0]["description"] == "A friendly wave"
+        assert palette[0]["file_id"] == "current-file-id"
+        assert palette[0]["palette_source"] == "group_sticker_set"
+        assert palette[0]["source_group_id"] == "-100123"
 
 
 class TestBuildStickerInjection:
