@@ -108,6 +108,29 @@ class TestEastmoneyFundHistory:
         assert bars[-1].low == 3.467
         assert bars[-1].close == 3.5
 
+    def test_large_history_is_fetched_in_bounded_pages(self):
+        calls = []
+
+        def fetch(url, _timeout):
+            calls.append(url)
+            page = len(calls)
+            if page > 3:
+                return {"Data": {"LSJZList": []}}
+            start = 600 - (page - 1) * 200
+            rows = [
+                {
+                    "FSRQ": f"2025-{((i - 1) // 28) % 12 + 1:02d}-{(i - 1) % 28 + 1:02d}",
+                    "DWJZ": str(i / 100),
+                }
+                for i in range(start, start - 200, -1)
+            ]
+            return {"Data": {"LSJZList": rows}}
+
+        bars = EastmoneyFundHistory(http_get=fetch).get_bars("017470", "1d", 500)
+        assert len(calls) == 3
+        assert all("pageSize=200" in url for url in calls)
+        assert len(bars) == 500
+
     def test_rejects_exchange_ticker_and_empty_history(self):
         provider = EastmoneyFundHistory(http_get=lambda _url, _timeout: {"Data": {}})
         import pytest

@@ -147,18 +147,27 @@ class EastmoneyFundHistory:
             raise ValueError("limit must be >= 1")
         base = code.strip()
         multiplier = 7 if timeframe == "1wk" else 31 if timeframe == "1mo" else 1
-        page_size = min(1000, max(limit * multiplier, limit))
-        url = f"{_FUND_HISTORY_URL}?{urlencode({'fundCode': base, 'pageIndex': 1, 'pageSize': page_size})}"
+        target = min(1000, max(limit * multiplier, limit))
+        # Eastmoney returns Data=null for oversized pages. Fetch bounded 200-row
+        # pages and join newest->oldest before the final chronological reverse.
+        page_size = min(200, target)
+        records: list[dict] = []
         try:
-            payload = self._get(url, self._timeout)
-            records = payload.get("Data", {}).get("LSJZList", [])
+            for page_index in range(1, (target + page_size - 1) // page_size + 1):
+                url = f"{_FUND_HISTORY_URL}?{urlencode({'fundCode': base, 'pageIndex': page_index, 'pageSize': page_size})}"
+                payload = self._get(url, self._timeout)
+                data = payload.get("Data") if isinstance(payload, dict) else None
+                page = data.get("LSJZList") if isinstance(data, dict) else None
+                if not isinstance(page, list) or not page:
+                    break
+                records.extend(item for item in page if isinstance(item, dict))
+                if len(page) < page_size or len(records) >= target:
+                    break
         except Exception as exc:  # noqa: BLE001 — normalize the provider boundary
             raise RuntimeError(f"fund history fetch failed for {base}: {exc}") from exc
         rows: list[Bar] = []
         china_tz = timezone(timedelta(hours=8))
-        for record in reversed(records if isinstance(records, list) else []):
-            if not isinstance(record, dict):
-                continue
+        for record in reversed(records):
             try:
                 close = float(record.get("DWJZ"))
                 ts = datetime.strptime(str(record.get("FSRQ")), "%Y-%m-%d")

@@ -439,12 +439,32 @@ def create_app(runtime: FinanceRuntime):
             raise HTTPException(503, "research watchlists not available")
         return runtime.research_watchlists
 
+    def _research_watchlist_payload(group) -> dict:
+        """Hydrate legacy code-only member labels without mutating holdings.
+
+        New members already carry metadata from instrument search. Groups made
+        by older builds may have persisted ``display_name == symbol``; the NAV
+        provider supplies the authoritative fund name at read time.
+        """
+        payload = group.model_dump(mode="json")
+        if runtime.nav_provider is None:
+            return payload
+        for member in payload["members"]:
+            symbol = member["symbol"]
+            if member.get("display_name") != symbol:
+                continue
+            try:
+                quote = runtime.nav_provider.get_nav(symbol)
+            except Exception:  # metadata is cosmetic; preserve code fallback
+                quote = None
+            if quote is not None and quote.name:
+                member["display_name"] = quote.name.strip()
+        return payload
+
     @app.get(f"/{API_VERSION}/research/watchlists")
     def research_watchlists() -> list[dict]:
         """User-created research groups; never part of the trading universe."""
-        return [
-            group.model_dump(mode="json") for group in _need_research_watchlists().list_groups()
-        ]
+        return [_research_watchlist_payload(group) for group in _need_research_watchlists().list_groups()]
 
     @app.post(f"/{API_VERSION}/research/watchlists", status_code=201)
     def create_research_watchlist(body: ResearchWatchlistCreateRequest) -> dict:
@@ -452,7 +472,7 @@ def create_app(runtime: FinanceRuntime):
             group = _need_research_watchlists().create_group(body.name)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        return group.model_dump(mode="json")
+        return _research_watchlist_payload(group)
 
     @app.patch(f"/{API_VERSION}/research/watchlists/{{group_id}}")
     def rename_research_watchlist(group_id: str, body: ResearchWatchlistCreateRequest) -> dict:
@@ -462,7 +482,7 @@ def create_app(runtime: FinanceRuntime):
             raise HTTPException(404, f"unknown watchlist {group_id!r}") from exc
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        return group.model_dump(mode="json")
+        return _research_watchlist_payload(group)
 
     @app.delete(f"/{API_VERSION}/research/watchlists/{{group_id}}")
     def delete_research_watchlist(group_id: str) -> dict:
@@ -489,7 +509,7 @@ def create_app(runtime: FinanceRuntime):
             raise HTTPException(404, f"unknown watchlist {group_id!r}") from exc
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        return group.model_dump(mode="json")
+        return _research_watchlist_payload(group)
 
     @app.delete(f"/{API_VERSION}/research/watchlists/{{group_id}}/members/{{symbol:path}}")
     def remove_research_watchlist_member(group_id: str, symbol: str) -> dict:
@@ -497,7 +517,7 @@ def create_app(runtime: FinanceRuntime):
             group = _need_research_watchlists().remove_member(group_id, symbol)
         except KeyError as exc:
             raise HTTPException(404, f"unknown watchlist {group_id!r}") from exc
-        return group.model_dump(mode="json")
+        return _research_watchlist_payload(group)
 
     @app.get(f"/{API_VERSION}/research/watchlists/recommendations/holdings")
     def research_watchlist_holding_recommendations() -> list[dict]:

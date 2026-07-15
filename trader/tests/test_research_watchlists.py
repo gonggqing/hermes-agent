@@ -113,3 +113,20 @@ def test_holding_recommendations_resolve_missing_fund_names(tmp_path):
     response = client.get("/v1/research/watchlists/recommendations/holdings")
     assert response.status_code == 200
     assert response.json()[0]["display_name"] == "嘉实上证科创板芯片ETF联接C"
+
+
+def test_legacy_code_only_watchlist_member_is_hydrated_on_read(tmp_path):
+    client, runtime = _client(tmp_path)
+    group = client.post("/v1/research/watchlists", json={"name": "Funds"}).json()
+    client.post(
+        f"/v1/research/watchlists/{group['id']}/members",
+        json={"symbol": "005698", "display_name": "005698"},
+    )
+
+    class Navs:
+        def get_nav(self, symbol):
+            return SimpleNamespace(symbol=symbol, name="华夏全球科技先锋混合(QDII)A")
+
+    runtime.nav_provider = Navs()
+    member = client.get("/v1/research/watchlists").json()[0]["members"][0]
+    assert member["display_name"] == "华夏全球科技先锋混合(QDII)A"
