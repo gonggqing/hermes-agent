@@ -677,6 +677,24 @@ class TelegramAdapter(BasePlatformAdapter):
         # API call (e.g. a set_my_commands stall for certain tokens) cannot
         # blow the gateway's connect timeout (#46298).
         self._post_connect_task: Optional[asyncio.Task] = None
+        # Only topics created by Hermes participate in lifecycle management;
+        # manually-created topics and Telegram's General topic are never touched.
+        forum_topics_config = self.config.extra.get("forum_topics", {})
+        if not isinstance(forum_topics_config, dict):
+            forum_topics_config = {}
+        self._forum_topics_enabled: bool = bool(
+            forum_topics_config.get("enabled", False)
+        )
+        try:
+            archive_check_hours = float(
+                forum_topics_config.get("archive_check_hours", 6)
+            )
+        except (TypeError, ValueError):
+            archive_check_hours = 6.0
+        self._forum_archive_check_seconds: float = (
+            max(1.0, min(24.0, archive_check_hours)) * 3600.0
+        )
+        self._forum_archive_task: Optional[asyncio.Task] = None
 
     def _mark_connected(self) -> None:
         self._drop_delayed_deliveries = False
@@ -2995,6 +3013,68 @@ class TelegramAdapter(BasePlatformAdapter):
             if self._post_connect_task is asyncio.current_task():
                 self._post_connect_task = None
 
+    def _start_forum_archive_task(self) -> None:
+        """Start the idle-archive loop for Hermes-managed forum topics."""
+        if not getattr(self, "_forum_topics_enabled", False) or not self._bot:
+            return
+        task = getattr(self, "_forum_archive_task", None)
+        if task and not task.done():
+            return
+        self._forum_archive_task = asyncio.ensure_future(
+            self._run_forum_archive_loop()
+        )
+
+    async def _run_forum_archive_loop(self) -> None:
+        """Close inactive managed topics without delaying gateway startup."""
+        try:
+            while True:
+                bot = self._bot
+                if bot is not None:
+                    from gateway.telegram_forum_topics import archive_inactive_topics
+
+                    result = await archive_inactive_topics(bot)
+                    if result["archived"] or result["failed"]:
+                        logger.info(
+                            "[%s] Forum auto-archive: %d archived, %d failed",
+                            self.name,
+                            result["archived"],
+                            result["failed"],
+                        )
+                await asyncio.sleep(
+                    getattr(self, "_forum_archive_check_seconds", 6 * 3600)
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning(
+                "[%s] Forum auto-archive loop failed; it will resume after reconnect",
+                self.name,
+                exc_info=True,
+            )
+
+    def _touch_managed_forum_topic(self, message: Message) -> None:
+        """Record authorized activity for a Hermes-managed forum topic."""
+        if not getattr(self, "_forum_topics_enabled", False):
+            return
+        chat = getattr(message, "chat", None)
+        thread_id = getattr(message, "message_thread_id", None)
+        if (
+            chat is None
+            or getattr(chat, "type", None) not in {"group", "supergroup"}
+            or thread_id in {None, 1, "1"}
+        ):
+            return
+        try:
+            from gateway.telegram_forum_topics import touch_topic
+
+            touch_topic(str(chat.id), str(thread_id))
+        except Exception:
+            logger.debug(
+                "[%s] Could not persist forum-topic activity",
+                self.name,
+                exc_info=True,
+            )
+
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         """Connect to Telegram via polling or webhook.
 
@@ -3389,6 +3469,7 @@ class TelegramAdapter(BasePlatformAdapter):
             # cancellable background task so connect() returns as soon as the
             # transport is up.
             self._start_post_connect_housekeeping()
+            self._start_forum_archive_task()
 
             return True
             
@@ -3492,6 +3573,12 @@ class TelegramAdapter(BasePlatformAdapter):
             post_connect_task.cancel()
             await asyncio.gather(post_connect_task, return_exceptions=True)
         self._post_connect_task = None
+
+        forum_archive_task = getattr(self, "_forum_archive_task", None)
+        if forum_archive_task and not forum_archive_task.done():
+            forum_archive_task.cancel()
+            await asyncio.gather(forum_archive_task, return_exceptions=True)
+        self._forum_archive_task = None
 
         # Cancel the heartbeat before tearing down the app so the probe task
         # cannot fire get_me() into a half-shutdown bot client.
@@ -7529,6 +7616,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 getattr(getattr(msg, "chat", None), "id", None),
             )
             return
+        self._touch_managed_forum_topic(msg)
         if not self._should_process_message(msg):
             if self._should_observe_unmentioned_group_message(msg):
                 self._observe_unmentioned_group_message(msg, MessageType.TEXT, update_id=update.update_id)
@@ -7555,6 +7643,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 getattr(getattr(msg, "chat", None), "id", None),
             )
             return
+        self._touch_managed_forum_topic(msg)
         await self._ensure_forum_commands(msg)
 
         event = self._build_message_event(msg, MessageType.COMMAND, update_id=update.update_id)
@@ -7778,6 +7867,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 getattr(getattr(update.message, "chat", None), "id", None),
             )
             return
+        self._touch_managed_forum_topic(update.message)
         if not self._should_process_message(update.message):
             if self._should_observe_unmentioned_group_message(update.message):
                 _m = update.message
@@ -8717,6 +8807,8 @@ def _apply_yaml_config(yaml_cfg: dict, telegram_cfg: dict) -> dict | None:
 
     if "disable_topic_auto_rename" in telegram_cfg:
         extras.setdefault("disable_topic_auto_rename", telegram_cfg["disable_topic_auto_rename"])
+    if isinstance(telegram_cfg.get("forum_topics"), dict):
+        extras.setdefault("forum_topics", dict(telegram_cfg["forum_topics"]))
     _effective_rm = telegram_cfg.get("require_mention", yaml_cfg.get("require_mention"))
     if _effective_rm is not None and not os.getenv("TELEGRAM_REQUIRE_MENTION"):
         os.environ["TELEGRAM_REQUIRE_MENTION"] = str(_effective_rm).lower()

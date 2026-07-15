@@ -69,7 +69,7 @@ def test_check_refuses_cron(monkeypatch):
     assert not sticker_tool._check_send_sticker_available()
 
 
-def test_handler_sends_allowlisted_group_sticker_and_persists_cooldown(
+def test_handler_sends_learned_sticker_to_group_and_persists_cooldown(
     monkeypatch, tmp_path
 ):
     monkeypatch.delenv("HERMES_CRON_SESSION", raising=False)
