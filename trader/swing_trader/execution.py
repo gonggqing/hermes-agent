@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from swing_trader.interfaces import BrokerInterface
-from swing_trader.ledger import Ledger
+from swing_trader.ledger import AuditEvent, Ledger
 from swing_trader.log import get_logger
 from swing_trader.schemas import (
     CandidateOrder,
@@ -46,6 +46,7 @@ class GuardrailError(Exception):
 @dataclass
 class ExecutionReport:
     placed: list[Order] = field(default_factory=list)
+    recovered: list[tuple[CandidateOrder, Order]] = field(default_factory=list)
     skipped: list[tuple[CandidateOrder, str]] = field(default_factory=list)
     rejected: list[tuple[Order, str]] = field(default_factory=list)
 
@@ -89,14 +90,27 @@ class ExecutionEngine:
 
         report = ExecutionReport()
         for cand in candidates:
+            existing = self._existing_order(cand)
+            if existing is not None:
+                self.ledger.update_candidate(cand.id, CandidateStatus.PLACED)
+                self._audit_once(
+                    cand, "execute_recovered", cand.status,
+                    CandidateStatus.PLACED, now,
+                    detail=f"existing order {existing.id} recovered",
+                    key=f"execute:{cand.id}",
+                )
+                report.recovered.append((cand, existing))
+                continue
             reason = self._revalidate(cand, quotes.get(cand.symbol), now)
             if reason is not None:
-                self._skip(cand, reason, report)
+                self._skip(cand, reason, report, now)
                 continue
 
             order = self._translate(cand)
             if order is None:
-                self._skip(cand, "unsupported candidate shape for Phase 0", report)
+                self._skip(
+                    cand, "unsupported candidate shape for Phase 0", report, now
+                )
                 continue
 
             # Discretionary exits: the shares are typically committed to the
@@ -119,6 +133,12 @@ class ExecutionEngine:
                 self.ledger.update_candidate(
                     cand.id, cand.status, risk_note=f"broker rejected: {result.reason}"
                 )
+                self._audit_once(
+                    cand, "execute_rejected", cand.status, cand.status, now,
+                    detail=result.reason,
+                    key=f"execute-rejected:{cand.id}:{result.order.id}",
+                    applied=False,
+                )
                 report.rejected.append((result.order, result.reason))
                 continue
 
@@ -129,6 +149,11 @@ class ExecutionEngine:
             if cand.side is Side.BUY and stop_px is not None:
                 self._stop_by_order[result.order.id] = stop_px
             self.ledger.update_candidate(cand.id, CandidateStatus.PLACED)
+            self._audit_once(
+                cand, "execute", cand.status, CandidateStatus.PLACED, now,
+                detail=f"order {result.order.id} submitted",
+                key=f"execute:{cand.id}",
+            )
             report.placed.append(result.order)
             logger.info(
                 "order placed",
@@ -247,6 +272,7 @@ class ExecutionEngine:
             if limit is None or stop is None:
                 return None
             return Order(
+                id=f"candidate-{cand.id}",
                 mode=self.mode,
                 symbol=cand.symbol,
                 side=Side.BUY,
@@ -256,10 +282,12 @@ class ExecutionEngine:
                 stop=stop,
                 tp=cand.tp,
                 tif=TimeInForce.GTC,
+                broker_ref=f"candidate:{cand.id}",
             )
 
         # SELL: discretionary exit passthrough
         return Order(
+            id=f"candidate-{cand.id}",
             mode=self.mode,
             symbol=cand.symbol,
             side=Side.SELL,
@@ -268,13 +296,69 @@ class ExecutionEngine:
             limit=cand.limit,
             stop=cand.stop,
             tif=cand.tif,
+            broker_ref=f"candidate:{cand.id}",
         )
 
     def _skip(
-        self, cand: CandidateOrder, reason: str, report: ExecutionReport
+        self, cand: CandidateOrder, reason: str, report: ExecutionReport,
+        now: datetime,
     ) -> None:
         logger.info("candidate skipped", extra={"symbol": cand.symbol, "reason": reason})
+        self._audit_once(
+            cand, "execute_skipped", cand.status, cand.status, now,
+            detail=reason,
+            key=f"execute-skipped:{cand.id}:{now.isoformat()}",
+            applied=False,
+        )
         report.skipped.append((cand, reason))
+
+    def _existing_order(self, cand: CandidateOrder) -> Order | None:
+        """Find a prior submission by its durable candidate correlation id."""
+        marker = f"candidate:{cand.id}"
+        order_id = f"candidate-{cand.id}"
+        seen: dict[str, Order] = {}
+        for order in [*self.broker.get_orders(), *self.ledger.get_orders(self.mode)]:
+            seen[order.id] = order
+        return next(
+            (order for order in seen.values()
+             if (order.id == order_id or order.broker_ref == marker)
+             and order.status not in {
+                 OrderStatus.REJECTED,
+                 OrderStatus.CANCELLED,
+                 OrderStatus.EXPIRED,
+             }),
+            None,
+        )
+
+    def _audit_once(
+        self,
+        cand: CandidateOrder,
+        action: str,
+        prev: CandidateStatus,
+        new: CandidateStatus,
+        now: datetime,
+        *,
+        detail: str,
+        key: str,
+        applied: bool = True,
+    ) -> None:
+        if self.ledger.get_audit(
+            mode=self.mode, candidate_id=cand.id, idempotency_key=key
+        ):
+            return
+        self.ledger.record_audit(AuditEvent(
+            ts=now,
+            mode=self.mode.value,
+            candidate_id=cand.id,
+            action=action,
+            actor="system",
+            surface="system",
+            idempotency_key=key,
+            prev_status=prev.value,
+            new_status=new.value,
+            applied=applied,
+            detail=detail,
+        ))
 
     def _clear_protection(self, symbol: str) -> list[Order]:
         """Cancel resting SELL orders (protective stop / tp legs) on a symbol."""

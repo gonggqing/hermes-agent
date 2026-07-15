@@ -121,6 +121,18 @@ class TestApproveRejectFlow:
         replay = service2.act(c.id, "approve", "u", Surface.WEB, "k1", IN_WINDOW)
         assert replay.code is ResultCode.REPLAYED
 
+    def test_restart_restores_durable_approval_and_version(self, env):
+        ledger, service = env
+        c = publish_one(ledger, service)
+        service.act(c.id, "approve", "u", Surface.WEB, "k1", IN_WINDOW)
+
+        service2 = ConfirmationService(ledger, mode=Mode.PAPER)
+        restored = service2.restore(ledger.get_candidates(mode=Mode.PAPER))
+
+        assert [row.id for row in restored] == [c.id]
+        assert service2.get(c.id)[1] == 1
+        assert service2.finalized().human_approved[0].status is CandidateStatus.APPROVED
+
     def test_double_approve_different_surfaces_blocked(self, env):
         """Two surfaces can never double-approve (Loop.md §5.6)."""
         ledger, service = env

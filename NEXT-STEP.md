@@ -28,8 +28,12 @@ See Loop.md §13 for the dated detail.
 - The old frontend suffix partition is removed; Hermes-native components and
   EN/ZH/JA/ZH-Hant locale conventions are preserved.
 - Full trader, Web and Desktop regression suites plus a 22-day crash simulation
-  passed. Per operator instruction, these local changes are **not in a rebuilt
-  Docker image yet**, so the running paper day remains uninterrupted.
+  passed; the current Docker deployment includes the Phase 0.95 build.
+- Confirmation execution now survives restarts: it restores persisted card
+  versions/decisions before cutoff, re-quotes and re-risks approved candidates
+  before idempotent post-cutoff submission, warns at 12:00 ET, retries until
+  close, then preserves approvals in audit while marking unplaced candidates
+  `EXPIRED / missed execution` instead of replaying stale orders.
 
 ### Phase-1 readiness landed this cycle (2026-07-14)
 
@@ -62,7 +66,7 @@ perform final guardrail review; obtain **human sign-off**.
 
 - All trading code: `trader/` (self-contained package `swing_trader`, zero
   Hermes-internal imports, extractable to its own repo before Phase 1).
-- **1050 trader tests green** (+15 root finance-tool tests, +81 web tests):
+- **Full trader suite green** (plus root finance-tool and Web/Desktop suites):
   `cd trader && uv run --no-sync python -m pytest`
 - RiskEngine 100% branch coverage gate:
   `uv run --no-sync pytest tests/test_risk_engine.py --cov=swing_trader.risk --cov-branch --cov-fail-under=100`

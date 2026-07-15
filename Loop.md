@@ -322,6 +322,7 @@ Python 3.11 · `ib_async` (later) · `alpaca-py` (optional) · `yfinance` · `pa
 - [x] Mainland CN and HK now use disjoint universes, indices, calendars, snapshots, schedules, archives, API routes, Web/Desktop desks and Telegram briefs.
 - [x] The explicit CN↔HK synthesis preserves both markets' independent regime/freshness and joins only shared themes with evidence.
 - [x] Web/Desktop retain Hermes components, responsive layout and translated discovery/synthesis copy; the legacy suffix partition was removed.
+- [x] Confirmation recovery is durable: pre-cutoff restarts restore cards/versions, post-cutoff restarts re-quote/re-risk and submit idempotently, a 12:00 ET watchdog warns/retries, and unplaced approvals expire with `missed execution` audit at the close.
 - [ ] Exit evidence remains external: complete the uninterrupted US paper day, real IBKR Paper dry run and human go-live sign-off before Phase 1.
 
 ---
@@ -374,6 +375,7 @@ Each symbol is tagged `{theme, ai_phase(infra|memory|network|power|application|c
 
 ## 13. Progress log (building agent appends; newest first)
 
+- 2026-07-15 — **Durable approval execution.** Added restart-safe confirmation restoration, candidate-correlated idempotent orders, pre-cutoff warning, intraday retry and close-time `EXPIRED / missed execution` audit without replaying stale approvals.
 - 2026-07-15 — **Phase 0.95 local build.** Added provenance-gated dynamic discovery, independent CN/HK sessions and explicit cross-market synthesis across API, Web, Desktop and Telegram; external paper-day/IBKR/human exit evidence remains pending.
 - 2026-07-14 — **CI and analysis-date integrity.** Restored cross-platform lockfile dependencies, cleared repository lint failures and surfaced each signal's source-bar timestamp across API, brief, Web and Desktop.
 - 2026-07-14 — **KR research + upstream sync.** Added the Korean semiconductor desk and manual research refresh, structured mover regions, and completed the reviewed `upstream/main` merge documented in `docs/upstream-sync/2026-07-14.md`.

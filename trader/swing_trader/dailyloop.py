@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import re
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Any, Callable, Optional
 
@@ -37,9 +37,9 @@ from swing_trader.confirmation import ConfirmationService, Surface
 from swing_trader.datafeed import DataFeedError
 from swing_trader.decision import RuleBasedDecisionCore, SymbolView
 from swing_trader.health import HealthLevel, HealthStatus, assess_health
-from swing_trader.execution import ExecutionEngine
+from swing_trader.execution import ExecutionEngine, ExecutionReport
 from swing_trader.interfaces import BrokerInterface, DataFeed, NewsItem
-from swing_trader.ledger import Ledger
+from swing_trader.ledger import AuditEvent, Ledger
 from swing_trader.log import get_logger
 from swing_trader.monitors import (
     AccountRiskMonitor,
@@ -51,7 +51,14 @@ from swing_trader.reconcile import reconcile_broker_ledger
 from swing_trader.reporter import morning_summary, push_window_preamble
 from swing_trader.risk import RiskEngine, RiskParams
 from swing_trader.scheduler import Event
-from swing_trader.schemas import CandidateOrder, Mode, Role, Side, Signal
+from swing_trader.schemas import (
+    CandidateOrder,
+    CandidateStatus,
+    Mode,
+    Role,
+    Side,
+    Signal,
+)
 from swing_trader.telegram_gateway import (
     CALLBACK_ID_LEN,
     DRAFT_CALLBACK_TYPE,
@@ -65,6 +72,13 @@ from swing_trader.telegram_gateway import (
 from swing_trader import watchlist as watchlist_mod
 
 logger = get_logger(__name__)
+
+_ET = ZoneInfo("America/New_York")
+_PUSH_TIME = time(11, 30)
+_PRE_CUTOFF_REMINDER = time(12, 0)
+_CUTOFF_TIME = time(12, 30)
+_MARKET_CLOSE_TIME = time(16, 0)
+_EXECUTION_RETRY_INTERVAL = timedelta(minutes=5)
 
 __all__ = ["DailyLoop", "TelegramSurfaceAdapter"]
 
@@ -233,6 +247,15 @@ class TelegramSurfaceAdapter:
                 self._chat_id, render_card(cand), reply_markup=build_keyboard(cand)
             )
 
+    def restore_cards(self, candidates: list[CandidateOrder]) -> None:
+        """Restore callback-id routing without sending duplicate cards."""
+        for cand in candidates:
+            self._by_short_id[cand.id[:CALLBACK_ID_LEN]] = cand.id
+
+    def push_recovery_notice(self, text: str) -> None:
+        """Send one durable confirmation/recovery status line to Telegram."""
+        self._send_status(self._chat_id, text)
+
     def push_execution_outcome(self, report) -> None:
         """Persist the post-cutoff broker outcome in Chinese.
 
@@ -253,6 +276,10 @@ class TelegramSurfaceAdapter:
                     else f"{side} {order.symbol} {order.qty:g} 股 · {order.order_type.value}"
                 )
             lines.append("状态：订单已提交/挂起，尚不代表已经成交。")
+        for candidate, order in report.recovered:
+            lines.append(
+                f"♻️ {candidate.symbol} 已恢复既有挂单 {order.id}，未重复提交。"
+            )
         for candidate, reason in report.skipped:
             lines.append(f"⚠️ {candidate.symbol} 未提交：{reason}")
         for order, reason in report.rejected:
@@ -634,6 +661,11 @@ class DailyLoop:
         self.kill_switch = kill_switch  # Phase 0.95 manual HALT (may be None)
         self.discovery_scanner = discovery_scanner
         self._discovery = None
+        self._confirmation_recovery_lock = threading.Lock()
+        self._execution_lock = threading.Lock()
+        self._pre_cutoff_alerted: set[date] = set()
+        self._last_execution_retry: Optional[datetime] = None
+        self._restart_risk_validated: set[str] = set()
 
     # ---------------------------------------------------------------- events
 
@@ -790,37 +822,33 @@ class DailyLoop:
         tapped draft card spun forever until the decide phase ran. Candidate
         callbacks arriving with no ConfirmationService find no registered id and
         are answered "unknown candidate" (never touch the None service)."""
-        if self.telegram is None:
-            return
-        self.telegram.poll(self._confirmation, self.clock())
-
-    def on_cutoff(self) -> None:
-        if self._confirmation is None:
-            return
         now = self.clock()
         if self.telegram is not None:
             self.telegram.poll(self._confirmation, now)
-        self._confirmation.expire(now)
-        finalized = self._confirmation.finalized()
-        approved = finalized.human_approved
-        quotes: dict[str, float] = {}
-        for cand in approved:
-            try:
-                quotes[cand.symbol] = self.feed.get_quote(cand.symbol).last
-            except DataFeedError:
-                pass  # execution treats a missing quote conservatively
-        report = self.execution.execute(approved, quotes, now)
+        self._watch_confirmation_window(now)
+
+    def on_cutoff(self) -> None:
+        now = self.clock()
+        if self._confirmation is None:
+            self._restore_current_confirmation(now)
         if self.telegram is not None:
-            self.telegram.push_execution_outcome(report)
+            self.telegram.poll(self._confirmation, now)
+        expired = self._confirmation.expire(now) if self._confirmation else []
+        approved_count = self._approved_for_date(now)
+        report = self._execute_approved(now, trigger="cutoff")
         self._entries_placed_today = sum(
             1 for o in report.placed if o.side is Side.BUY
+        ) + sum(
+            1 for _, o in report.recovered if o.side is Side.BUY
         )
         logger.info(
             "cutoff execution done",
-            extra={"approved": len(approved), "placed": len(report.placed),
+            extra={"approved": approved_count,
+                   "placed": len(report.placed),
+                   "recovered": len(report.recovered),
                    "skipped": len(report.skipped),
                    "rejected": len(report.rejected),
-                   "expired": len(finalized.expired)},
+                   "expired": len(expired)},
         )
 
     def run_session_now(self, now: datetime | None = None, *,
@@ -897,9 +925,356 @@ class DailyLoop:
             self.broker.step(bars)
         self.execution.sync_fills()
         self.broker.end_of_day()
+        self._expire_unexecuted_through(
+            self.clock(), reason="missed execution: market closed without an order"
+        )
         status = self.account_monitor.poll()
         self.ledger.record_snapshot(status.snapshot)
         self._update_memory_outcomes()
+
+    # ------------------------------------------ durable confirmation recovery
+
+    @staticmethod
+    def _et_date(candidate: CandidateOrder) -> date:
+        return candidate.ts.astimezone(_ET).date()
+
+    def _candidates(self, *statuses: CandidateStatus) -> list[CandidateOrder]:
+        wanted = set(statuses)
+        return [
+            candidate for candidate in self.ledger.get_candidates(mode=self.mode)
+            if candidate.status in wanted
+        ]
+
+    def _candidates_for_date(
+        self, trading_date: date, *statuses: CandidateStatus
+    ) -> list[CandidateOrder]:
+        return [
+            candidate for candidate in self._candidates(*statuses)
+            if self._et_date(candidate) == trading_date
+        ]
+
+    def _approved_candidates(self, now: datetime) -> list[CandidateOrder]:
+        trading_date = now.astimezone(_ET).date()
+        return self._candidates_for_date(
+            trading_date, CandidateStatus.APPROVED, CandidateStatus.EDITED
+        )
+
+    def _approved_for_date(self, now: datetime) -> int:
+        return len(self._approved_candidates(now))
+
+    def _restore_current_confirmation(self, now: datetime) -> list[CandidateOrder]:
+        trading_date = now.astimezone(_ET).date()
+        candidates = self._candidates_for_date(
+            trading_date,
+            CandidateStatus.PUSHED,
+            CandidateStatus.APPROVED,
+            CandidateStatus.EDITED,
+            CandidateStatus.REJECTED,
+        )
+        service = ConfirmationService(
+            self.ledger, mode=self.mode, revalidate=self._revalidate_edit
+        )
+        restored = service.restore(candidates)
+        self._confirmation = service
+        if self.runtime is not None:
+            self.runtime.confirmation = service
+        if self.telegram is not None:
+            self.telegram.restore_cards(restored)
+        return restored
+
+    def recover_confirmation_state(self, now: datetime | None = None) -> dict:
+        """Reconcile durable candidate state after a service restart.
+
+        Before cutoff, the in-memory confirmation session is restored.  After
+        cutoff but before the close, human-approved candidates are refreshed,
+        re-risked and idempotently submitted.  At/after the close (or on a
+        later date), every unsubmitted approval is expired as a missed
+        execution; stale prices are never replayed.
+        """
+        now = now or self.clock()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
+        if not self._confirmation_recovery_lock.acquire(blocking=False):
+            return {"status": "already_running"}
+        try:
+            et_now = now.astimezone(_ET)
+            today = et_now.date()
+            expired = self._expire_unexecuted_through(
+                now,
+                reason="missed execution: service recovered after the trading session",
+                include_current=et_now.time() >= _MARKET_CLOSE_TIME,
+            )
+            risk_approved = self._candidates_for_date(
+                today, CandidateStatus.RISK_APPROVED
+            )
+            restored: list[CandidateOrder] = []
+            report = ExecutionReport()
+
+            # Build the confirmation service before the publish window too.
+            # A restart at 11:20 ET must leave the scheduled 11:30 callback a
+            # live service to publish into; publish() still enforces the window.
+            if et_now.time() < _MARKET_CLOSE_TIME:
+                restored = self._restore_current_confirmation(now)
+
+            if et_now.time() < _CUTOFF_TIME:
+                self._risk_approved = risk_approved
+                if risk_approved and et_now.time() >= _PUSH_TIME:
+                    self.on_push()  # missed 11:30 event: publish inside window
+            else:
+                for candidate in risk_approved:
+                    self._expire_candidate(
+                        candidate, now,
+                        "missed confirmation window after service restart",
+                        action="expire",
+                    )
+                if self._confirmation is not None:
+                    self._confirmation.expire(now)
+                if et_now.time() < _MARKET_CLOSE_TIME:
+                    report = self._execute_approved(
+                        now, trigger="restart_recovery", rerisk=True
+                    )
+
+            summary = {
+                "status": "recovered",
+                "restored": len(restored),
+                "expired": expired,
+                "placed": len(report.placed),
+                "recovered_orders": len(report.recovered),
+                "still_approved": self._approved_for_date(now),
+            }
+            logger.info("confirmation recovery complete", extra=summary)
+            return summary
+        finally:
+            self._confirmation_recovery_lock.release()
+
+    def _watch_confirmation_window(self, now: datetime) -> None:
+        et_now = now.astimezone(_ET)
+        approved = self._approved_candidates(now)
+        if (
+            approved
+            and _PRE_CUTOFF_REMINDER <= et_now.time() < _CUTOFF_TIME
+            and et_now.date() not in self._pre_cutoff_alerted
+        ):
+            self._pre_cutoff_alerted.add(et_now.date())
+            if self.telegram is not None:
+                symbols = ", ".join(candidate.symbol for candidate in approved)
+                self.telegram.push_recovery_notice(
+                    f"⏰ 距 12:30 ET 提交截止不足 30 分钟：已批准 "
+                    f"{len(approved)} 笔（{symbols}），当前尚未挂单；系统将在 "
+                    "12:30 自动复核并提交。"
+                )
+
+        if approved and _CUTOFF_TIME <= et_now.time() < _MARKET_CLOSE_TIME:
+            due = (
+                self._last_execution_retry is None
+                or now - self._last_execution_retry >= _EXECUTION_RETRY_INTERVAL
+            )
+            if due:
+                self._execute_approved(now, trigger="watchdog_retry", rerisk=True)
+        elif et_now.time() >= _MARKET_CLOSE_TIME:
+            self._expire_unexecuted_through(
+                now, reason="missed execution: market closed without an order"
+            )
+
+    def _execute_approved(
+        self, now: datetime, *, trigger: str, rerisk: bool = False
+    ) -> ExecutionReport:
+        if not self._execution_lock.acquire(blocking=False):
+            logger.info("candidate execution already running", extra={"trigger": trigger})
+            return ExecutionReport()
+        try:
+            return self._execute_approved_once(now, trigger=trigger, rerisk=rerisk)
+        finally:
+            self._execution_lock.release()
+
+    def _execute_approved_once(
+        self, now: datetime, *, trigger: str, rerisk: bool = False
+    ) -> ExecutionReport:
+        candidates = self._approved_candidates(now)
+        report = ExecutionReport()
+        if not candidates:
+            self._last_execution_retry = now
+            return report
+
+        if rerisk:
+            pending_risk = [
+                candidate for candidate in candidates
+                if candidate.id not in self._restart_risk_validated
+            ]
+            if pending_risk:
+                try:
+                    self.on_monitor()
+                    account = self.account_monitor.poll().snapshot
+                    self._health = self._assess_health(account)
+                except Exception:
+                    logger.exception("restart risk context refresh failed")
+                    self._last_execution_retry = now
+                    if self.telegram is not None:
+                        self.telegram.push_recovery_notice(
+                            "⚠️ 已批准候选的重启复核暂时失败，尚未挂单；"
+                            "系统将在 5 分钟后重试，收盘仍失败则自动过期。"
+                        )
+                    return report
+                for candidate in pending_risk:
+                    ok, reason = self._revalidate_edit(candidate)
+                    if not ok:
+                        self._expire_candidate(
+                            candidate, now,
+                            f"restart risk re-validation failed: {reason}",
+                            action="expire_risk_revalidation",
+                        )
+                    else:
+                        self._restart_risk_validated.add(candidate.id)
+                candidates = self._approved_candidates(now)
+                if not candidates:
+                    self._last_execution_retry = now
+                    return report
+
+        for candidate in candidates:
+            self._audit_once(
+                candidate, now, action="finalize",
+                prev=candidate.status, new=candidate.status,
+                detail=f"{trigger}: approved candidate selected for execution",
+                key=f"finalize:{candidate.id}",
+            )
+
+        quotes: dict[str, float] = {}
+        for candidate in candidates:
+            try:
+                quotes[candidate.symbol] = self.feed.get_quote(candidate.symbol).last
+            except DataFeedError:
+                pass
+        report = self.execution.execute(candidates, quotes, now)
+
+        for candidate, reason in report.skipped:
+            if "no fresh quote" not in reason:
+                self._expire_candidate(
+                    candidate, now, f"execution re-validation failed: {reason}",
+                    action="expire_execution_revalidation",
+                )
+        rejected_by_candidate = {
+            (order.broker_ref or "").removeprefix("candidate:"): reason
+            for order, reason in report.rejected
+        }
+        for candidate in self._approved_candidates(now):
+            if candidate.id in rejected_by_candidate:
+                self._expire_candidate(
+                    candidate, now,
+                    f"broker rejected order: {rejected_by_candidate[candidate.id]}",
+                    action="expire_broker_rejected",
+                )
+
+        self._last_execution_retry = now
+        if self.telegram is not None:
+            self.telegram.push_execution_outcome(report)
+            remaining = self._approved_candidates(now)
+            if remaining:
+                symbols = ", ".join(candidate.symbol for candidate in remaining)
+                self.telegram.push_recovery_notice(
+                    f"⚠️ {symbols} 已批准但尚未挂单；系统将在 5 分钟后自动复核重试，"
+                    "最迟收盘自动标记为 EXPIRED / missed execution。"
+                )
+        return report
+
+    def _expire_unexecuted_through(
+        self,
+        now: datetime,
+        reason: str,
+        *,
+        include_current: bool = True,
+    ) -> int:
+        et_now = now.astimezone(_ET)
+        expired: list[CandidateOrder] = []
+        candidates = self._candidates(
+            CandidateStatus.RISK_APPROVED,
+            CandidateStatus.PUSHED,
+            CandidateStatus.APPROVED,
+            CandidateStatus.EDITED,
+        )
+        for candidate in candidates:
+            candidate_date = self._et_date(candidate)
+            stale = candidate_date < et_now.date()
+            current_closed = include_current and candidate_date == et_now.date()
+            if not (stale or current_closed):
+                continue
+            action = (
+                "expire_missed_execution"
+                if candidate.status in {CandidateStatus.APPROVED, CandidateStatus.EDITED}
+                else "expire"
+            )
+            if self._expire_candidate(candidate, now, reason, action=action):
+                expired.append(candidate)
+        if expired and self.telegram is not None:
+            approved = [
+                candidate for candidate in expired
+                if candidate.status in {CandidateStatus.APPROVED, CandidateStatus.EDITED}
+            ]
+            if approved:
+                symbols = ", ".join(candidate.symbol for candidate in approved)
+                self.telegram.push_recovery_notice(
+                    f"⌛ {symbols} 曾获批准但未成功提交，现已自动标记为 "
+                    "EXPIRED / missed execution；不会补发旧订单，下一交易日需重新分析确认。"
+                )
+        return len(expired)
+
+    def _expire_candidate(
+        self,
+        candidate: CandidateOrder,
+        now: datetime,
+        reason: str,
+        *,
+        action: str,
+    ) -> bool:
+        current = next(
+            (row for row in self.ledger.get_candidates(mode=self.mode)
+             if row.id == candidate.id),
+            None,
+        )
+        if current is None or current.status not in {
+            CandidateStatus.RISK_APPROVED,
+            CandidateStatus.PUSHED,
+            CandidateStatus.APPROVED,
+            CandidateStatus.EDITED,
+        }:
+            return False
+        note = f"missed execution: {reason}" if "missed execution" not in reason else reason
+        self.ledger.update_candidate(
+            current.id, CandidateStatus.EXPIRED, risk_note=note
+        )
+        self._audit_once(
+            current, now, action=action, prev=current.status,
+            new=CandidateStatus.EXPIRED, detail=note,
+            key=f"{action}:{current.id}",
+        )
+        return True
+
+    def _audit_once(
+        self,
+        candidate: CandidateOrder,
+        now: datetime,
+        *,
+        action: str,
+        prev: CandidateStatus,
+        new: CandidateStatus,
+        detail: str,
+        key: str,
+    ) -> None:
+        if self.ledger.get_audit(
+            mode=self.mode, candidate_id=candidate.id, idempotency_key=key
+        ):
+            return
+        self.ledger.record_audit(AuditEvent(
+            ts=now,
+            mode=self.mode.value,
+            candidate_id=candidate.id,
+            action=action,
+            actor="system",
+            surface=Surface.SYSTEM.value,
+            idempotency_key=key,
+            prev_status=prev.value,
+            new_status=new.value,
+            detail=detail,
+        ))
 
     # ------------------------------------------------------------- wiring
 

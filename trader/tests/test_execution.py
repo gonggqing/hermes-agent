@@ -178,6 +178,29 @@ class TestTranslation:
         children = [o for o in all_orders if o.parent_order_id == order.id]
         assert len(children) == 2  # protective stop + take-profit
         assert ledger.get_candidates(status=CandidateStatus.PLACED)
+        assert order.id == f"candidate-{c.id}"
+        assert order.broker_ref == f"candidate:{c.id}"
+        audit = ledger.get_audit(candidate_id=c.id)
+        assert audit[-1].action == "execute"
+        assert audit[-1].new_status == CandidateStatus.PLACED.value
+
+    def test_repeat_execute_recovers_existing_order_without_duplicate(self, env):
+        broker, ledger, engine = env
+        c = record(ledger, candidate())
+        first = engine.execute([c], {"NVDA": 100.0}, NOW)
+        n_orders = len(broker.get_orders())
+
+        second = engine.execute([c], {"NVDA": 100.0}, NOW + timedelta(minutes=5))
+
+        assert len(first.placed) == 1
+        assert second.placed == []
+        assert len(second.recovered) == 1
+        assert len(broker.get_orders()) == n_orders
+        execute_audit = [
+            row for row in ledger.get_audit(candidate_id=c.id)
+            if row.idempotency_key == f"execute:{c.id}"
+        ]
+        assert len(execute_audit) == 1
 
     def test_lmt_with_sl_upgraded_to_bracket(self, env):
         broker, _, engine = env

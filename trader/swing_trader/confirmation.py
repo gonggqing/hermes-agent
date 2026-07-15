@@ -163,6 +163,38 @@ class ConfirmationService:
             published.append(pushed)
         return published
 
+    def restore(self, candidates: list[CandidateOrder]) -> list[CandidateOrder]:
+        """Restore one persisted confirmation session after a process restart.
+
+        This never creates an approval and never writes the ledger.  It only
+        reconstructs the in-memory index/final buckets from durable candidate
+        status plus the highest audited card version, so Web/Desktop/Telegram
+        continue to share the same state machine after a restart.
+        """
+        restored: list[CandidateOrder] = []
+        for cand in candidates:
+            if cand.status not in {
+                CandidateStatus.PUSHED,
+                CandidateStatus.APPROVED,
+                CandidateStatus.EDITED,
+                CandidateStatus.REJECTED,
+            }:
+                continue
+            audit = self._ledger.get_audit(
+                mode=self._mode, candidate_id=cand.id
+            )
+            version = max((event.version for event in audit), default=1)
+            self._entries[cand.id] = _Entry(candidate=cand, version=version)
+            bucket = {
+                CandidateStatus.APPROVED: self._final.approved,
+                CandidateStatus.EDITED: self._final.edited,
+                CandidateStatus.REJECTED: self._final.rejected,
+            }.get(cand.status)
+            if bucket is not None:
+                bucket.append(cand)
+            restored.append(cand)
+        return restored
+
     # ------------------------------------------------------------- queries
 
     def pending(self) -> list[tuple[CandidateOrder, int]]:

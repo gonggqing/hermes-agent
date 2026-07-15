@@ -677,24 +677,31 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             logger.info("startup research refresh queued",
                         extra={"markets": missing_markets})
 
-            def _refresh_missing_research() -> None:
-                for market in missing_markets:
-                    if market in runtime.research_running:
-                        continue
-                    runtime.research_running.add(market)
-                    try:
-                        runtime.run_research[market]()
-                    except Exception:
-                        logger.exception("startup research refresh failed",
-                                         extra={"market": market})
-                    finally:
-                        runtime.research_running.discard(market)
+        def _startup_recovery() -> None:
+            # Candidate recovery runs before research catch-up so a restart in
+            # the confirmation/execution window first restores the durable
+            # human decisions.  It never replays post-close approvals.
+            try:
+                loop.recover_confirmation_state()
+            except Exception:
+                logger.exception("startup confirmation recovery failed")
+            for market in missing_markets:
+                if market in runtime.research_running:
+                    continue
+                runtime.research_running.add(market)
+                try:
+                    runtime.run_research[market]()
+                except Exception:
+                    logger.exception("startup research refresh failed",
+                                     extra={"market": market})
+                finally:
+                    runtime.research_running.discard(market)
 
-            threading.Thread(
-                target=_refresh_missing_research,
-                daemon=True,
-                name="finance-research-catchup",
-            ).start()
+        threading.Thread(
+            target=_startup_recovery,
+            daemon=True,
+            name="finance-startup-recovery",
+        ).start()
 
     if args.check_now:
         # One-shot finance check (demo/verification): poll monitors, record a
