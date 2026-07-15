@@ -677,24 +677,6 @@ class TelegramAdapter(BasePlatformAdapter):
         # API call (e.g. a set_my_commands stall for certain tokens) cannot
         # blow the gateway's connect timeout (#46298).
         self._post_connect_task: Optional[asyncio.Task] = None
-        # Group Sticker Set import is an edge-only Telegram capability.  It
-        # populates the persisted allowlist consumed by send_sticker without
-        # adding dynamic tools or prompt content to ordinary conversations.
-        sticker_cfg = (
-            self.config.extra.get("stickers", {})
-            if isinstance(self.config.extra.get("stickers"), dict)
-            else {}
-        )
-        self._group_sticker_auto_import: bool = self._coerce_nested_bool(
-            sticker_cfg.get("auto_import_group_set"), True
-        ) and self._coerce_nested_bool(sticker_cfg.get("enabled"), False)
-        self._group_sticker_sync_interval_seconds: float = 3600.0 * self._coerce_nested_float(
-            sticker_cfg.get("sync_interval_hours"), 6.0, min_value=1.0, max_value=24.0
-        )
-        self._group_sticker_sync_at: Dict[str, float] = {}
-        self._group_sticker_set_names: Dict[str, str] = {}
-        self._group_sticker_sync_tasks: Dict[str, asyncio.Task] = {}
-        self._group_sticker_sync_lock = asyncio.Lock()
 
     def _mark_connected(self) -> None:
         self._drop_delayed_deliveries = False
@@ -1299,35 +1281,6 @@ class TelegramAdapter(BasePlatformAdapter):
                 return False
             return default
         return bool(value)
-
-    @staticmethod
-    def _coerce_nested_bool(value: Any, default: bool = False) -> bool:
-        if value is None:
-            return default
-        if isinstance(value, str):
-            lowered = value.strip().lower()
-            if lowered in {"true", "1", "yes", "on"}:
-                return True
-            if lowered in {"false", "0", "no", "off"}:
-                return False
-            return default
-        return bool(value)
-
-    @staticmethod
-    def _coerce_nested_float(
-        value: Any,
-        default: float,
-        *,
-        min_value: float,
-        max_value: float,
-    ) -> float:
-        try:
-            parsed = float(value) if value is not None else default
-        except (TypeError, ValueError):
-            parsed = default
-        if parsed != parsed or parsed in {float("inf"), float("-inf")}:
-            parsed = default
-        return max(min_value, min(parsed, max_value))
 
     def _coerce_float_extra(
         self,
@@ -2965,148 +2918,6 @@ class TelegramAdapter(BasePlatformAdapter):
             self._run_post_connect_housekeeping()
         )
 
-    @staticmethod
-    def _is_telegram_group_id(chat_id: object) -> bool:
-        """Telegram group and supergroup identifiers are negative integers."""
-        value = str(chat_id or "").strip()
-        return value.startswith("-") and value[1:].isdigit()
-
-    def _configured_sticker_group_ids(self) -> set[str]:
-        """Return configured or previously-seen groups available at startup."""
-        groups: set[str] = set()
-        home = getattr(self.config, "home_channel", None)
-        if home and self._is_telegram_group_id(getattr(home, "chat_id", None)):
-            groups.add(str(home.chat_id))
-        for env_name in (
-            # This local Finance deployment uses one shared group destination
-            # for the general and finance bots. Keep the generic destination
-            # key alongside Hermes' standard routing keys so startup sticker
-            # sync does not depend on a prior persisted group session.
-            "TELEGRAM_CHAT_ID",
-            "TELEGRAM_GROUP_ALLOWED_CHATS",
-            "TELEGRAM_FREE_RESPONSE_CHATS",
-        ):
-            for chat_id in os.getenv(env_name, "").split(","):
-                chat_id = chat_id.strip()
-                if self._is_telegram_group_id(chat_id):
-                    groups.add(chat_id)
-        # SessionStore already persists delivery origins. Reuse its public
-        # listing API so a previously-used Telegram group can be refreshed on
-        # restart even when it is not the home channel or an explicit
-        # allowlisted target. This is read-only and never broadens message
-        # authorization; inaccessible/stale groups fail harmlessly in getChat.
-        store = getattr(self, "_session_store", None)
-        if store is not None:
-            try:
-                for entry in store.list_sessions():
-                    origin = getattr(entry, "origin", None)
-                    platform = getattr(origin, "platform", "")
-                    platform_value = getattr(platform, "value", platform)
-                    chat_type = str(getattr(origin, "chat_type", "") or "").lower()
-                    chat_id = str(getattr(origin, "chat_id", "") or "").strip()
-                    if (
-                        str(platform_value).lower() == "telegram"
-                        and chat_type in {"group", "forum"}
-                        and self._is_telegram_group_id(chat_id)
-                    ):
-                        groups.add(chat_id)
-            except Exception as exc:
-                logger.warning(
-                    "[%s] Could not read persisted Telegram groups for sticker import: %s",
-                    self.name, type(exc).__name__,
-                )
-        return groups
-
-    async def _sync_group_sticker_set(self, chat_id: object, *, force: bool = False) -> int:
-        """Import one group's configured sticker set through the Telegram Bot API.
-
-        This is deliberately import-only: stickers the operator previously sent
-        remain approved even if the group later switches sets.  A missing set or
-        Bot API failure is non-fatal and is retried after the normal interval.
-        """
-        if not self._group_sticker_auto_import or not self._bot:
-            return 0
-        chat_key = str(chat_id or "").strip()
-        if not self._is_telegram_group_id(chat_key):
-            return 0
-
-        loop = asyncio.get_running_loop()
-        async with self._group_sticker_sync_lock:
-            now = loop.time()
-            last_sync = self._group_sticker_sync_at.get(chat_key, 0.0)
-            if not force and now - last_sync < self._group_sticker_sync_interval_seconds:
-                return 0
-            # Mark the attempt before the API call so repeated group traffic
-            # cannot hammer Telegram while a group has no set or the API is down.
-            self._group_sticker_sync_at[chat_key] = now
-            try:
-                chat = await self._bot.get_chat(
-                    chat_id=normalize_telegram_chat_id(chat_key)
-                )
-                set_name = str(getattr(chat, "sticker_set_name", None) or "").strip()
-                if not set_name:
-                    self._group_sticker_set_names.pop(chat_key, None)
-                    logger.info("[%s] Telegram group has no Group Sticker Set", self.name)
-                    return 0
-                sticker_set = await self._bot.get_sticker_set(name=set_name)
-                palette = [
-                    {
-                        "file_unique_id": getattr(sticker, "file_unique_id", ""),
-                        "file_id": getattr(sticker, "file_id", ""),
-                        "emoji": getattr(sticker, "emoji", "") or "",
-                        "set_name": getattr(sticker, "set_name", None) or set_name,
-                        "is_animated": bool(getattr(sticker, "is_animated", False)),
-                        "is_video": bool(getattr(sticker, "is_video", False)),
-                    }
-                    for sticker in (getattr(sticker_set, "stickers", None) or [])
-                ]
-                from gateway.sticker_cache import cache_sticker_palette
-
-                imported = cache_sticker_palette(
-                    palette, source_group_id=chat_key
-                )
-                self._group_sticker_set_names[chat_key] = set_name
-                logger.info(
-                    "[%s] Imported %d stickers from Telegram Group Sticker Set %s",
-                    self.name, imported, set_name,
-                )
-                return imported
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                # Bot API exception strings can contain the token-bearing URL.
-                logger.warning(
-                    "[%s] Group Sticker Set import failed (non-fatal): %s",
-                    self.name, type(exc).__name__,
-                )
-                return 0
-
-    def _schedule_group_sticker_sync(self, chat: object) -> None:
-        """Refresh a seen group's set at most once per configured interval."""
-        # getattr keeps the adapter's object.__new__ test/dynamic construction
-        # pattern backwards-compatible: an object without initialized sticker
-        # state behaves exactly as the feature being disabled.
-        if not getattr(self, "_group_sticker_auto_import", False) or not chat:
-            return
-        chat_type = str(getattr(chat, "type", "") or "").lower()
-        chat_key = str(getattr(chat, "id", "") or "").strip()
-        if chat_type not in {"group", "supergroup"} or not self._is_telegram_group_id(chat_key):
-            return
-        now = asyncio.get_running_loop().time()
-        if now - self._group_sticker_sync_at.get(chat_key, 0.0) < self._group_sticker_sync_interval_seconds:
-            return
-        existing = self._group_sticker_sync_tasks.get(chat_key)
-        if existing and not existing.done():
-            return
-
-        async def _run() -> None:
-            try:
-                await self._sync_group_sticker_set(chat_key)
-            finally:
-                self._group_sticker_sync_tasks.pop(chat_key, None)
-
-        self._group_sticker_sync_tasks[chat_key] = asyncio.create_task(_run())
-
     async def _run_post_connect_housekeeping(self) -> None:
         """Register the command menu, surface the status indicator, and set up
         DM topics — all off the connect path so a slow Bot API call cannot blow
@@ -3178,11 +2989,6 @@ class TelegramAdapter(BasePlatformAdapter):
                     self.name, topics_err, exc_info=True,
                 )
 
-            # Import the existing Group Sticker Set without waiting for a new
-            # sticker message. Configured groups are known at startup; any
-            # other authorized group is discovered lazily on its next update.
-            for chat_id in self._configured_sticker_group_ids():
-                await self._sync_group_sticker_set(chat_id, force=True)
         except asyncio.CancelledError:
             raise
         finally:
@@ -3654,8 +3460,6 @@ class TelegramAdapter(BasePlatformAdapter):
             collect(task)
         for task in list(self._pending_text_batch_tasks.values()):
             collect(task)
-        for task in list(getattr(self, "_group_sticker_sync_tasks", {}).values()):
-            collect(task)
         collect(self._polling_error_task)
 
         for task in pending_tasks:
@@ -3669,7 +3473,6 @@ class TelegramAdapter(BasePlatformAdapter):
         self._pending_photo_batches.clear()
         self._pending_text_batch_tasks.clear()
         self._pending_text_batches.clear()
-        getattr(self, "_group_sticker_sync_tasks", {}).clear()
         if self._polling_error_task is not current_task:
             self._polling_error_task = None
 
@@ -7726,7 +7529,6 @@ class TelegramAdapter(BasePlatformAdapter):
                 getattr(getattr(msg, "chat", None), "id", None),
             )
             return
-        self._schedule_group_sticker_sync(getattr(msg, "chat", None))
         if not self._should_process_message(msg):
             if self._should_observe_unmentioned_group_message(msg):
                 self._observe_unmentioned_group_message(msg, MessageType.TEXT, update_id=update.update_id)
@@ -7753,7 +7555,6 @@ class TelegramAdapter(BasePlatformAdapter):
                 getattr(getattr(msg, "chat", None), "id", None),
             )
             return
-        self._schedule_group_sticker_sync(getattr(msg, "chat", None))
         await self._ensure_forum_commands(msg)
 
         event = self._build_message_event(msg, MessageType.COMMAND, update_id=update.update_id)
@@ -7977,7 +7778,6 @@ class TelegramAdapter(BasePlatformAdapter):
                 getattr(getattr(update.message, "chat", None), "id", None),
             )
             return
-        self._schedule_group_sticker_sync(getattr(update.message, "chat", None))
         if not self._should_process_message(update.message):
             if self._should_observe_unmentioned_group_message(update.message):
                 _m = update.message
@@ -8313,21 +8113,6 @@ class TelegramAdapter(BasePlatformAdapter):
         sticker = msg.sticker
         emoji = sticker.emoji or ""
         set_name = sticker.set_name or ""
-        # Telegram exposes no update event when an administrator changes the
-        # Group Sticker Set. If startup found no set, the first sticker later
-        # received from that group is a safe immediate refresh signal: fetch
-        # getChat/getStickerSet once and import the whole configured pack.
-        chat = getattr(msg, "chat", None)
-        chat_id = str(getattr(chat, "id", "") or "").strip()
-        chat_type = str(getattr(chat, "type", "") or "").lower()
-        if (
-            set_name
-            and getattr(self, "_group_sticker_auto_import", False)
-            and chat_type in {"group", "supergroup"}
-            and self._is_telegram_group_id(chat_id)
-            and not getattr(self, "_group_sticker_set_names", {}).get(chat_id)
-        ):
-            await self._sync_group_sticker_set(chat_id, force=True)
         # Every sticker received from an authorized Telegram conversation is
         # eligible for the operator's personal outbound palette.  Persist the
         # reusable file_id even for animated/video stickers that vision cannot
@@ -8932,9 +8717,6 @@ def _apply_yaml_config(yaml_cfg: dict, telegram_cfg: dict) -> dict | None:
 
     if "disable_topic_auto_rename" in telegram_cfg:
         extras.setdefault("disable_topic_auto_rename", telegram_cfg["disable_topic_auto_rename"])
-    if isinstance(telegram_cfg.get("stickers"), dict):
-        extras.setdefault("stickers", dict(telegram_cfg["stickers"]))
-
     _effective_rm = telegram_cfg.get("require_mention", yaml_cfg.get("require_mention"))
     if _effective_rm is not None and not os.getenv("TELEGRAM_REQUIRE_MENTION"):
         os.environ["TELEGRAM_REQUIRE_MENTION"] = str(_effective_rm).lower()

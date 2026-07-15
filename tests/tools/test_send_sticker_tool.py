@@ -38,12 +38,12 @@ def _context(name, default=""):
     }.get(name, default)
 
 
-def test_check_is_telegram_config_and_palette_gated(monkeypatch):
+def test_check_is_telegram_config_gated_even_before_palette_is_learned(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "secret-token")
     monkeypatch.delenv("HERMES_CRON_SESSION", raising=False)
     monkeypatch.setattr(sticker_tool, "_session_value", _context)
     monkeypatch.setattr(sticker_tool, "_sticker_settings", _settings)
-    monkeypatch.setattr(sticker_tool, "get_sendable_stickers", _palette)
+    monkeypatch.setattr(sticker_tool, "get_sendable_stickers", lambda: [])
 
     assert sticker_tool._check_send_sticker_available()
 
@@ -114,6 +114,21 @@ def test_handler_refuses_dm(monkeypatch):
     }
 
 
+def test_empty_palette_tells_user_how_to_teach_bot(monkeypatch, tmp_path):
+    monkeypatch.delenv("HERMES_CRON_SESSION", raising=False)
+    monkeypatch.setattr(sticker_tool, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(sticker_tool, "_session_value", _context)
+    monkeypatch.setattr(sticker_tool, "_sticker_settings", _settings)
+    monkeypatch.setattr(sticker_tool, "get_sendable_stickers", lambda: [])
+
+    result = json.loads(asyncio.run(
+        sticker_tool._handle_send_sticker({"intent": "friendly"})
+    ))
+
+    assert result["success"] is False
+    assert result["hint"] == "Ask the user to send the bot a suitable sticker once."
+
+
 def test_inflight_reservation_blocks_concurrent_double_send(monkeypatch, tmp_path):
     monkeypatch.setattr(sticker_tool, "STATE_PATH", tmp_path / "state.json")
     sticker_tool._IN_FLIGHT_CHATS.clear()
@@ -145,6 +160,12 @@ def test_handler_does_not_fallback_to_wrong_intent(monkeypatch, tmp_path):
 
     assert result["success"] is False
     assert "no approved sticker matches" in result["error"]
+
+
+def test_friendly_intent_falls_back_to_latest_learned_sticker():
+    learned = _palette(emoji="👩‍❤️‍💋‍👨", description="")
+
+    assert sticker_tool._select_sticker("friendly", learned) == learned[0]
 
 
 def test_cooldown_config_is_clamped_to_one_or_two_hours(monkeypatch):

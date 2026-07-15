@@ -1,9 +1,10 @@
 """Telegram-native sticker sending for warm, low-frequency group interaction.
 
 This is deliberately a separate, platform-gated model tool rather than an
-extension of the official ``send_message`` transport.  It appears only in a
-live Telegram turn when the operator enabled stickers in ``config.yaml`` and
-the bot has learned at least one reusable sticker from an inbound message.
+extension of the official ``send_message`` transport.  It appears in live
+Telegram turns whenever the operator enables stickers in ``config.yaml``.
+If the palette is empty, the tool explains how the user can teach the bot by
+sending any ordinary sticker once.
 
 Safety is enforced below the prompt: current-group-only routing, a persisted
 60–120 minute cooldown, a user-observed file-id allowlist, and no cron access.
@@ -78,7 +79,7 @@ def _session_value(name: str) -> str:
 
 
 def _check_send_sticker_available() -> bool:
-    """Expose only to configured, interactive Telegram sessions with a palette."""
+    """Expose only to configured, interactive Telegram sessions."""
     if os.getenv("HERMES_CRON_SESSION", "").lower() in {"1", "true", "yes"}:
         return False
     if _session_value("HERMES_SESSION_PLATFORM") != "telegram":
@@ -87,7 +88,7 @@ def _check_send_sticker_available() -> bool:
         return False
     if not os.getenv("TELEGRAM_BOT_TOKEN", "").strip():
         return False
-    return bool(get_sendable_stickers())
+    return True
 
 
 def _load_state() -> dict[str, Any]:
@@ -173,6 +174,19 @@ def _select_sticker(intent: str, palette: list[dict]) -> dict | None:
         )
         scored.append((score, received, str(sticker.get("file_unique_id") or ""), sticker))
     if not scored:
+        # A user asking for a generic friendly sticker should work immediately
+        # after teaching the bot its first ordinary sticker, even when that
+        # pack's emoji is not in our small intent map. Semantic intents such as
+        # celebrate/comfort/goodnight still fail closed to avoid an awkward or
+        # insensitive mismatch.
+        if intent == "friendly" and palette:
+            return max(
+                palette,
+                key=lambda item: (
+                    float(item.get("last_received_at") or item.get("cached_at") or 0),
+                    str(item.get("file_unique_id") or ""),
+                ),
+            )
         return None
     scored.sort(key=lambda row: (row[0], row[1], row[2]), reverse=True)
     return scored[0][3]
