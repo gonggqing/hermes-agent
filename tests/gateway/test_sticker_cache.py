@@ -6,7 +6,9 @@ from gateway.sticker_cache import (
     _load_cache,
     _save_cache,
     get_cached_description,
+    cache_sticker_metadata,
     cache_sticker_description,
+    get_sendable_stickers,
     build_sticker_injection,
     build_animated_sticker_injection,
 )
@@ -76,6 +78,25 @@ class TestCacheSticker:
 
         assert r1["description"] == "Cat"
         assert r2["description"] == "Dog"
+
+    def test_metadata_makes_received_sticker_sendable(self, tmp_path):
+        cache_file = tmp_path / "cache.json"
+        with patch("gateway.sticker_cache.CACHE_PATH", cache_file):
+            cache_sticker_metadata(
+                "uid_1", "bot-file-id", emoji="🎉", set_name="Friendly"
+            )
+            cache_sticker_description("uid_1", "A character celebrating", "🎉")
+            palette = get_sendable_stickers()
+
+        assert len(palette) == 1
+        assert palette[0]["file_id"] == "bot-file-id"
+        assert palette[0]["description"] == "A character celebrating"
+
+    def test_description_only_is_not_sendable(self, tmp_path):
+        cache_file = tmp_path / "cache.json"
+        with patch("gateway.sticker_cache.CACHE_PATH", cache_file):
+            cache_sticker_description("uid_1", "Legacy cached sticker")
+            assert get_sendable_stickers() == []
 
 
 class TestBuildStickerInjection:
