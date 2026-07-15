@@ -1607,7 +1607,8 @@ export interface FinanceResearchBrief {
   news: { items: FinanceNewsDigestItem[]; per_symbol_sentiment: Record<string, number> }
   signals_today: FinanceSignalView[]
   candidates_today: { counts: Record<string, number>; pending: FinanceBriefPendingCandidate[] }
-  discovery: FinanceDiscoveryPool | null
+  /** Optional for briefs archived before Phase 0.95 introduced discovery. */
+  discovery?: FinanceDiscoveryPool | null
   cross_market_synthesis?: FinanceResearchSynthesis
   uncertainty: string[]
   provenance: FinanceProvenanceLink[]

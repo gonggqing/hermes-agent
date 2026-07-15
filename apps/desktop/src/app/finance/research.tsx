@@ -303,7 +303,7 @@ function SynthesisSection({ synthesis }: { synthesis: FinanceResearchBrief['cros
   )
 }
 
-function DiscoverySection({ pool }: { pool: FinanceDiscoveryPool | null }) {
+function DiscoverySection({ pool }: { pool?: FinanceDiscoveryPool | null }) {
   const { t } = useI18n()
   const copy = t.finance.research
 

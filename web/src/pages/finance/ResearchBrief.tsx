@@ -22,6 +22,7 @@ import type {
   FinanceResearchBrief,
   FinanceResearchMarket,
 } from "@/lib/api";
+import { discoveryCandidates } from "./research-compat";
 import { cn } from "@/lib/utils";
 import { Badge } from "@nous-research/ui/ui/components/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@nous-research/ui/ui/components/card";
@@ -453,30 +454,31 @@ function DiscoveryCard({
   pool,
   ft,
 }: {
-  pool: FinanceDiscoveryPool | null;
+  pool: FinanceDiscoveryPool | null | undefined;
   ft: FinanceTranslations;
 }) {
+  const candidates = discoveryCandidates(pool);
   return (
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-center gap-2">
           <Radar className="h-5 w-5 text-muted-foreground" />
           <CardTitle className="text-base">{ft.brief.discovery.title}</CardTitle>
-          {pool !== null && (
+          {pool != null && (
             <Badge tone="secondary">
-              {pool.candidates.length}/{pool.source_count}
+              {candidates.length}/{pool.source_count}
             </Badge>
           )}
         </div>
       </CardHeader>
       <CardContent>
-        {pool === null || pool.candidates.length === 0 ? (
+        {candidates.length === 0 ? (
           <p className="font-mondwest normal-case py-2 text-sm text-muted-foreground">
             {ft.brief.discovery.empty}
           </p>
         ) : (
           <ol className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {pool.candidates.map((candidate) => (
+            {candidates.map((candidate) => (
               <li key={candidate.symbol} className="border border-border/70 bg-secondary/10 p-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
