@@ -43,11 +43,12 @@ DEFAULT_SERVICE_PORT = 9319
 API_VERSION = "v1"
 
 #: Honest provenance/delay note on every on-demand quote/bar (Loop.md §5.9,
-#: §8 data policy): free Yahoo Finance data can lag real time and must never be
-#: treated as an execution-grade tick.
+#: §8 data policy): free market data can lag real time and must never be
+#: treated as an execution-grade tick. Bare six-digit OTC funds use confirmed
+#: Eastmoney NAV history; exchange instruments use Yahoo Finance.
 MARKET_DATA_NOTE = (
-    "prices/bars via Yahoo Finance (yfinance) — may be delayed (~15 min for "
-    "many symbols); for research/analysis only, not execution timing"
+    "market data via Yahoo Finance; Chinese OTC funds via Eastmoney NAV — may "
+    "be delayed; for research/analysis only, not execution timing"
 )
 
 

@@ -180,6 +180,12 @@ class TestLiveProviders:
         assert match.market is MarketScope.CN and match.exchange == "OTC"
         assert match.currency == "CNY" and match.security_type is SecurityType.FUND
 
+    def test_eastmoney_fund_search_keeps_exchange_etf_suffix(self):
+        rows = [{"CODE": "588200", "NAME": "科创芯片ETF嘉实", "CATEGORYDESC": "基金"}]
+        match = EastmoneyInstrumentProvider(search_fn=lambda _q, _t: rows).search("科创芯片")[0]
+        assert match.canonical_symbol == "588200.SS"
+        assert match.exchange == "SSE" and match.security_type is SecurityType.ETF
+
     def test_eastmoney_maps_cn_exchange_instrument(self):
         rows = [{"CODE": "300750", "NAME": "宁德时代", "CATEGORYDESC": "深市"}]
         match = EastmoneyInstrumentProvider(search_fn=lambda _q, _t: rows).search("宁德时代")[0]

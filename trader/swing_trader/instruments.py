@@ -284,6 +284,19 @@ class EastmoneyInstrumentProvider:
         if desc == "基金":
             if not (code.isdigit() and len(code) == 6):
                 return None
+            # Eastmoney's fund suggester also labels exchange-traded ETFs as
+            # "基金". Keep their suffix so users do not add a non-existent OTC
+            # twin (for example 588200 instead of 588200.SS).
+            if code.startswith(("15", "16", "50", "51", "56", "58", "59")):
+                canonical = normalize_symbol(code, _CN)
+                return InstrumentMatch(
+                    canonical_symbol=canonical,
+                    display_name=name,
+                    market=_CN,
+                    exchange="SSE" if canonical.endswith(".SS") else "SZSE",
+                    currency="CNY",
+                    security_type=SecurityType.ETF,
+                )
             return InstrumentMatch(
                 canonical_symbol=code,
                 display_name=name,
