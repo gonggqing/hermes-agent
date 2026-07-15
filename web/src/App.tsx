@@ -584,14 +584,10 @@ export default function App() {
               >
                 <PluginSlot name="header-left" />
 
-                <img
-                  alt=""
-                  className="size-9 rounded-md object-cover"
-                  src={`${import.meta.env.BASE_URL}hermes-finance-logo.png`}
-                />
-
                 <Typography className="font-bold text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground uppercase">
-                  {t.app.brand}
+                  Hermes
+                  <br />
+                  Agent
                 </Typography>
               </div>
 

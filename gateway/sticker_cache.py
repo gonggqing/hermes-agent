@@ -11,7 +11,6 @@ Cache location: ~/.hermes/sticker_cache.json
 import json
 import os
 import tempfile
-import threading
 import time
 from typing import Optional
 
@@ -19,7 +18,6 @@ from hermes_cli.config import get_hermes_home
 
 
 CACHE_PATH = get_hermes_home() / "sticker_cache.json"
-_CACHE_LOCK = threading.RLock()
 
 # Vision prompt for describing stickers -- kept concise to save tokens
 STICKER_VISION_PROMPT = (
@@ -69,58 +67,6 @@ def get_cached_description(file_unique_id: str) -> Optional[dict]:
     return cache.get(file_unique_id)
 
 
-def cache_sticker_metadata(
-    file_unique_id: str,
-    file_id: str,
-    emoji: str = "",
-    set_name: str = "",
-    *,
-    is_animated: bool = False,
-    is_video: bool = False,
-) -> None:
-    """Remember a user-supplied Telegram sticker as an approved send palette item.
-
-    ``file_id`` is reusable by ``sendSticker`` while ``file_unique_id`` is only
-    suitable as a stable cache key.  We intentionally learn stickers only from
-    messages received by the allowlisted bot; the model cannot inject arbitrary
-    remote sticker identifiers into the outbound tool.
-    """
-    if not file_unique_id or not file_id:
-        return
-    with _CACHE_LOCK:
-        cache = _load_cache()
-        entry = dict(cache.get(file_unique_id) or {})
-        entry.update({
-            "file_id": file_id,
-            "emoji": emoji,
-            "set_name": set_name,
-            "is_animated": bool(is_animated),
-            "is_video": bool(is_video),
-            "last_received_at": time.time(),
-        })
-        cache[file_unique_id] = entry
-        _save_cache(cache)
-
-
-def get_sendable_stickers() -> list[dict]:
-    """Return only user-observed stickers that Telegram can send again."""
-    with _CACHE_LOCK:
-        cache = _load_cache()
-    out = []
-    for file_unique_id, raw in cache.items():
-        if not isinstance(raw, dict) or not raw.get("file_id"):
-            continue
-        out.append({"file_unique_id": file_unique_id, **raw})
-    out.sort(
-        key=lambda item: (
-            float(item.get("last_received_at") or item.get("cached_at") or 0),
-            item["file_unique_id"],
-        ),
-        reverse=True,
-    )
-    return out
-
-
 def cache_sticker_description(
     file_unique_id: str,
     description: str,
@@ -136,17 +82,14 @@ def cache_sticker_description(
         emoji:          Associated emoji (e.g. "😀").
         set_name:       Sticker set name if available.
     """
-    with _CACHE_LOCK:
-        cache = _load_cache()
-        entry = dict(cache.get(file_unique_id) or {})
-        entry.update({
-            "description": description,
-            "emoji": emoji,
-            "set_name": set_name,
-            "cached_at": time.time(),
-        })
-        cache[file_unique_id] = entry
-        _save_cache(cache)
+    cache = _load_cache()
+    cache[file_unique_id] = {
+        "description": description,
+        "emoji": emoji,
+        "set_name": set_name,
+        "cached_at": time.time(),
+    }
+    _save_cache(cache)
 
 
 def build_sticker_injection(

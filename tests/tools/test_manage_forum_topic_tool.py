@@ -34,6 +34,35 @@ def test_tool_is_available_only_in_telegram_toolset():
     assert "manage_forum_topic" not in resolve_toolset("hermes-discord")
 
 
+def test_schema_availability_uses_global_config_not_session_context(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.delenv("HERMES_CRON_SESSION", raising=False)
+    monkeypatch.setattr(
+        topic_tool,
+        "_settings",
+        lambda: {"enabled": True, "auto_archive_days": 7},
+    )
+    monkeypatch.setattr(topic_tool, "_session_value", lambda _name: "")
+
+    assert topic_tool._check_available() is True
+
+
+def test_handler_still_enforces_telegram_group_scope(monkeypatch):
+    monkeypatch.setattr(
+        topic_tool,
+        "_settings",
+        lambda: {"enabled": True, "auto_archive_days": 7},
+    )
+    monkeypatch.setattr(topic_tool, "_session_value", lambda _name: "")
+
+    result = json.loads(asyncio.run(topic_tool._handle({"action": "list"})))
+
+    assert result == {
+        "success": False,
+        "error": "current session is not a Telegram group",
+    }
+
+
 def test_create_posts_context_and_registers_managed_topic(monkeypatch, tmp_path):
     _configure(monkeypatch, tmp_path)
     action = AsyncMock(return_value={"topic_id": "42"})

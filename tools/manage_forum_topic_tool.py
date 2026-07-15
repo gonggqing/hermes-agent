@@ -47,12 +47,17 @@ def _settings() -> dict[str, Any]:
 
 
 def _check_available() -> bool:
+    """Expose the platform capability from global config, not turn context.
+
+    Tool definitions are assembled and memoized before a Telegram message's
+    context variables are guaranteed to exist.  Session-specific scope is
+    therefore enforced in ``_handle``; doing it here can cache a false result
+    and hide the tool for the lifetime of an agent session.
+    """
     if os.getenv("HERMES_CRON_SESSION", "").lower() in {"1", "true", "yes"}:
         return False
     return (
         _settings().get("enabled", False)
-        and _session_value("HERMES_SESSION_PLATFORM") == "telegram"
-        and _session_value("HERMES_SESSION_CHAT_ID").startswith("-")
         and bool(os.getenv("TELEGRAM_BOT_TOKEN", "").strip())
     )
 

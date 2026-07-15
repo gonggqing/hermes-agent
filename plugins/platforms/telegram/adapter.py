@@ -8193,7 +8193,6 @@ class TelegramAdapter(BasePlatformAdapter):
         """
         from gateway.sticker_cache import (
             get_cached_description,
-            cache_sticker_metadata,
             cache_sticker_description,
             build_sticker_injection,
             build_animated_sticker_injection,
@@ -8203,18 +8202,6 @@ class TelegramAdapter(BasePlatformAdapter):
         sticker = msg.sticker
         emoji = sticker.emoji or ""
         set_name = sticker.set_name or ""
-        # Every sticker received from an authorized Telegram conversation is
-        # eligible for the operator's personal outbound palette.  Persist the
-        # reusable file_id even for animated/video stickers that vision cannot
-        # inspect; send_sticker never accepts an arbitrary model-supplied id.
-        cache_sticker_metadata(
-            sticker.file_unique_id,
-            sticker.file_id,
-            emoji,
-            set_name,
-            is_animated=bool(sticker.is_animated),
-            is_video=bool(sticker.is_video),
-        )
 
         # Animated and video stickers can't be analyzed as static images
         if sticker.is_animated or sticker.is_video:
