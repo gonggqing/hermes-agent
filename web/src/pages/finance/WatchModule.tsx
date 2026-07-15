@@ -1,5 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { BarChart3, Check, ChevronDown, Eye, SlidersHorizontal } from "lucide-react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import {
+  BarChart3,
+  Bitcoin,
+  Check,
+  ChevronDown,
+  Eye,
+  Fuel,
+  Gem,
+  Landmark,
+  SlidersHorizontal,
+} from "lucide-react";
 import { init, dispose } from "klinecharts";
 import type {
   Chart,
@@ -134,9 +150,36 @@ interface BarsCacheEntry {
 }
 const barsCache = new Map<string, BarsCacheEntry>();
 const quoteCache = new Map<string, FinanceQuote>();
+const barsRequests = new Map<string, Promise<{ bars: FinanceBar[] }>>();
+const quoteRequests = new Map<string, Promise<FinanceQuote>>();
 
 function barsKey(symbol: string, timeframe: string, limit: number): string {
   return `${symbol}|${timeframe}|${limit}`;
+}
+
+function sharedQuote(symbol: string): Promise<FinanceQuote> {
+  const pending = quoteRequests.get(symbol);
+  if (pending) return pending;
+  const request = api.financeQuote(symbol).finally(() => {
+    if (quoteRequests.get(symbol) === request) quoteRequests.delete(symbol);
+  });
+  quoteRequests.set(symbol, request);
+  return request;
+}
+
+function sharedBars(
+  symbol: string,
+  timeframe: string,
+  limit: number,
+): Promise<{ bars: FinanceBar[] }> {
+  const key = barsKey(symbol, timeframe, limit);
+  const pending = barsRequests.get(key);
+  if (pending) return pending;
+  const request = api.financeBars(symbol, { timeframe, limit }).finally(() => {
+    if (barsRequests.get(key) === request) barsRequests.delete(key);
+  });
+  barsRequests.set(key, request);
+  return request;
 }
 
 // ── Per-symbol data hooks (cache-first, per-timeframe bars) ────────────
@@ -178,7 +221,7 @@ function useSymbolQuote(symbol: string | null): {
   useEffect(() => {
     if (symbol === null || quoteCache.has(symbol)) return;
     let alive = true;
-    api.financeQuote(symbol).then(
+    sharedQuote(symbol).then(
       (q) => {
         if (!alive) return;
         quoteCache.set(symbol, q);
@@ -224,7 +267,7 @@ function useSymbolBars(
   useEffect(() => {
     if (barsCache.has(key)) return;
     let alive = true;
-    api.financeBars(symbol, { timeframe, limit }).then(
+    sharedBars(symbol, timeframe, limit).then(
       (res) => {
         if (!alive) return;
         barsCache.set(key, { bars: res.bars, fetchedAt: Date.now() });
@@ -248,10 +291,10 @@ function useSymbolBars(
 /**
  * Cache-first data for one watch symbol at one timeframe preset.
  *
- * For a plain symbol this is just its quote + bars. For a DERIVED symbol
- * (e.g. AU9999, which is not on Yahoo) it fetches the base price series
- * (`derived.base`, e.g. GC=F in USD/oz), the base bars, and the FX quote
- * (`derived.fx`, e.g. CNY=X in CNY/USD), then rescales the base quote's last
+ * For a plain symbol the latest bar also supplies the displayed price, avoiding
+ * a duplicate quote request. For a DERIVED symbol (e.g. AU9999, which is not on
+ * Yahoo) it fetches the base bars and the FX quote (`derived.fx`, e.g. CNY=X),
+ * then rescales the base bar's last close
  * AND every base bar's O/H/L/C by `factor = fxLast / gramsPerOunce` — the
  * candle SHAPE is the base series, just rescaled to ¥/gram. A missing base or
  * FX quote degrades to "error" (a graceful no-data note) — it never crashes.
@@ -262,7 +305,6 @@ function useWatchSymbol(
 ): WatchSymbolData {
   const derived = entry.derived ?? null;
   const primarySymbol = derived ? derived.base : entry.symbol;
-  const { quote: primaryQuote, done: quoteDone } = useSymbolQuote(primarySymbol);
   const { bars: primaryBars, done: barsDone } = useSymbolBars(
     primarySymbol,
     preset,
@@ -275,6 +317,18 @@ function useWatchSymbol(
     quote: FinanceQuote | null;
     bars: FinanceBar[];
   }>(() => {
+    const lastBar = primaryBars.at(-1);
+    const primaryQuote: FinanceQuote | null = lastBar
+      ? {
+          symbol: primarySymbol,
+          last: lastBar.close,
+          bid: null,
+          ask: null,
+          volume: lastBar.volume,
+          as_of: lastBar.ts,
+          note: "",
+        }
+      : null;
     if (!derived) return { quote: primaryQuote, bars: primaryBars };
     const fxLast = fxQuote?.last ?? null;
     if (fxLast === null) return { quote: null, bars: [] };
@@ -299,9 +353,9 @@ function useWatchSymbol(
       volume: b.volume,
     }));
     return { quote: dq, bars: db };
-  }, [derived, primaryQuote, primaryBars, fxQuote, entry.symbol]);
+  }, [derived, primaryBars, fxQuote, entry.symbol, primarySymbol]);
 
-  const settledQuote = derived ? quoteDone && fxDone : quoteDone;
+  const settledQuote = derived ? barsDone && fxDone : barsDone;
   const settledBars = derived ? barsDone && fxDone : barsDone;
   const status: SymbolStatus =
     quote === null && bars.length === 0
@@ -459,7 +513,10 @@ function buildChartStyles(
       { title: ft.watch.open, value: fmt(k.open) },
       { title: ft.watch.high, value: fmt(k.high) },
       { title: ft.watch.low, value: fmt(k.low) },
-      { title: ft.watch.close, value: { text: fmt(k.close), color: closeColor } },
+      {
+        title: ft.watch.close,
+        value: { text: fmt(k.close), color: closeColor },
+      },
     ];
     if (typeof k.volume === "number" && k.volume > 0) {
       rows.push({ title: ft.watch.volume, value: k.volume.toLocaleString() });
@@ -517,11 +574,19 @@ function buildChartStyles(
     crosshair: {
       horizontal: {
         line: { color: t.cross },
-        text: { backgroundColor: t.crossBg, borderColor: t.crossBg, color: t.crossText },
+        text: {
+          backgroundColor: t.crossBg,
+          borderColor: t.crossBg,
+          color: t.crossText,
+        },
       },
       vertical: {
         line: { color: t.cross },
-        text: { backgroundColor: t.crossBg, borderColor: t.crossBg, color: t.crossText },
+        text: {
+          backgroundColor: t.crossBg,
+          borderColor: t.crossBg,
+          color: t.crossText,
+        },
       },
     },
     separator: { color: t.axisLine },
@@ -553,15 +618,17 @@ function KLineChart({
   entry,
   preset,
   active,
+  data,
   ft,
 }: {
   entry: WatchSymbol;
   preset: TimeframePresetKey;
   active: Set<IndicatorKey>;
+  data: WatchSymbolData;
   ft: FinanceTranslations;
 }) {
   const { themeName } = useTheme();
-  const { status, bars } = useWatchSymbol(entry, preset);
+  const { status, bars } = data;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<Chart | null>(null);
@@ -655,7 +722,9 @@ function KLineChart({
     if (!chart || !ready || !el) return;
     const onResize = () => chartRef.current?.resize();
     const ro =
-      typeof ResizeObserver !== "undefined" ? new ResizeObserver(onResize) : null;
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(onResize)
+        : null;
     ro?.observe(el);
     window.addEventListener("resize", onResize);
     return () => {
@@ -680,7 +749,9 @@ function KLineChart({
         applied.add(def.key);
       } else if (!want && has) {
         chart.removeIndicator(
-          def.overlay ? { paneId: CANDLE_PANE_ID, name: def.key } : { name: def.key },
+          def.overlay
+            ? { paneId: CANDLE_PANE_ID, name: def.key }
+            : { name: def.key },
         );
         applied.delete(def.key);
       }
@@ -713,7 +784,10 @@ function KLineChart({
 
 // ── Symbol dropdown (top-left) ────────────────────────────────────────
 
-function symbolOptionLabel(entry: WatchSymbol, ft: FinanceTranslations): string {
+function symbolOptionLabel(
+  entry: WatchSymbol,
+  ft: FinanceTranslations,
+): string {
   const label = entry.derived ? ft.watch.au9999Label : entry.label;
   return `${label} · ${entry.symbol}`;
 }
@@ -921,7 +995,8 @@ function ChartCard({
     () => ({ currency: entry.currency, unit: entry.unit }),
     [entry.currency, entry.unit],
   );
-  const { quote } = useWatchSymbol(entry, preset);
+  const data = useWatchSymbol(entry, preset);
+  const { quote } = data;
   const unitCaption =
     entry.unit === "pct"
       ? "%"
@@ -946,7 +1021,9 @@ function ChartCard({
           />
           {quote && quote.last !== null && (
             <span className="flex items-baseline gap-2">
-              <span className="text-xs text-text-tertiary">{ft.watch.price}</span>
+              <span className="text-xs text-text-tertiary">
+                {ft.watch.price}
+              </span>
               <span className="font-mono-ui text-lg text-foreground">
                 {fmtWatchPrice(quote.last, display, ft)}
               </span>
@@ -958,7 +1035,11 @@ function ChartCard({
             </span>
           )}
           <div className="ml-auto">
-            <IndicatorsMenu active={active} onToggle={toggleIndicator} ft={ft} />
+            <IndicatorsMenu
+              active={active}
+              onToggle={toggleIndicator}
+              ft={ft}
+            />
           </div>
         </div>
 
@@ -976,6 +1057,7 @@ function ChartCard({
           entry={entry}
           preset={preset}
           active={active}
+          data={data}
           ft={ft}
         />
 
@@ -1140,12 +1222,33 @@ function AnalyzePanel({
  * multi-agent analysis for the selected symbol. READ-ONLY — no order or
  * approval control exists here (Loop.md §3).
  */
-export function WatchModule({ moduleKey }: { moduleKey: WatchModuleKey }) {
+export function WatchModule({
+  moduleKey,
+  title,
+  customSymbols,
+  headerActions,
+  titleIcon,
+}: {
+  moduleKey?: WatchModuleKey;
+  title?: string;
+  customSymbols?: WatchSymbol[];
+  headerActions?: ReactNode;
+  titleIcon?: ReactNode;
+}) {
   const ft = useFinanceT();
-  const symbols = WATCH_MODULES[moduleKey];
+  const symbols = useMemo(
+    () => customSymbols ?? (moduleKey ? WATCH_MODULES[moduleKey] : []),
+    [customSymbols, moduleKey],
+  );
+  const heading = title ?? (moduleKey ? watchModuleName(moduleKey, ft) : "");
   const [selected, setSelected] = useState<string>(symbols[0]?.symbol ?? "");
   const [analyze, setAnalyze] = useState<AnalyzeState>({ status: "idle" });
   const aliveRef = useRef(true);
+  const selectionValid = symbols.some((symbol) => symbol.symbol === selected);
+  const activeSelected = selectionValid ? selected : (symbols[0]?.symbol ?? "");
+  const activeAnalyze: AnalyzeState = selectionValid
+    ? analyze
+    : { status: "idle" };
 
   useEffect(() => {
     aliveRef.current = true;
@@ -1154,17 +1257,24 @@ export function WatchModule({ moduleKey }: { moduleKey: WatchModuleKey }) {
     };
   }, []);
 
+  const moduleIcon = (() => {
+    if (!moduleKey) return null;
+    const icons = { gold: Gem, oil: Fuel, rates: Landmark, crypto: Bitcoin };
+    const Icon = icons[moduleKey];
+    return <Icon className="h-5 w-5 text-muted-foreground" />;
+  })();
+
   const selectSymbol = (symbol: string) => {
-    if (symbol === selected) return;
+    if (symbol === activeSelected) return;
     setSelected(symbol);
     // Analysis is symbol-specific — drop it when the focus changes.
     setAnalyze({ status: "idle" });
   };
 
   const runAnalyze = () => {
-    if (!selected) return;
+    if (!activeSelected) return;
     setAnalyze({ status: "loading" });
-    api.financeAnalyze(selected).then(
+    api.financeAnalyze(activeSelected).then(
       (data) => {
         if (aliveRef.current) setAnalyze({ status: "done", data });
       },
@@ -1175,15 +1285,14 @@ export function WatchModule({ moduleKey }: { moduleKey: WatchModuleKey }) {
   };
 
   return (
-    <section
-      className="flex flex-col gap-4"
-      aria-label={watchModuleName(moduleKey, ft)}
-    >
+    <section className="flex flex-col gap-4" aria-label={heading}>
       {/* Header: title + read-only badge (left), single Analyze (right). */}
       <div className="flex flex-wrap items-center gap-2">
-        <BarChart3 className="h-5 w-5 text-muted-foreground" />
+        {titleIcon ?? moduleIcon ?? (
+          <BarChart3 className="h-5 w-5 text-muted-foreground" />
+        )}
         <h2 className="font-mondwest text-display text-base tracking-wider text-foreground">
-          {watchModuleName(moduleKey, ft)}
+          {heading}
         </h2>
         <Badge tone="secondary">
           <span className="inline-flex items-center gap-1">
@@ -1191,8 +1300,9 @@ export function WatchModule({ moduleKey }: { moduleKey: WatchModuleKey }) {
             {ft.watch.readOnlyNote}
           </span>
         </Badge>
-        <div className="ml-auto">
-          {analyze.status === "done" ? (
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {headerActions}
+          {activeAnalyze.status === "done" ? (
             <Button
               type="button"
               size="sm"
@@ -1206,10 +1316,10 @@ export function WatchModule({ moduleKey }: { moduleKey: WatchModuleKey }) {
               type="button"
               size="sm"
               outlined
-              disabled={analyze.status === "loading" || !selected}
+              disabled={activeAnalyze.status === "loading" || !activeSelected}
               onClick={runAnalyze}
             >
-              {analyze.status === "loading"
+              {activeAnalyze.status === "loading"
                 ? ft.watch.analyzing
                 : ft.watch.analyze}
             </Button>
@@ -1222,15 +1332,23 @@ export function WatchModule({ moduleKey }: { moduleKey: WatchModuleKey }) {
       </p>
 
       {/* The one large K-line chart + its controls. */}
-      <ChartCard
-        symbols={symbols}
-        selected={selected}
-        onSelect={selectSymbol}
-        ft={ft}
-      />
+      {symbols.length > 0 ? (
+        <ChartCard
+          symbols={symbols}
+          selected={activeSelected}
+          onSelect={selectSymbol}
+          ft={ft}
+        />
+      ) : (
+        <Card>
+          <CardContent className="py-12 text-center text-sm text-muted-foreground">
+            {ft.watch.emptyCustomGroup}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Analysis panel for the selected symbol (single, page-level). */}
-      {analyze.status === "error" && (
+      {activeAnalyze.status === "error" && (
         <Card>
           <CardContent className="py-4">
             <p className="font-mondwest normal-case text-sm text-muted-foreground">
@@ -1239,10 +1357,14 @@ export function WatchModule({ moduleKey }: { moduleKey: WatchModuleKey }) {
           </CardContent>
         </Card>
       )}
-      {analyze.status === "done" && (
+      {activeAnalyze.status === "done" && (
         <Card>
           <CardContent className="py-4">
-            <AnalyzePanel data={analyze.data} symbol={selected} ft={ft} />
+            <AnalyzePanel
+              data={activeAnalyze.data}
+              symbol={activeSelected}
+              ft={ft}
+            />
           </CardContent>
         </Card>
       )}

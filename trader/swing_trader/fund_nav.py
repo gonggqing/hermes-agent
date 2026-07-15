@@ -20,21 +20,26 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional, Protocol, runtime_checkable
+from urllib.parse import urlencode
 
+from swing_trader.interfaces import Bar
 from swing_trader.log import get_logger
 
 logger = get_logger(__name__)
 
 __all__ = [
     "CachedNavProvider",
+    "EastmoneyFundHistory",
     "EastmoneyFundNav",
     "FakeNavProvider",
+    "FundHistoryProvider",
     "NavProvider",
     "NavQuote",
     "is_fund_code",
 ]
 
 _FUNDGZ_URL = "http://fundgz.1234567.com.cn/js/{code}.js"
+_FUND_HISTORY_URL = "https://api.fund.eastmoney.com/f10/lsjz"
 _JSONP = re.compile(r"jsonpgz\((.*)\);?\s*$", re.S)
 
 
@@ -59,12 +64,123 @@ class NavProvider(Protocol):
         ...
 
 
+@runtime_checkable
+class FundHistoryProvider(Protocol):
+    def get_bars(self, code: str, timeframe: str, limit: int) -> list[Bar]: ...
+
+
 def _default_http_get(url: str, timeout: float) -> Optional[str]:
     import urllib.request
 
     req = urllib.request.Request(url, headers={"User-Agent": "hermes-finance/0.9"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — fixed host
         return resp.read().decode("utf-8", errors="replace")
+
+
+def _default_history_get(url: str, timeout: float) -> dict:
+    import urllib.request
+
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 HermesFinance/1.0",
+            "Referer": "https://fundf10.eastmoney.com/",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — fixed host
+        return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+
+class EastmoneyFundHistory:
+    """Confirmed daily NAV history for bare six-digit Chinese OTC funds.
+
+    OTC funds do not have exchange candles or intraday volume.  Each daily NAV
+    therefore becomes one flat OHLC bar; weekly/monthly bars are honest
+    aggregates of those daily observations.  Intraday requests degrade to the
+    same daily series instead of fabricating minute prices.
+    """
+
+    _SUPPORTED = {"1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"}
+
+    def __init__(
+        self,
+        http_get: Optional[Callable[[str, float], dict]] = None,
+        timeout: float = 6.0,
+    ) -> None:
+        self._get = http_get or _default_history_get
+        self._timeout = timeout
+
+    @staticmethod
+    def _aggregate(rows: list[Bar], timeframe: str, limit: int) -> list[Bar]:
+        if timeframe not in {"1wk", "1mo"}:
+            return rows[-limit:]
+        grouped: dict[tuple[int, int], list[Bar]] = {}
+        for row in rows:
+            local = row.ts.astimezone(timezone(timedelta(hours=8)))
+            if timeframe == "1wk":
+                iso = local.isocalendar()
+                key = (iso.year, iso.week)
+            else:
+                key = (local.year, local.month)
+            grouped.setdefault(key, []).append(row)
+        out: list[Bar] = []
+        for group in grouped.values():
+            out.append(
+                Bar(
+                    symbol=group[0].symbol,
+                    ts=group[-1].ts,
+                    open=group[0].close,
+                    high=max(item.close for item in group),
+                    low=min(item.close for item in group),
+                    close=group[-1].close,
+                    volume=0.0,
+                )
+            )
+        return out[-limit:]
+
+    def get_bars(self, code: str, timeframe: str = "1d", limit: int = 100) -> list[Bar]:
+        if not is_fund_code(code):
+            raise ValueError(f"not an OTC fund code: {code!r}")
+        if timeframe not in self._SUPPORTED:
+            raise ValueError(f"unsupported timeframe {timeframe!r}")
+        if limit < 1:
+            raise ValueError("limit must be >= 1")
+        base = code.strip()
+        multiplier = 7 if timeframe == "1wk" else 31 if timeframe == "1mo" else 1
+        page_size = min(1000, max(limit * multiplier, limit))
+        url = f"{_FUND_HISTORY_URL}?{urlencode({'fundCode': base, 'pageIndex': 1, 'pageSize': page_size})}"
+        try:
+            payload = self._get(url, self._timeout)
+            records = payload.get("Data", {}).get("LSJZList", [])
+        except Exception as exc:  # noqa: BLE001 — normalize the provider boundary
+            raise RuntimeError(f"fund history fetch failed for {base}: {exc}") from exc
+        rows: list[Bar] = []
+        china_tz = timezone(timedelta(hours=8))
+        for record in reversed(records if isinstance(records, list) else []):
+            if not isinstance(record, dict):
+                continue
+            try:
+                close = float(record.get("DWJZ"))
+                ts = datetime.strptime(str(record.get("FSRQ")), "%Y-%m-%d")
+            except (TypeError, ValueError):
+                continue
+            if close <= 0:
+                continue
+            utc_ts = ts.replace(tzinfo=china_tz).astimezone(timezone.utc)
+            rows.append(
+                Bar(
+                    symbol=base,
+                    ts=utc_ts,
+                    open=close,
+                    high=close,
+                    low=close,
+                    close=close,
+                    volume=0.0,
+                )
+            )
+        if not rows:
+            raise RuntimeError(f"no usable fund history for {base}")
+        return self._aggregate(rows, timeframe, limit)
 
 
 class EastmoneyFundNav:

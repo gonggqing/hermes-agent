@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from swing_trader.fund_nav import (
     CachedNavProvider,
+    EastmoneyFundHistory,
     EastmoneyFundNav,
     FakeNavProvider,
     NavProvider,
@@ -71,6 +72,50 @@ class TestEastmoneyParse:
 
     def test_empty_payload_none(self):
         assert self._provider(None).get_nav("017436") is None
+
+
+class TestEastmoneyFundHistory:
+    @staticmethod
+    def _payload():
+        return {
+            "Data": {
+                "LSJZList": [
+                    {"FSRQ": "2026-07-14", "DWJZ": "3.5000"},
+                    {"FSRQ": "2026-07-13", "DWJZ": "3.4670"},
+                    {"FSRQ": "2026-07-10", "DWJZ": "3.5957"},
+                    {"FSRQ": "bad", "DWJZ": "-"},
+                ]
+            }
+        }
+
+    def test_daily_nav_becomes_ascending_flat_ohlc(self):
+        calls = []
+        provider = EastmoneyFundHistory(
+            http_get=lambda url, timeout: calls.append((url, timeout)) or self._payload()
+        )
+        bars = provider.get_bars("017470", "1d", 3)
+        assert [bar.close for bar in bars] == [3.5957, 3.467, 3.5]
+        assert all(bar.open == bar.high == bar.low == bar.close for bar in bars)
+        assert all(bar.volume == 0 for bar in bars)
+        assert "fundCode=017470" in calls[0][0]
+        assert bars[-1].ts.tzinfo is not None
+
+    def test_weekly_nav_is_real_aggregate(self):
+        provider = EastmoneyFundHistory(http_get=lambda _url, _timeout: self._payload())
+        bars = provider.get_bars("017470", "1wk", 2)
+        assert bars[-1].open == 3.467
+        assert bars[-1].high == 3.5
+        assert bars[-1].low == 3.467
+        assert bars[-1].close == 3.5
+
+    def test_rejects_exchange_ticker_and_empty_history(self):
+        provider = EastmoneyFundHistory(http_get=lambda _url, _timeout: {"Data": {}})
+        import pytest
+
+        with pytest.raises(ValueError):
+            provider.get_bars("510300.SS", "1d", 10)
+        with pytest.raises(RuntimeError, match="no usable fund history"):
+            provider.get_bars("017470", "1d", 10)
 
 
 class TestFakeAndCache:

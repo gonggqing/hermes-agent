@@ -1,7 +1,17 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { dispose, init } from 'klinecharts'
-import type { Chart, DeepPartial, KLineData, NeighborData, Nullable, Period, PeriodType, Styles, TooltipLegend } from 'klinecharts'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import type {
+  Chart,
+  DeepPartial,
+  KLineData,
+  NeighborData,
+  Nullable,
+  Period,
+  PeriodType,
+  Styles,
+  TooltipLegend
+} from 'klinecharts'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useIsDark } from '@/components/assistant-ui/embeds/use-is-dark'
 import { PageLoader } from '@/components/page-loader'
@@ -9,13 +19,7 @@ import { StatusDot, type StatusTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { SegmentedControl, type SegmentedControlOption } from '@/components/ui/segmented-control'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@/components/ui/select'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import {
   type FinanceAnalyze,
@@ -29,7 +33,7 @@ import {
 } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { ExternalLink } from '@/lib/external-link'
-import { Info, SlidersHorizontal } from '@/lib/icons'
+import { Bitcoin, Coin, GasStation, Info, Landmark, SlidersHorizontal } from '@/lib/icons'
 import { fmtDate, fmtDateTime } from '@/lib/time'
 import { cn } from '@/lib/utils'
 
@@ -80,6 +84,7 @@ export interface WatchDerivedSpec {
 // into a synthetic symbol (see WatchDerivedSpec).
 export interface WatchSymbolConfig {
   symbol: string
+  label?: string
   currency: WatchCurrency | null
   unit: WatchUnitKey | null
   derived?: WatchDerivedSpec
@@ -106,7 +111,11 @@ export const WATCH_MODULE_SYMBOLS: Record<WatchModuleId, readonly WatchSymbolCon
   ],
   crypto: [
     { symbol: 'BTC-USD', currency: '$', unit: null },
-    { symbol: 'ETH-USD', currency: '$', unit: null }
+    { symbol: 'ETH-USD', currency: '$', unit: null },
+    { symbol: 'SOL-USD', currency: '$', unit: null },
+    { symbol: 'BNB-USD', currency: '$', unit: null },
+    { symbol: 'XRP-USD', currency: '$', unit: null },
+    { symbol: 'ADA-USD', currency: '$', unit: null }
   ]
 }
 
@@ -197,25 +206,66 @@ const isOverlayIndicator = (key: IndicatorKey): boolean => OVERLAY_INDICATORS.in
 // Stable empty reference so a symbol with no bars yet doesn't churn renders.
 const NO_BARS: FinanceBar[] = []
 
-export function WatchModulePanel({ enabled, module }: { enabled: boolean; module: WatchModuleId }) {
+export function WatchModulePanel({
+  enabled,
+  headerActions,
+  module,
+  symbols: customSymbols,
+  title,
+  titleIcon
+}: {
+  enabled: boolean
+  headerActions?: ReactNode
+  module?: WatchModuleId
+  symbols?: readonly WatchSymbolConfig[]
+  title?: string
+  titleIcon?: ReactNode
+}) {
   const { t } = useI18n()
   const copy = t.finance.watch
-  const symbols = WATCH_MODULE_SYMBOLS[module]
-  const [selected, setSelected] = useState<string>(symbols[0].symbol)
+
+  const symbols = useMemo(
+    () => customSymbols ?? (module ? WATCH_MODULE_SYMBOLS[module] : []),
+    [customSymbols, module]
+  )
+
+  const labels = useMemo(
+    () =>
+      Object.fromEntries(
+        symbols.map(config => [config.symbol, config.label ?? copy.labels[config.symbol] ?? config.symbol])
+      ),
+    [copy.labels, symbols]
+  )
+
+  const [selected, setSelected] = useState<string>(symbols[0]?.symbol ?? '')
   const [showAnalysis, setShowAnalysis] = useState(false)
 
   // Keep the selection valid when the sidebar switches modules (the symbol set
   // changes); default to the first symbol so the single Analyze always targets
   // something concrete.
-  const activeSymbol = symbols.some(config => config.symbol === selected) ? selected : symbols[0].symbol
+  const activeSymbol = symbols.some(config => config.symbol === selected) ? selected : (symbols[0]?.symbol ?? '')
   const activeConfig = symbols.find(config => config.symbol === activeSymbol) ?? symbols[0]
+
+  const moduleIcon =
+    module === 'gold' ? (
+      <Coin className="size-4 text-muted-foreground" />
+    ) : module === 'oil' ? (
+      <GasStation className="size-4 text-muted-foreground" />
+    ) : module === 'rates' ? (
+      <Landmark className="size-4 text-muted-foreground" />
+    ) : module === 'crypto' ? (
+      <Bitcoin className="size-4 text-muted-foreground" />
+    ) : null
 
   return (
     <div className="space-y-5">
       <header className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
         <div className="space-y-1.5">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-[0.9375rem] font-semibold tracking-tight text-foreground">{copy.modules[module]}</h3>
+            {titleIcon ?? moduleIcon}
+            <h3 className="text-[0.9375rem] font-semibold tracking-tight text-foreground">
+              {title ?? (module ? copy.modules[module] : '')}
+            </h3>
             <FinancePill variant="muted">{copy.readOnlyTag}</FinancePill>
           </div>
           <ReadOnlyNote text={copy.readOnlyNote} />
@@ -223,12 +273,21 @@ export function WatchModulePanel({ enabled, module }: { enabled: boolean; module
         {/* Exactly ONE Analyze button per page, top-right of the content area —
             no icon; it analyzes the currently selected symbol (Loop.md §3:
             read-only, no order/approve path). */}
-        <Button className="shrink-0" onClick={() => setShowAnalysis(value => !value)} size="sm" variant="outline">
-          {showAnalysis ? copy.hideAnalysis : copy.analyze}
-        </Button>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {headerActions}
+          <Button
+            className="shrink-0"
+            disabled={!activeConfig}
+            onClick={() => setShowAnalysis(value => !value)}
+            size="sm"
+            variant="outline"
+          >
+            {showAnalysis ? copy.hideAnalysis : copy.analyze}
+          </Button>
+        </div>
       </header>
 
-      {showAnalysis && (
+      {showAnalysis && activeConfig && (
         <FinanceCard className="space-y-3">
           <div className="flex items-center gap-2">
             <FinanceSectionLabel>{copy.analyze}</FinanceSectionLabel>
@@ -238,7 +297,17 @@ export function WatchModulePanel({ enabled, module }: { enabled: boolean; module
         </FinanceCard>
       )}
 
-      <WatchChartPanel config={activeConfig} enabled={enabled} onSelect={setSelected} symbols={symbols} />
+      {activeConfig ? (
+        <WatchChartPanel
+          config={activeConfig}
+          enabled={enabled}
+          labels={labels}
+          onSelect={setSelected}
+          symbols={symbols}
+        />
+      ) : (
+        <FinanceCard className="py-10 text-center text-xs text-muted-foreground">{copy.custom.empty}</FinanceCard>
+      )}
 
       <p className="text-[0.62rem] leading-4 text-muted-foreground/70">{copy.delayNote}</p>
     </div>
@@ -269,14 +338,6 @@ function useWatchSymbolData(config: WatchSymbolConfig, timeframe: TimeframeId, e
   // candles are fetched from the BASE future and rescaled by the FX quote.
   const dataSymbol = derived ? derived.base : symbol
 
-  const quoteQuery = useQuery({
-    enabled,
-    queryFn: () => financeQuote(dataSymbol),
-    queryKey: financeKey('watch', 'quote', dataSymbol),
-    retry: false,
-    staleTime: QUOTE_STALE_MS
-  })
-
   const barsQuery = useQuery({
     enabled,
     gcTime: BARS_GC_MS,
@@ -296,8 +357,22 @@ function useWatchSymbolData(config: WatchSymbolConfig, timeframe: TimeframeId, e
     staleTime: QUOTE_STALE_MS
   })
 
-  const baseQuote = quoteQuery.data
   const baseBars = barsQuery.data?.bars ?? NO_BARS
+  const baseQuote = useMemo<FinanceQuote | undefined>(() => {
+    const last = baseBars.at(-1)
+
+    return last
+      ? {
+          ask: null,
+          as_of: last.ts,
+          bid: null,
+          last: last.close,
+          note: barsQuery.data?.note,
+          symbol: dataSymbol,
+          volume: last.volume
+        }
+      : undefined
+  }, [baseBars, barsQuery.data?.note, dataSymbol])
   // ¥/gram factor = CNY-per-USD ÷ grams-per-ounce, applied to the USD/oz base.
   const fxLast = fxQuery.data?.last ?? null
   const factor = derived && fxLast !== null && Number.isFinite(fxLast) ? fxLast / derived.gramsPerOunce : null
@@ -340,10 +415,10 @@ function useWatchSymbolData(config: WatchSymbolConfig, timeframe: TimeframeId, e
   // usable value — surfaced as a distinct no-data note (never a crash).
   const derivedBroken =
     Boolean(derived) &&
-    (quoteQuery.isError ||
+    (barsQuery.isError ||
       fxQuery.isError ||
       (fxQuery.isSuccess && (fxLast === null || !Number.isFinite(fxLast))) ||
-      (quoteQuery.isSuccess && (baseQuote?.last === null || baseQuote?.last === undefined)))
+      (barsQuery.isSuccess && (baseQuote?.last === null || baseQuote?.last === undefined)))
 
   return {
     bars,
@@ -351,8 +426,8 @@ function useWatchSymbolData(config: WatchSymbolConfig, timeframe: TimeframeId, e
     barsPending: barsQuery.isPending || (Boolean(derived) && fxQuery.isPending),
     derivedBroken,
     quote,
-    quoteFailed: derived ? derivedBroken : quoteQuery.isError,
-    quotePending: quoteQuery.isPending || (Boolean(derived) && fxQuery.isPending)
+    quoteFailed: derived ? derivedBroken : barsQuery.isError,
+    quotePending: barsQuery.isPending || (Boolean(derived) && fxQuery.isPending)
   }
 }
 
@@ -363,11 +438,13 @@ function useWatchSymbolData(config: WatchSymbolConfig, timeframe: TimeframeId, e
 function WatchChartPanel({
   config,
   enabled,
+  labels,
   onSelect,
   symbols
 }: {
   config: WatchSymbolConfig
   enabled: boolean
+  labels: Record<string, string>
   onSelect: (symbol: string) => void
   symbols: readonly WatchSymbolConfig[]
 }) {
@@ -378,7 +455,7 @@ function WatchChartPanel({
 
   const { currency, derived, symbol, unit } = config
   const unitWord = unit ? copy.units[unit] : null
-  const label = copy.labels[symbol] ?? symbol
+  const label = labels[symbol] ?? symbol
 
   const { bars, barsFailed, barsPending, derivedBroken, quote, quoteFailed, quotePending } = useWatchSymbolData(
     config,
@@ -386,18 +463,19 @@ function WatchChartPanel({
     enabled
   )
 
-  const toggleIndicator = (key: IndicatorKey) =>
-    setIndicators(current => ({ ...current, [key]: !current[key] }))
+  const toggleIndicator = (key: IndicatorKey) => setIndicators(current => ({ ...current, [key]: !current[key] }))
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
-        <SymbolDropdown labels={copy.labels} onSelect={onSelect} symbols={symbols} value={symbol} />
+        <SymbolDropdown labels={labels} onSelect={onSelect} symbols={symbols} value={symbol} />
         <div className="text-right">
           {quotePending ? (
             <span className="text-sm text-muted-foreground">—</span>
           ) : quoteFailed ? (
-            <span className="text-[0.7rem] text-muted-foreground">{derived ? copy.derivedNoData : copy.quoteError}</span>
+            <span className="text-[0.7rem] text-muted-foreground">
+              {derived ? copy.derivedNoData : copy.quoteError}
+            </span>
           ) : (
             <>
               <div className="flex items-baseline justify-end gap-1.5">
@@ -579,7 +657,9 @@ function IndicatorGroup({
             <span className="block text-xs font-semibold tracking-tight text-foreground">
               {copy.indicatorLabels[key]}
             </span>
-            <span className="block text-[0.68rem] leading-4 text-muted-foreground">{copy.indicatorDescriptions[key]}</span>
+            <span className="block text-[0.68rem] leading-4 text-muted-foreground">
+              {copy.indicatorDescriptions[key]}
+            </span>
           </span>
           <Switch checked={indicators[key]} className="mt-0.5 shrink-0" onCheckedChange={() => onToggle(key)} />
         </label>
@@ -904,7 +984,11 @@ function AnalyzePanel({ enabled, symbol }: { enabled: boolean; symbol: string })
   if (analyzeQuery.isError) {
     const parsed = parseFinanceError(analyzeQuery.error)
 
-    return <div className="py-1 text-[0.65rem] text-muted-foreground">{parsed.offline ? copy.noData : copy.analyzeError}</div>
+    return (
+      <div className="py-1 text-[0.65rem] text-muted-foreground">
+        {parsed.offline ? copy.noData : copy.analyzeError}
+      </div>
+    )
   }
 
   const analyze: FinanceAnalyze = analyzeQuery.data
@@ -990,7 +1074,9 @@ function Citations({ items, title }: { items: FinanceAnalyzeCitation[]; title: s
       <ul className="space-y-0.5 text-[0.68rem] leading-5">
         {items.map((item, index) => {
           const href = item.url || item.source_url
-          const text = item.title || item.headline || item.label || item.source || item.publisher || href || copy.citationsEmpty
+
+          const text =
+            item.title || item.headline || item.label || item.source || item.publisher || href || copy.citationsEmpty
 
           return (
             <li key={`${text}-${index}`}>

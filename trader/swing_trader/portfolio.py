@@ -80,6 +80,8 @@ class MarketScope(str, Enum):
     US = "US"
     HK = "HK"
     CN = "CN"
+    KR = "KR"
+    CRYPTO = "CRYPTO"
 
 
 class AccountType(str, Enum):
@@ -127,6 +129,7 @@ class SecurityType(str, Enum):
     STOCK = "stock"
     ETF = "etf"
     FUND = "fund"
+    CRYPTO = "crypto"
 
 
 class DraftStatus(str, Enum):
@@ -431,10 +434,17 @@ def aggregate_holdings(
         if h.as_of is not None and (as_of is None or h.as_of > as_of):
             as_of = h.as_of
         for pos in h.holdings:
-            agg = by_sym.setdefault(pos.symbol, {
-                "market": pos.market, "currency": pos.currency,
-                "qty": 0.0, "cost": 0.0, "known": True, "accounts": [],
-            })
+            agg = by_sym.setdefault(
+                pos.symbol,
+                {
+                    "market": pos.market,
+                    "currency": pos.currency,
+                    "qty": 0.0,
+                    "cost": 0.0,
+                    "known": True,
+                    "accounts": [],
+                },
+            )
             agg["qty"] += pos.qty
             if pos.cost_basis_known and pos.avg_cost is not None:
                 agg["cost"] += pos.avg_cost * pos.qty

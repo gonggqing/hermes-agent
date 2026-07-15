@@ -78,11 +78,12 @@ def _cmd_simulate(args: argparse.Namespace) -> None:
     )
     stats = result.ledger.stats(Mode.PAPER)
     account = result.broker.get_account()
-    print(f"simulated {len(result.days)} trading days "
-          f"({result.days[0]} → {result.days[-1]})")
+    print(f"simulated {len(result.days)} trading days ({result.days[0]} → {result.days[-1]})")
     print(f"final equity: {account.equity:.2f} (cash {account.cash:.2f})")
-    print(f"closed trades: {stats.n_closed}  win rate: {stats.win_rate:.0%}  "
-          f"expectancy: {stats.expectancy:.2f}  max DD: {stats.max_drawdown_pct:.2f}%")
+    print(
+        f"closed trades: {stats.n_closed}  win rate: {stats.win_rate:.0%}  "
+        f"expectancy: {stats.expectancy:.2f}  max DD: {stats.max_drawdown_pct:.2f}%"
+    )
     print(f"ledger: {args.db}")
     if result.morning_reports:
         print("\n--- last morning report ---\n")
@@ -97,7 +98,8 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
     from swing_trader.api import FinanceRuntime, create_app
     from swing_trader.dailyloop import DailyLoop, TelegramSurfaceAdapter
-    from swing_trader.datafeed import RetryingFeed, YFinanceFeed
+    from swing_trader.datafeed import FundAwareFeed, RetryingFeed, YFinanceFeed
+    from swing_trader.fund_nav import EastmoneyFundHistory
     from swing_trader.ledger import Ledger
     from swing_trader.llm import LLMAnalyst, llm_settings_from_env
     from swing_trader.scheduler import DailyLoopRunner
@@ -127,15 +129,27 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             f"BROKER=ibkr but ib_async is not installed: {exc}. "
             "Install it with: pip install 'swing-trader[ibkr]'"
         ) from exc
-    print(f"broker: {settings.broker.value} "
-          f"(live orders {'ALLOWED' if settings.live_orders_allowed else 'blocked'})",
-          flush=True)
+    print(
+        f"broker: {settings.broker.value} "
+        f"(live orders {'ALLOWED' if settings.live_orders_allowed else 'blocked'})",
+        flush=True,
+    )
     rehydration = rehydrate_from_ledger(broker, ledger, settings.mode)
     print(rehydration.summary(), flush=True)
     # Phase 0.8 (resilience): wrap the live feed in RetryingFeed so transient
     # yfinance errors (rate limits / network blips) retry with backoff instead
     # of surfacing as a hard DataFeedError to the loop and /v1/analyze.
-    feed = RetryingFeed(YFinanceFeed())
+    # The on-demand API and US loop share this feed.  Prefer Yahoo's bounded
+    # query2 chart endpoint so K-line requests do not wait on yfinance's
+    # crumb/cookie path; yfinance remains the adapter's fallback.
+    fund_history = EastmoneyFundHistory()
+    api_feed = FundAwareFeed(
+        YFinanceFeed(prefer_chart=True, chart_only=True),
+        fund_history,
+    )
+    feed = RetryingFeed(
+        FundAwareFeed(YFinanceFeed(prefer_chart=True), fund_history)
+    )
     # Real fundamentals (Loop.md Phase 0.75 thrust A): yfinance-backed, cached,
     # fail-None. Feeds the scheduled FundamentalAgent AND on-demand /v1/analyze.
     from swing_trader.earnings import YFinanceEarnings
@@ -145,7 +159,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     earnings_provider = YFinanceEarnings()  # earnings calendar (Phase 0.75)
     runtime = FinanceRuntime(ledger=ledger, broker=broker, mode=settings.mode)
     # On-demand market analysis for the conversational agent (thrust B):
-    runtime.feed = feed
+    # UI/chat reads are bounded to query2 (the dashboard proxy has a 15s
+    # timeout); scheduled monitors keep the retrying yfinance fallback above.
+    runtime.feed = api_feed
     runtime.fundamentals = fundamentals
     # Manual kill-switch (Loop.md §3 / Phase 0.95): a filesystem HALT flag next
     # to the DB. Engaged → the loop's dead-man's switch vetoes NEW entries (the
@@ -153,12 +169,13 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     # and is `touch`-able out-of-band if the service wedges.
     from swing_trader.killswitch import KillSwitch, kill_switch_path
 
-    kill_switch = KillSwitch(kill_switch_path(args.db or settings.db_path),
-                             clock=runtime.clock)
+    kill_switch = KillSwitch(kill_switch_path(args.db or settings.db_path), clock=runtime.clock)
     runtime.kill_switch = kill_switch
     if kill_switch.engaged():
-        print(f"⚠️  KILL-SWITCH ENGAGED at startup: {kill_switch.state().reason or '(no reason)'}",
-              flush=True)
+        print(
+            f"⚠️  KILL-SWITCH ENGAGED at startup: {kill_switch.state().reason or '(no reason)'}",
+            flush=True,
+        )
     # Phase 0.9 (portfolio): instrument type-ahead behind a cached, offline
     # provider (a live adapter can slot behind the same port later).
     # Append-only Portfolio Journal + human-confirmation draft service, sharing
@@ -167,6 +184,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     from swing_trader.portfolio_journal import PortfolioJournal
 
     runtime.portfolio = PortfolioJournal(url=db_url)
+    # Personal research groups share the durable Finance DB but have their own
+    # tables and never flow into the trading watchlist/candidate pipeline.
+    from swing_trader.research_watchlists import ResearchWatchlistStore
+
+    runtime.research_watchlists = ResearchWatchlistStore(url=db_url)
     if broker.get_account().mode.value == "paper":
         paper_account = runtime.portfolio.ensure_default_paper_account()
         logger.info(
@@ -202,12 +224,16 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         YFinanceInstrumentProvider,
     )
 
-    runtime.instrument_search = CachedInstrumentSearch(CompositeInstrumentProvider([
-        StaticInstrumentProvider(),
-        PortfolioInstrumentProvider(runtime.portfolio),
-        YFinanceInstrumentProvider(),
-        EastmoneyInstrumentProvider(),
-    ]))
+    runtime.instrument_search = CachedInstrumentSearch(
+        CompositeInstrumentProvider(
+            [
+                StaticInstrumentProvider(),
+                PortfolioInstrumentProvider(runtime.portfolio),
+                EastmoneyInstrumentProvider(),
+                YFinanceInstrumentProvider(),
+            ]
+        )
+    )
     # 场外基金 NAV (Loop.md P0.9 #41): real net-asset-value for open-end funds so
     # they can be valued (market value + P&L) instead of showing 未知.
     from swing_trader.fund_nav import CachedNavProvider, EastmoneyFundNav
@@ -235,16 +261,14 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     #               token so it never conflicts with the gateway.
     chat_id = settings.telegram_chat_id
     shared_token = (
-        settings.telegram_bot_token.get_secret_value()
-        if settings.telegram_bot_token else ""
+        settings.telegram_bot_token.get_secret_value() if settings.telegram_bot_token else ""
     ).strip()
     dedicated_token = (
         settings.finance_telegram_bot_token.get_secret_value()
         if settings.finance_telegram_bot_token
         else os.environ.get("FINANCE_TELEGRAM_BOT_TOKEN", "")
     ).strip()
-    allowed = {u.strip() for u in settings.telegram_allowed_users.split(",")
-               if u.strip()}
+    allowed = {u.strip() for u in settings.telegram_allowed_users.split(",") if u.strip()}
 
     if chat_id and (shared_token or dedicated_token):
         # Reporter prefers the shared gateway token; falls back to the finance
@@ -293,12 +317,13 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
     from swing_trader.knowledge_pipeline import KnowledgeConfig, build_knowledge
 
-    knowledge, knowledge_index = build_knowledge(KnowledgeConfig(
-        root_dir=_Path("data/knowledge"),
-        qdrant_url=os.environ.get("FINANCE_QDRANT_URL") or None,
-    ))
-    logger.info("knowledge store ready",
-                extra={"vector_ok": knowledge_index is not None})
+    knowledge, knowledge_index = build_knowledge(
+        KnowledgeConfig(
+            root_dir=_Path("data/knowledge"),
+            qdrant_url=os.environ.get("FINANCE_QDRANT_URL") or None,
+        )
+    )
+    logger.info("knowledge store ready", extra={"vector_ok": knowledge_index is not None})
 
     llm_settings = llm_settings_from_env()
     llm_analyst = LLMAnalyst(llm_settings) if llm_settings else None
@@ -321,9 +346,12 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     # directive). A mentioned/DMed ticker gets a quick multi-agent read; no
     # ticker gets brief guidance. Read-only — no order/approve here (Loop.md §3).
     if telegram is not None:
+
         def _finance_responder(text: str):
             from swing_trader.on_demand import (
-                analyze_symbol, extract_symbols, render_analysis_zh,
+                analyze_symbol,
+                extract_symbols,
+                render_analysis_zh,
             )
 
             syms = extract_symbols(text)
@@ -336,9 +364,13 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             sym = syms[0]
             try:
                 result = analyze_symbol(
-                    feed, sym, fundamentals=fundamentals,
-                    llm_analyst=llm_analyst, knowledge=knowledge,
-                    knowledge_index=knowledge_index, now=runtime.clock(),
+                    feed,
+                    sym,
+                    fundamentals=fundamentals,
+                    llm_analyst=llm_analyst,
+                    knowledge=knowledge,
+                    knowledge_index=knowledge_index,
+                    now=runtime.clock(),
                 )
             except Exception:
                 return f"没找到 {sym} 的行情数据，换个代码试试？"
@@ -357,20 +389,14 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             # Reasoning-capable high-speed models may spend several seconds in
             # <think> before their small JSON answer. This is a stateless,
             # infrequent human DM path; give it enough room and retry once.
-            trade_settings = replace(
-                llm_settings, timeout=max(30.0, llm_settings.timeout)
-            )
+            trade_settings = replace(llm_settings, timeout=max(30.0, llm_settings.timeout))
             trade_extractor = LLMTradeExtractor(trade_settings, attempts=2)
         else:
             trade_extractor = None
         if trade_extractor is None:
-            logger.warning(
-                "finance trade extraction disabled: no high-speed LLM configured"
-            )
+            logger.warning("finance trade extraction disabled: no high-speed LLM configured")
         telegram.set_trade_recorder(
-            make_trade_recorder(
-                runtime, extractor=trade_extractor, require_llm=True
-            )
+            make_trade_recorder(runtime, extractor=trade_extractor, require_llm=True)
         )
 
         # DM "/" command menu (/持仓 /研究 /记账 /帮助) + update-holdings:
@@ -387,13 +413,17 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
         def _holding_accounts(symbol: str) -> list:
             j = runtime.portfolio
-            return [ac for ac in j.list_accounts()
-                    if any(h.symbol == symbol for h in j.holdings(ac.id).holdings)]
+            return [
+                ac
+                for ac in j.list_accounts()
+                if any(h.symbol == symbol for h in j.holdings(ac.id).holdings)
+            ]
 
         def _match_account(name: str):
             for ac in runtime.portfolio.list_accounts():
-                if name and (ac.name == name or name in ac.name
-                             or (len(name) >= 2 and name[:2] in ac.name)):
+                if name and (
+                    ac.name == name or name in ac.name or (len(name) >= 2 and name[:2] in ac.name)
+                ):
                     return ac
             return None
 
@@ -412,10 +442,16 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                     return f"没看懂价格 {value!r}，例如「{symbol} 现价 1.15」"
                 _, ccy = market_currency(symbol)
                 runtime.portfolio.set_mark(
-                    symbol, price, currency=ccy, source="manual",
-                    actor="telegram", as_of=runtime.clock())
-                return (f"✅ 已把 {symbol} 现价标记为 {price:g} {ccy}"
-                        "（用于市值/盈亏显示，不影响成本）")
+                    symbol,
+                    price,
+                    currency=ccy,
+                    source="manual",
+                    actor="telegram",
+                    as_of=runtime.clock(),
+                )
+                return (
+                    f"✅ 已把 {symbol} 现价标记为 {price:g} {ccy}（用于市值/盈亏显示，不影响成本）"
+                )
             # cost / qty / account → financial correction via a confirm card
             holders = _holding_accounts(symbol)
             if len(holders) != 1:
@@ -463,49 +499,59 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         MarketDiscoveryScanner,
     )
 
-    discovery_universe = CompositeDiscoveryUniverse([
-        JsonDiscoveryUniverse(
-            _DbPath(args.db or settings.db_path).parent / "discovery-seeds.json"
-        ),
-        KnowledgeDiscoveryUniverse(
-            knowledge,
-            runtime.instrument_search,
-            themes=[
-                DiscoveryTheme(
-                    name="robotics-and-embodied-ai",
-                    query="robotics embodied AI supply chain technical barrier orders capex",
-                ),
-                DiscoveryTheme(
-                    name="ai-infrastructure",
-                    query="AI infrastructure supply chain bottleneck capacity capex orders",
-                ),
-                DiscoveryTheme(
-                    name="power-and-cooling",
-                    query="data center power cooling grid supply chain capacity orders",
-                ),
-                DiscoveryTheme(
-                    name="semiconductor-enablers",
-                    query="semiconductor equipment materials packaging supply chain technical barrier",
-                ),
-                DiscoveryTheme(
-                    name="biotechnology-platforms",
-                    query="biotechnology platform manufacturing supply chain clinical catalyst moat",
-                ),
-            ],
-        ),
-    ])
+    discovery_universe = CompositeDiscoveryUniverse(
+        [
+            JsonDiscoveryUniverse(
+                _DbPath(args.db or settings.db_path).parent / "discovery-seeds.json"
+            ),
+            KnowledgeDiscoveryUniverse(
+                knowledge,
+                runtime.instrument_search,
+                themes=[
+                    DiscoveryTheme(
+                        name="robotics-and-embodied-ai",
+                        query="robotics embodied AI supply chain technical barrier orders capex",
+                    ),
+                    DiscoveryTheme(
+                        name="ai-infrastructure",
+                        query="AI infrastructure supply chain bottleneck capacity capex orders",
+                    ),
+                    DiscoveryTheme(
+                        name="power-and-cooling",
+                        query="data center power cooling grid supply chain capacity orders",
+                    ),
+                    DiscoveryTheme(
+                        name="semiconductor-enablers",
+                        query="semiconductor equipment materials packaging supply chain technical barrier",
+                    ),
+                    DiscoveryTheme(
+                        name="biotechnology-platforms",
+                        query="biotechnology platform manufacturing supply chain clinical catalyst moat",
+                    ),
+                ],
+            ),
+        ]
+    )
     loop = DailyLoop(
-        feed, broker, ledger, mode=settings.mode,
+        feed,
+        broker,
+        ledger,
+        mode=settings.mode,
         live_orders_allowed=settings.live_orders_allowed,
-        runtime=runtime, telegram=telegram, notify=notify,
+        runtime=runtime,
+        telegram=telegram,
+        notify=notify,
         fundamentals=fundamentals,  # real fundamentals for the scheduled loop
         earnings_provider=earnings_provider,  # earnings calendar (Phase 0.75)
         llm_analyst=llm_analyst,
-        knowledge=knowledge, knowledge_index=knowledge_index,
+        knowledge=knowledge,
+        knowledge_index=knowledge_index,
         kill_switch=kill_switch,  # Phase 0.95 manual HALT
         discovery_scanner=MarketDiscoveryScanner(
-            feed, discovery_universe,
-            benchmark_symbol="SPY", min_adv=5_000_000,
+            feed,
+            discovery_universe,
+            benchmark_symbol="SPY",
+            min_adv=5_000_000,
             clock=runtime.clock,
         ),
     )
@@ -560,7 +606,8 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             discovery_scanner=MarketDiscoveryScanner(
                 cn_feed,
                 discovery_universe,
-                benchmark_symbol="000001.SS", min_adv=10_000_000,
+                benchmark_symbol="000001.SS",
+                min_adv=10_000_000,
                 clock=runtime.clock,
             ),
         )
@@ -568,8 +615,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             cn_session.callbacks(), clock=runtime.clock, schedule=CN_SCHEDULE
         )
         runtime.run_research["cn"] = cn_session.run_now  # manual refresh button
-        logger.info("cn research session enabled",
-                    extra={"n_symbols": len(cn_wl.symbols)})
+        logger.info("cn research session enabled", extra={"n_symbols": len(cn_wl.symbols)})
 
     # HK is independent from mainland CN: own universe, indices, calendar,
     # freshness and persisted brief. It remains research-only.
@@ -585,19 +631,28 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         hk_wl = build_hk_watchlist(settings.hk_symbols)
         hk_feed = RetryingFeed(YFinanceFeed())
         hk_session = ResearchSession(
-            market_id="HK", market_label="Hong Kong", feed=hk_feed,
-            ledger=ledger, symbols=hk_wl.symbols, watchlist_lookup=hk_wl.lookup,
+            market_id="HK",
+            market_label="Hong Kong",
+            feed=hk_feed,
+            ledger=ledger,
+            symbols=hk_wl.symbols,
+            watchlist_lookup=hk_wl.lookup,
             trading_tz=ZoneInfo(settings.hk_market_tz),
-            index_symbols=list(HK_INDEX_SYMBOLS), mode=settings.mode,
-            runtime=runtime, notify=notify,
+            index_symbols=list(HK_INDEX_SYMBOLS),
+            mode=settings.mode,
+            runtime=runtime,
+            notify=notify,
             llm_analyst=LLMAnalyst(llm_settings) if llm_settings else None,
-            knowledge=knowledge, knowledge_index=knowledge_index,
+            knowledge=knowledge,
+            knowledge_index=knowledge_index,
             focus_note="香港独立研究: 科技 / 平台 / 半导体供应链",
-            lang="zh", clock=runtime.clock,
+            lang="zh",
+            clock=runtime.clock,
             discovery_scanner=MarketDiscoveryScanner(
                 hk_feed,
                 discovery_universe,
-                benchmark_symbol="^HSI", min_adv=5_000_000,
+                benchmark_symbol="^HSI",
+                min_adv=5_000_000,
                 clock=runtime.clock,
             ),
         )
@@ -636,7 +691,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             knowledge=knowledge,
             knowledge_index=knowledge_index,
             focus_note="仅半导体: 存储巨头(三星/海力士) + HBM 封装链; 关注财报 / news, "
-                       "情绪领先 A 股半导体",
+            "情绪领先 A 股半导体",
             lang="zh",
             clock=runtime.clock,
         )
@@ -644,19 +699,20 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             kr_session.callbacks(), clock=runtime.clock, schedule=KR_SCHEDULE
         )
         runtime.run_research["kr"] = kr_session.run_now  # manual refresh button
-        logger.info("kr research session enabled",
-                    extra={"n_symbols": len(kr_wl.symbols)})
+        logger.info("kr research session enabled", extra={"n_symbols": len(kr_wl.symbols)})
 
     app = create_app(runtime)
-    server = uvicorn.Server(uvicorn.Config(
-        app, host="127.0.0.1", port=args.port, log_level="warning"
-    ))
-    api_thread = threading.Thread(target=server.run, daemon=True,
-                                  name="finance-api")
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning")
+    )
+    api_thread = threading.Thread(target=server.run, daemon=True, name="finance-api")
     api_thread.start()
     logger.info("finance service listening", extra={"port": args.port})
-    print(f"Finance service on http://127.0.0.1:{args.port} "
-          f"(dashboard proxies /api/finance/*). Ctrl-C to stop.", flush=True)
+    print(
+        f"Finance service on http://127.0.0.1:{args.port} "
+        f"(dashboard proxies /api/finance/*). Ctrl-C to stop.",
+        flush=True,
+    )
 
     # Rebuilds can happen after a market's scheduled research event. Restore
     # archived briefs synchronously above so the portal is never blank, then
@@ -670,12 +726,12 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             "kr": settings.kr_market_tz,
         }
         missing_markets = [
-            market for market in _markets_missing_today(runtime, market_timezones)
+            market
+            for market in _markets_missing_today(runtime, market_timezones)
             if market in runtime.run_research
         ]
         if missing_markets:
-            logger.info("startup research refresh queued",
-                        extra={"markets": missing_markets})
+            logger.info("startup research refresh queued", extra={"markets": missing_markets})
 
         def _startup_recovery() -> None:
             # Candidate recovery runs before research catch-up so a restart in
@@ -692,8 +748,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 try:
                     runtime.run_research[market]()
                 except Exception:
-                    logger.exception("startup research refresh failed",
-                                     extra={"market": market})
+                    logger.exception("startup research refresh failed", extra={"market": market})
                 finally:
                     runtime.research_running.discard(market)
 
@@ -732,6 +787,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         loop.on_confirm_poll()
 
     import time as _time
+
     # Run the schedulers on a ~30s tick, but poll Telegram every ~3s so a tapped
     # card (draft confirm/reject, candidate approval) responds in seconds rather
     # than on the slow scheduler tick — otherwise the inline button spins.
@@ -810,8 +866,9 @@ def main() -> None:
     p_serve.add_argument("--port", type=int, default=9319)
     p_serve.add_argument("--db", default=None)
     p_serve.add_argument("--starting-cash", type=float, default=2_000.0)
-    p_serve.add_argument("--check-now", action="store_true",
-                         help="run monitors + morning report once at startup")
+    p_serve.add_argument(
+        "--check-now", action="store_true", help="run monitors + morning report once at startup"
+    )
     p_serve.set_defaults(func=_cmd_serve)
 
     # Out-of-band kill-switch (Loop.md §3 / Phase 0.95): engage/release the HALT
@@ -832,8 +889,7 @@ def main() -> None:
     p_ks.add_argument("--db", default=None)
     p_ks.set_defaults(func=_cmd_killswitch_status)
 
-    p_rd = sub.add_parser("readiness",
-                          help="print paper-trading readiness vs the ≥20-day gate")
+    p_rd = sub.add_parser("readiness", help="print paper-trading readiness vs the ≥20-day gate")
     p_rd.add_argument("--db", default=None)
     p_rd.add_argument("--min-days", type=int, default=20)
     p_rd.set_defaults(func=_cmd_readiness)

@@ -1492,6 +1492,20 @@ export interface Translations {
       delayNote: string
       readOnlyTag: string
       modules: Record<'crypto' | 'gold' | 'oil' | 'rates', string>
+      custom: {
+        groupLabel: string
+        newGroup: string
+        namePlaceholder: string
+        empty: string
+        add: string
+        searchPlaceholder: string
+        heldSuggestions: string
+        noMatches: string
+        rename: string
+        delete: string
+        remove: string
+        readOnly: string
+      }
       // Ticker → display label (tickers themselves are never translated).
       labels: Record<string, string>
       // Localized price units (盎司 / 股 / 桶 / 克 / %). Keyed by the unit key

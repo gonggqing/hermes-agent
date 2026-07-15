@@ -1931,8 +1931,7 @@ export const zh: Translations = {
       marketJapan: '日本',
       comingSoon: '即将推出',
       phaseBadge: '阶段 0.9',
-      regionNote:
-        'A股与港股使用独立的研究会话、交易日历、市场状态和新鲜度；跨市场关联只在显式中港综合中呈现。',
+      regionNote: 'A股与港股使用独立的研究会话、交易日历、市场状态和新鲜度；跨市场关联只在显式中港综合中呈现。',
       runResearch: '立即更新研究',
       runningResearch: '更新中…',
       runResearchDone: '研究已更新',
@@ -1948,6 +1947,20 @@ export const zh: Translations = {
         rates: '利率与债券',
         crypto: '加密货币'
       },
+      custom: {
+        groupLabel: '我的自选',
+        newGroup: '新自选组',
+        namePlaceholder: '自选组名称',
+        empty: '这个自选组还是空的。可以搜索标的，或从已有持仓中快速添加。',
+        add: '添加标的',
+        searchPlaceholder: '搜索代码或公司/基金名称',
+        heldSuggestions: '从已有持仓添加',
+        noMatches: '没有匹配标的，请尝试代码、完整名称或带市场后缀的代码。',
+        rename: '重命名',
+        delete: '删除',
+        remove: '从自选组移除',
+        readOnly: '个人研究自选组 —— 只读，不会加入自动交易范围。'
+      },
       labels: {
         'GC=F': 'COMEX 黄金',
         GLD: '黄金 ETF（SPDR）',
@@ -1959,6 +1972,10 @@ export const zh: Translations = {
         TLT: '20 年期国债 ETF',
         'BTC-USD': '比特币',
         'ETH-USD': '以太坊',
+        'SOL-USD': 'Solana',
+        'BNB-USD': 'BNB',
+        'XRP-USD': 'XRP',
+        'ADA-USD': 'Cardano',
         AU9999: '国内金价'
       },
       units: {

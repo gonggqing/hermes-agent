@@ -1382,6 +1382,33 @@ export interface FinanceWatchlistItem {
   enabled: boolean
 }
 
+export interface FinanceResearchWatchlistMember {
+  symbol: string
+  display_name: string
+  market: null | string
+  exchange: null | string
+  currency: null | string
+  security_type: null | string
+  position: number
+  created_at: string
+}
+
+export interface FinanceResearchWatchlist {
+  id: string
+  name: string
+  position: number
+  members: FinanceResearchWatchlistMember[]
+  created_at: string
+  updated_at: string
+}
+
+export interface FinanceResearchWatchlistRecommendation {
+  symbol: string
+  display_name: string
+  market: null | string
+  currency: null | string
+}
+
 export interface FinanceCandidate {
   id: string
   ts: string
@@ -1579,12 +1606,15 @@ export interface FinanceDiscoveryPool {
 
 export interface FinanceResearchSynthesis {
   status: string
-  markets: Record<string, {
-    market: string
-    available: boolean
-    freshness_status: string
-    regime: string | null
-  }>
+  markets: Record<
+    string,
+    {
+      market: string
+      available: boolean
+      freshness_status: string
+      regime: string | null
+    }
+  >
   shared_themes: {
     theme: string
     cn_symbols: string[]
@@ -1758,6 +1788,57 @@ export function getFinanceWatchlist(): Promise<FinanceWatchlistItem[]> {
   return window.hermesDesktop.api<FinanceWatchlistItem[]>({ path: '/api/finance/v1/watchlist' })
 }
 
+export function getResearchWatchlists(): Promise<FinanceResearchWatchlist[]> {
+  return window.hermesDesktop.api<FinanceResearchWatchlist[]>({ path: '/api/finance/v1/research/watchlists' })
+}
+
+export function createResearchWatchlist(name: string): Promise<FinanceResearchWatchlist> {
+  return window.hermesDesktop.api<FinanceResearchWatchlist>({
+    path: '/api/finance/v1/research/watchlists',
+    method: 'POST',
+    body: { name }
+  })
+}
+
+export function renameResearchWatchlist(id: string, name: string): Promise<FinanceResearchWatchlist> {
+  return window.hermesDesktop.api<FinanceResearchWatchlist>({
+    path: `/api/finance/v1/research/watchlists/${encodeURIComponent(id)}`,
+    method: 'PATCH',
+    body: { name }
+  })
+}
+
+export function deleteResearchWatchlist(id: string): Promise<{ ok: boolean }> {
+  return window.hermesDesktop.api<{ ok: boolean }>({
+    path: `/api/finance/v1/research/watchlists/${encodeURIComponent(id)}`,
+    method: 'DELETE'
+  })
+}
+
+export function addResearchWatchlistMember(
+  id: string,
+  member: Omit<FinanceResearchWatchlistMember, 'created_at' | 'position'>
+): Promise<FinanceResearchWatchlist> {
+  return window.hermesDesktop.api<FinanceResearchWatchlist>({
+    path: `/api/finance/v1/research/watchlists/${encodeURIComponent(id)}/members`,
+    method: 'POST',
+    body: member
+  })
+}
+
+export function removeResearchWatchlistMember(id: string, symbol: string): Promise<FinanceResearchWatchlist> {
+  return window.hermesDesktop.api<FinanceResearchWatchlist>({
+    path: `/api/finance/v1/research/watchlists/${encodeURIComponent(id)}/members/${encodeURIComponent(symbol)}`,
+    method: 'DELETE'
+  })
+}
+
+export function getResearchWatchlistRecommendations(): Promise<FinanceResearchWatchlistRecommendation[]> {
+  return window.hermesDesktop.api<FinanceResearchWatchlistRecommendation[]>({
+    path: '/api/finance/v1/research/watchlists/recommendations/holdings'
+  })
+}
+
 // kind -> plain-text report (e.g. { morning: "..." }).
 export function getFinanceReports(): Promise<Record<string, string>> {
   return window.hermesDesktop.api<Record<string, string>>({ path: '/api/finance/v1/reports/latest' })
@@ -1775,9 +1856,7 @@ export function getFinancePendingCandidates(): Promise<FinancePendingCandidate[]
   return window.hermesDesktop.api<FinancePendingCandidate[]>({ path: '/api/finance/v1/candidates/pending' })
 }
 
-export function getFinanceAudit(
-  opts: { candidateId?: string; mode?: FinanceMode } = {}
-): Promise<FinanceAuditEvent[]> {
+export function getFinanceAudit(opts: { candidateId?: string; mode?: FinanceMode } = {}): Promise<FinanceAuditEvent[]> {
   return window.hermesDesktop.api<FinanceAuditEvent[]>({
     path: `/api/finance/v1/audit${financeQuery({ candidate_id: opts.candidateId, mode: opts.mode })}`
   })
@@ -1880,9 +1959,7 @@ export interface FinanceRunResearchResult {
 // Manually RE-RUN a market's research session NOW (the "run research" button):
 // refreshes that desk's brief with fresh data. Read-only (no orders) → ungated;
 // 404s when that research market's session is disabled.
-export function postFinanceResearchRun(
-  market: FinanceResearchMarket
-): Promise<FinanceRunResearchResult> {
+export function postFinanceResearchRun(market: FinanceResearchMarket): Promise<FinanceRunResearchResult> {
   return window.hermesDesktop.api<FinanceRunResearchResult>({
     path: `/api/finance/v1/research/run${financeQuery({ market })}`,
     method: 'POST'
@@ -1916,10 +1993,7 @@ export function financeQuote(symbol: string): Promise<FinanceQuote> {
 }
 
 // Recent OHLCV bars for a compact price chart (default: 120 daily bars).
-export function financeBars(
-  symbol: string,
-  opts: { limit?: number; timeframe?: string } = {}
-): Promise<FinanceBars> {
+export function financeBars(symbol: string, opts: { limit?: number; timeframe?: string } = {}): Promise<FinanceBars> {
   return window.hermesDesktop.api<FinanceBars>({
     path: `/api/finance/v1/bars${financeQuery({ limit: opts.limit ?? 120, symbol, timeframe: opts.timeframe ?? '1d' })}`
   })
@@ -2263,9 +2337,7 @@ export interface FinanceDraftActionResult {
   event: FinancePortfolioEvent | null
 }
 
-export function getPortfolioAccounts(
-  environment?: FinanceAccountEnvironment
-): Promise<FinancePortfolioAccount[]> {
+export function getPortfolioAccounts(environment?: FinanceAccountEnvironment): Promise<FinancePortfolioAccount[]> {
   return window.hermesDesktop.api<FinancePortfolioAccount[]>({
     path: `/api/finance/v1/portfolio/accounts${financeQuery({ environment })}`
   })
@@ -2419,9 +2491,11 @@ export function postPortfolioDraftAction(
 
 // Instrument type-ahead resolver. `degraded` on the envelope flags a fallback
 // source; callers surface that inline but still use the matches.
-export function searchInstruments(
-  opts: { q: string; market?: string; limit?: number }
-): Promise<FinanceInstrumentSearch> {
+export function searchInstruments(opts: {
+  q: string
+  market?: string
+  limit?: number
+}): Promise<FinanceInstrumentSearch> {
   return window.hermesDesktop.api<FinanceInstrumentSearch>({
     path: `/api/finance/v1/instruments/search${financeQuery({ q: opts.q, market: opts.market, limit: opts.limit })}`
   })
@@ -2435,11 +2509,7 @@ export function postPortfolioImportPreview(id: string, csv: string): Promise<Fin
   })
 }
 
-export function postPortfolioImportCommit(
-  id: string,
-  csv: string,
-  actor: string
-): Promise<FinanceImportCommitResult> {
+export function postPortfolioImportCommit(id: string, csv: string, actor: string): Promise<FinanceImportCommitResult> {
   return window.hermesDesktop.api<FinanceImportCommitResult>({
     path: `/api/finance/v1/portfolio/accounts/${encodeURIComponent(id)}/import/commit`,
     method: 'POST',

@@ -208,7 +208,10 @@ function pluginPath(name: string): string {
  * Tickets are single-use and TTL=30s — every WS connect attempt must
  * fetch a fresh ticket.
  */
-export async function getWsTicket(): Promise<{ ticket: string; ttl_seconds: number }> {
+export async function getWsTicket(): Promise<{
+  ticket: string;
+  ttl_seconds: number;
+}> {
   const res = await fetch(`${BASE}/api/auth/ws-ticket`, {
     method: "POST",
     credentials: "include",
@@ -353,7 +356,10 @@ export const api = {
     ),
   getSessionMessages: (id: string, profile = getManagementProfile()) =>
     fetchJSON<SessionMessagesResponse>(
-      appendProfileParam(`/api/sessions/${encodeURIComponent(id)}/messages`, profile),
+      appendProfileParam(
+        `/api/sessions/${encodeURIComponent(id)}/messages`,
+        profile,
+      ),
     ),
   getSessionDetail: (id: string, profile = getManagementProfile()) =>
     fetchJSON<SessionInfo>(
@@ -390,7 +396,11 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids, profile: profile || undefined }),
     }),
-  renameSession: (id: string, title: string, profile = getManagementProfile()) =>
+  renameSession: (
+    id: string,
+    title: string,
+    profile = getManagementProfile(),
+  ) =>
     fetchJSON<{ ok: boolean; title: string }>(
       `/api/sessions/${encodeURIComponent(id)}`,
       {
@@ -400,9 +410,14 @@ export const api = {
       },
     ),
   getSessionStats: (profile = getManagementProfile()) =>
-    fetchJSON<SessionStoreStats>(appendProfileParam("/api/sessions/stats", profile)),
+    fetchJSON<SessionStoreStats>(
+      appendProfileParam("/api/sessions/stats", profile),
+    ),
   exportSessionUrl: (id: string, profile = getManagementProfile()) =>
-    appendProfileParam(`/api/sessions/${encodeURIComponent(id)}/export`, profile),
+    appendProfileParam(
+      `/api/sessions/${encodeURIComponent(id)}/export`,
+      profile,
+    ),
   importSessions: (
     sessions: Array<Record<string, unknown>>,
     profile = getManagementProfile(),
@@ -420,7 +435,11 @@ export const api = {
     fetchJSON<{ ok: boolean; removed: number }>("/api/sessions/prune", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ older_than_days, source, profile: profile || undefined }),
+      body: JSON.stringify({
+        older_than_days,
+        source,
+        profile: profile || undefined,
+      }),
     }),
   listFiles: (path?: string) => {
     const query = path ? `?path=${encodeURIComponent(path)}` : "";
@@ -457,12 +476,18 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path, recursive }),
     }),
-  getLogs: (params: { file?: string; lines?: number; level?: string; component?: string }) => {
+  getLogs: (params: {
+    file?: string;
+    lines?: number;
+    level?: string;
+    component?: string;
+  }) => {
     const qs = new URLSearchParams();
     if (params.file) qs.set("file", params.file);
     if (params.lines) qs.set("lines", String(params.lines));
     if (params.level && params.level !== "ALL") qs.set("level", params.level);
-    if (params.component && params.component !== "all") qs.set("component", params.component);
+    if (params.component && params.component !== "all")
+      qs.set("component", params.component);
     return fetchJSON<LogsResponse>(`/api/logs?${qs.toString()}`);
   },
   getAnalytics: (days: number, profile = getManagementProfile()) =>
@@ -474,11 +499,18 @@ export const api = {
       appendProfileParam(`/api/analytics/models?days=${days}`, profile),
     ),
   getConfig: (profile = getManagementProfile()) =>
-    fetchJSON<Record<string, unknown>>(appendProfileParam("/api/config", profile)),
+    fetchJSON<Record<string, unknown>>(
+      appendProfileParam("/api/config", profile),
+    ),
   getDefaults: () => fetchJSON<Record<string, unknown>>("/api/config/defaults"),
-  getSchema: () => fetchJSON<{ fields: Record<string, unknown>; category_order: string[] }>("/api/config/schema"),
+  getSchema: () =>
+    fetchJSON<{ fields: Record<string, unknown>; category_order: string[] }>(
+      "/api/config/schema",
+    ),
   getModelInfo: (profile = getManagementProfile()) =>
-    fetchJSON<ModelInfoResponse>(appendProfileParam("/api/model/info", profile)),
+    fetchJSON<ModelInfoResponse>(
+      appendProfileParam("/api/model/info", profile),
+    ),
   getModelOptions: (
     profileOrOptions?: string | { profile?: string; refresh?: boolean },
   ) => {
@@ -522,7 +554,10 @@ export const api = {
         body: JSON.stringify(body),
       },
     ),
-  saveConfig: (config: Record<string, unknown>, profile = getManagementProfile()) =>
+  saveConfig: (
+    config: Record<string, unknown>,
+    profile = getManagementProfile(),
+  ) =>
     fetchJSON<{ ok: boolean }>(appendProfileParam("/api/config", profile), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -560,22 +595,26 @@ export const api = {
 
   // Cron jobs
   getCronJobs: (profile = "all") =>
-    fetchJSON<CronJob[]>(`/api/cron/jobs?profile=${encodeURIComponent(profile)}`),
+    fetchJSON<CronJob[]>(
+      `/api/cron/jobs?profile=${encodeURIComponent(profile)}`,
+    ),
   getCronDeliveryTargets: () =>
     fetchJSON<{ targets: CronDeliveryTarget[] }>("/api/cron/delivery-targets"),
   createCronJob: (job: CronJobMutation, profile = "default") =>
-    fetchJSON<CronJob>(`/api/cron/jobs?profile=${encodeURIComponent(profile)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(job),
-    }),
+    fetchJSON<CronJob>(
+      `/api/cron/jobs?profile=${encodeURIComponent(profile)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(job),
+      },
+    ),
   pauseCronJob: (id: string, profile = "default") =>
-    fetchJSON<CronJob>(`/api/cron/jobs/${encodeURIComponent(id)}/pause?profile=${encodeURIComponent(profile)}`, { method: "POST" }),
-  updateCronJob: (
-    id: string,
-    updates: CronJobMutation,
-    profile = "default",
-  ) =>
+    fetchJSON<CronJob>(
+      `/api/cron/jobs/${encodeURIComponent(id)}/pause?profile=${encodeURIComponent(profile)}`,
+      { method: "POST" },
+    ),
+  updateCronJob: (id: string, updates: CronJobMutation, profile = "default") =>
     fetchJSON<CronJob>(
       `/api/cron/jobs/${encodeURIComponent(id)}?profile=${encodeURIComponent(profile)}`,
       {
@@ -585,11 +624,20 @@ export const api = {
       },
     ),
   resumeCronJob: (id: string, profile = "default") =>
-    fetchJSON<CronJob>(`/api/cron/jobs/${encodeURIComponent(id)}/resume?profile=${encodeURIComponent(profile)}`, { method: "POST" }),
+    fetchJSON<CronJob>(
+      `/api/cron/jobs/${encodeURIComponent(id)}/resume?profile=${encodeURIComponent(profile)}`,
+      { method: "POST" },
+    ),
   triggerCronJob: (id: string, profile = "default") =>
-    fetchJSON<CronJob>(`/api/cron/jobs/${encodeURIComponent(id)}/trigger?profile=${encodeURIComponent(profile)}`, { method: "POST" }),
+    fetchJSON<CronJob>(
+      `/api/cron/jobs/${encodeURIComponent(id)}/trigger?profile=${encodeURIComponent(profile)}`,
+      { method: "POST" },
+    ),
   deleteCronJob: (id: string, profile = "default") =>
-    fetchJSON<{ ok: boolean }>(`/api/cron/jobs/${encodeURIComponent(id)}?profile=${encodeURIComponent(profile)}`, { method: "DELETE" }),
+    fetchJSON<{ ok: boolean }>(
+      `/api/cron/jobs/${encodeURIComponent(id)}?profile=${encodeURIComponent(profile)}`,
+      { method: "DELETE" },
+    ),
 
   // Automation Blueprints — parameterized automation blueprints
   getAutomationBlueprints: () =>
@@ -598,17 +646,18 @@ export const api = {
     body: { blueprint: string; values: Record<string, string> },
     profile = "default",
   ) =>
-    fetchJSON<CronJob>(`/api/cron/blueprints/instantiate?profile=${encodeURIComponent(profile)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
+    fetchJSON<CronJob>(
+      `/api/cron/blueprints/instantiate?profile=${encodeURIComponent(profile)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
 
   // Profiles
-  getProfiles: () =>
-    fetchJSON<{ profiles: ProfileInfo[] }>("/api/profiles"),
-  getActiveProfile: () =>
-    fetchJSON<ActiveProfileInfo>("/api/profiles/active"),
+  getProfiles: () => fetchJSON<{ profiles: ProfileInfo[] }>("/api/profiles"),
+  getActiveProfile: () => fetchJSON<ActiveProfileInfo>("/api/profiles/active"),
   setActiveProfile: (name: string) =>
     fetchJSON<{ ok: boolean; active: string }>("/api/profiles/active", {
       method: "POST",
@@ -678,10 +727,9 @@ export const api = {
       },
     ),
   deleteProfile: (name: string) =>
-    fetchJSON<{ ok: boolean }>(
-      `/api/profiles/${encodeURIComponent(name)}`,
-      { method: "DELETE" },
-    ),
+    fetchJSON<{ ok: boolean }>(`/api/profiles/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    }),
   getProfileSetupCommand: (name: string) =>
     fetchJSON<{ command: string }>(
       `/api/profiles/${encodeURIComponent(name)}/setup-command`,
@@ -717,7 +765,10 @@ export const api = {
     fetchJSON<SkillContent>(
       `/api/skills/content?name=${encodeURIComponent(name)}${profile ? `&profile=${encodeURIComponent(profile)}` : ""}`,
     ),
-  createSkill: (skill: { name: string; content: string; category?: string }, profile?: string) =>
+  createSkill: (
+    skill: { name: string; content: string; category?: string },
+    profile?: string,
+  ) =>
     fetchJSON<SkillWriteResult>("/api/skills", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -753,7 +804,11 @@ export const api = {
         body: JSON.stringify({ provider, profile: profile || undefined }),
       },
     ),
-  saveToolsetEnv: (name: string, env: Record<string, string>, profile?: string) =>
+  saveToolsetEnv: (
+    name: string,
+    env: Record<string, string>,
+    profile?: string,
+  ) =>
     fetchJSON<ToolsetEnvResult>(
       `/api/tools/toolsets/${encodeURIComponent(name)}/env`,
       {
@@ -775,7 +830,10 @@ export const api = {
   // Session search (FTS5)
   searchSessions: (q: string, profile = getManagementProfile()) =>
     fetchJSON<SessionSearchResponse>(
-      appendProfileParam(`/api/sessions/search?q=${encodeURIComponent(q)}`, profile),
+      appendProfileParam(
+        `/api/sessions/search?q=${encodeURIComponent(q)}`,
+        profile,
+      ),
     ),
 
   // OAuth provider management
@@ -883,7 +941,11 @@ export const api = {
     ),
   applyWhatsAppOnboarding: (
     pairingId: string,
-    body: { mode?: "bot" | "self-chat"; allowed_users?: string; profile?: string },
+    body: {
+      mode?: "bot" | "self-chat";
+      allowed_users?: string;
+      profile?: string;
+    },
   ) =>
     fetchJSON<WhatsAppOnboardingApplyResponse>(
       `/api/messaging/whatsapp/onboarding/${encodeURIComponent(pairingId)}/apply`,
@@ -919,14 +981,18 @@ export const api = {
   rescanPlugins: () =>
     fetchJSON<{ ok: boolean; count: number }>("/api/dashboard/plugins/rescan"),
 
-  getPluginsHub: () => fetchJSON<PluginsHubResponse>("/api/dashboard/plugins/hub"),
+  getPluginsHub: () =>
+    fetchJSON<PluginsHubResponse>("/api/dashboard/plugins/hub"),
 
   installAgentPlugin: (body: AgentPluginInstallRequest) =>
-    fetchJSON<AgentPluginInstallResponse>("/api/dashboard/agent-plugins/install", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body }),
-    }),
+    fetchJSON<AgentPluginInstallResponse>(
+      "/api/dashboard/agent-plugins/install",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body }),
+      },
+    ),
 
   enableAgentPlugin: (name: string) =>
     fetchJSON<{ ok: boolean; name: string; unchanged?: boolean }>(
@@ -970,16 +1036,14 @@ export const api = {
     ),
 
   // Dashboard themes
-  getThemes: () =>
-    fetchJSON<DashboardThemesResponse>("/api/dashboard/themes"),
+  getThemes: () => fetchJSON<DashboardThemesResponse>("/api/dashboard/themes"),
   setTheme: (name: string) =>
     fetchJSON<{ ok: boolean; theme: string }>("/api/dashboard/theme", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
     }),
-  getFontPref: () =>
-    fetchJSON<DashboardFontResponse>("/api/dashboard/font"),
+  getFontPref: () => fetchJSON<DashboardFontResponse>("/api/dashboard/font"),
   setFontPref: (font: string) =>
     fetchJSON<{ ok: boolean; font: string }>("/api/dashboard/font", {
       method: "PUT",
@@ -1014,22 +1078,25 @@ export const api = {
       },
     ),
   getMcpCatalog: () =>
-    fetchJSON<{ entries: McpCatalogEntry[]; diagnostics: McpCatalogDiagnostic[] }>(
-      "/api/mcp/catalog",
-    ),
+    fetchJSON<{
+      entries: McpCatalogEntry[];
+      diagnostics: McpCatalogDiagnostic[];
+    }>("/api/mcp/catalog"),
   installMcpCatalogEntry: (
     name: string,
     env: Record<string, string> = {},
     enable = true,
   ) =>
-    fetchJSON<{ ok: boolean; name: string; background: boolean; action?: string }>(
-      "/api/mcp/catalog/install",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, env, enable }),
-      },
-    ),
+    fetchJSON<{
+      ok: boolean;
+      name: string;
+      background: boolean;
+      action?: string;
+    }>("/api/mcp/catalog/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, env, enable }),
+    }),
 
   // ── Admin: Pairing ──────────────────────────────────────────────────
   getPairing: () => fetchJSON<PairingResponse>("/api/pairing"),
@@ -1053,7 +1120,9 @@ export const api = {
   // ── Admin: Webhooks ─────────────────────────────────────────────────
   getWebhooks: () => fetchJSON<WebhooksResponse>("/api/webhooks"),
   enableWebhooks: () =>
-    fetchJSON<WebhookEnableResponse>("/api/webhooks/enable", { method: "POST" }),
+    fetchJSON<WebhookEnableResponse>("/api/webhooks/enable", {
+      method: "POST",
+    }),
   createWebhook: (body: WebhookCreate) =>
     fetchJSON<WebhookRoute & { secret: string }>("/api/webhooks", {
       method: "POST",
@@ -1077,11 +1146,7 @@ export const api = {
   // ── Admin: Credential pool ──────────────────────────────────────────
   getCredentialPool: () =>
     fetchJSON<{ providers: CredentialPoolProvider[] }>("/api/credentials/pool"),
-  addCredentialPoolEntry: (
-    provider: string,
-    api_key: string,
-    label?: string,
-  ) =>
+  addCredentialPoolEntry: (provider: string, api_key: string, label?: string) =>
     fetchJSON<{ ok: boolean; provider: string; count: number }>(
       "/api/credentials/pool",
       {
@@ -1102,7 +1167,10 @@ export const api = {
     fetchJSON<MemoryProviderConfig>(
       `/api/memory/providers/${encodeURIComponent(provider)}/config`,
     ),
-  updateMemoryProviderConfig: (provider: string, values: Record<string, unknown>) =>
+  updateMemoryProviderConfig: (
+    provider: string,
+    values: Record<string, unknown>,
+  ) =>
     fetchJSON<{ ok: boolean; active: string }>(
       `/api/memory/providers/${encodeURIComponent(provider)}/config`,
       {
@@ -1111,7 +1179,10 @@ export const api = {
         body: JSON.stringify({ values }),
       },
     ),
-  setupMemoryProvider: (provider: string, values: Record<string, unknown> = {}) =>
+  setupMemoryProvider: (
+    provider: string,
+    values: Record<string, unknown> = {},
+  ) =>
     fetchJSON<MemoryProviderSetupResponse>(
       `/api/memory/providers/${encodeURIComponent(provider)}/setup`,
       {
@@ -1171,14 +1242,16 @@ export const api = {
   },
   getHooks: () => fetchJSON<HooksResponse>("/api/ops/hooks"),
   createHook: (body: HookCreate) =>
-    fetchJSON<{ ok: boolean; event: string; command: string; approved: boolean }>(
-      "/api/ops/hooks",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      },
-    ),
+    fetchJSON<{
+      ok: boolean;
+      event: string;
+      command: string;
+      approved: boolean;
+    }>("/api/ops/hooks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   deleteHook: (event: string, command: string) =>
     fetchJSON<{ ok: boolean }>("/api/ops/hooks", {
       method: "DELETE",
@@ -1216,7 +1289,6 @@ export const api = {
         lines: opts?.lines ?? 200,
       }),
     }),
-
 
   getCheckpoints: () => fetchJSON<CheckpointsResponse>("/api/ops/checkpoints"),
   pruneCheckpoints: () =>
@@ -1290,6 +1362,51 @@ export const api = {
     fetchJSON<FinanceMarketSnapshot>("/api/finance/v1/market"),
   financeWatchlist: () =>
     fetchJSON<FinanceWatchlistItem[]>("/api/finance/v1/watchlist"),
+  financeResearchWatchlists: () =>
+    fetchJSON<FinanceResearchWatchlist[]>(
+      "/api/finance/v1/research/watchlists",
+    ),
+  financeCreateResearchWatchlist: (name: string) =>
+    fetchJSON<FinanceResearchWatchlist>("/api/finance/v1/research/watchlists", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }),
+  financeRenameResearchWatchlist: (id: string, name: string) =>
+    fetchJSON<FinanceResearchWatchlist>(
+      `/api/finance/v1/research/watchlists/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      },
+    ),
+  financeDeleteResearchWatchlist: (id: string) =>
+    fetchJSON<{ ok: boolean }>(
+      `/api/finance/v1/research/watchlists/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    ),
+  financeAddResearchWatchlistMember: (
+    id: string,
+    member: Omit<FinanceResearchWatchlistMember, "position" | "created_at">,
+  ) =>
+    fetchJSON<FinanceResearchWatchlist>(
+      `/api/finance/v1/research/watchlists/${encodeURIComponent(id)}/members`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(member),
+      },
+    ),
+  financeRemoveResearchWatchlistMember: (id: string, symbol: string) =>
+    fetchJSON<FinanceResearchWatchlist>(
+      `/api/finance/v1/research/watchlists/${encodeURIComponent(id)}/members/${encodeURIComponent(symbol)}`,
+      { method: "DELETE" },
+    ),
+  financeResearchWatchlistRecommendations: () =>
+    fetchJSON<FinanceResearchWatchlistRecommendation[]>(
+      "/api/finance/v1/research/watchlists/recommendations/holdings",
+    ),
   financeLatestReports: () =>
     fetchJSON<FinanceReports>("/api/finance/v1/reports/latest"),
   // ── On-demand market data (Phase 0.75; READ/ANALYSIS-ONLY, Loop.md §3) ──
@@ -1298,13 +1415,14 @@ export const api = {
   // per-symbol with an inline "no data" note and never crash the panel.
   /** Latest (delayed) quote for one symbol — current price feedback. */
   financeQuote: (symbol: string) =>
-    fetchJSON<FinanceQuote>(
-      `/api/finance/v1/quote${financeQuery({ symbol })}`,
-    ),
+    fetchJSON<FinanceQuote>(`/api/finance/v1/quote${financeQuery({ symbol })}`),
   /** K-line / candlestick OHLCV bars for one symbol (inline-SVG charting). */
   financeBars: (
     symbol: string,
-    { timeframe = "1d", limit = 120 }: { timeframe?: string; limit?: number } = {},
+    {
+      timeframe = "1d",
+      limit = 120,
+    }: { timeframe?: string; limit?: number } = {},
   ) =>
     fetchJSON<FinanceBars>(
       `/api/finance/v1/bars${financeQuery({ symbol, timeframe, limit })}`,
@@ -1910,7 +2028,6 @@ export interface McpCatalogDiagnostic {
   message: string;
 }
 
-
 export interface McpServerCreate {
   name: string;
   url?: string;
@@ -1955,7 +2072,12 @@ export interface MessagingPlatform {
   error_code: string | null;
   error_message: string | null;
   updated_at: string | null;
-  home_channel: { platform: string; chat_id: string; name: string; thread_id?: string } | null;
+  home_channel: {
+    platform: string;
+    chat_id: string;
+    name: string;
+    thread_id?: string;
+  } | null;
   whatsapp_setup?: {
     mode?: string;
     allowed_users_set?: boolean;
@@ -2179,7 +2301,12 @@ export interface SystemStats {
   uptime_seconds?: number;
   memory?: { total: number; available: number; used: number; percent: number };
   disk?: { total: number; used: number; free: number; percent: number };
-  process?: { pid: number; rss: number; create_time: number; num_threads: number };
+  process?: {
+    pid: number;
+    rss: number;
+    create_time: number;
+    num_threads: number;
+  };
 }
 
 export interface CuratorStatus {
@@ -2592,7 +2719,12 @@ export interface CronJob {
   prompt?: string | null;
   script?: string | null;
   skills?: string[] | null;
-  schedule?: { kind?: string; expr?: string; run_at?: string; display?: string };
+  schedule?: {
+    kind?: string;
+    expr?: string;
+    run_at?: string;
+    display?: string;
+  };
   schedule_display?: string | null;
   repeat?: CronJobRepeat | null;
   enabled: boolean;
@@ -2775,14 +2907,17 @@ export interface MoaModelSlot {
 export interface MoaConfigResponse {
   default_preset: string;
   active_preset: string;
-  presets: Record<string, {
-    reference_models: MoaModelSlot[];
-    aggregator: MoaModelSlot;
-    reference_temperature: number;
-    aggregator_temperature: number;
-    max_tokens: number;
-    enabled: boolean;
-  }>;
+  presets: Record<
+    string,
+    {
+      reference_models: MoaModelSlot[];
+      aggregator: MoaModelSlot;
+      reference_temperature: number;
+      aggregator_temperature: number;
+      max_tokens: number;
+      enabled: boolean;
+    }
+  >;
   reference_models: MoaModelSlot[];
   aggregator: MoaModelSlot;
   reference_temperature: number;
@@ -3148,6 +3283,35 @@ export interface FinanceWatchlistItem {
   enabled: boolean;
 }
 
+/** A user-owned research group. It is deliberately separate from the trading
+ * watchlist and can only drive quote/chart/analyze read paths. */
+export interface FinanceResearchWatchlistMember {
+  symbol: string;
+  display_name: string;
+  market: string | null;
+  exchange: string | null;
+  currency: string | null;
+  security_type: string | null;
+  position: number;
+  created_at: string;
+}
+
+export interface FinanceResearchWatchlist {
+  id: string;
+  name: string;
+  position: number;
+  members: FinanceResearchWatchlistMember[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FinanceResearchWatchlistRecommendation {
+  symbol: string;
+  display_name: string;
+  market: string | null;
+  currency: string | null;
+}
+
 /** kind -> plain-text report (e.g. ``{morning: "..."}``). */
 export type FinanceReports = Record<string, string>;
 
@@ -3396,13 +3560,16 @@ export interface FinanceResearchBrief {
 export interface FinanceResearchSynthesis {
   as_of: string;
   status: string;
-  markets: Record<string, {
-    market: string;
-    available: boolean;
-    trading_date: string | null;
-    freshness_status: string;
-    regime: string | null;
-  }>;
+  markets: Record<
+    string,
+    {
+      market: string;
+      available: boolean;
+      trading_date: string | null;
+      freshness_status: string;
+      regime: string | null;
+    }
+  >;
   shared_themes: {
     theme: string;
     cn_symbols: string[];
@@ -3536,10 +3703,10 @@ export class FinanceKnowledgeOfflineError extends Error {
 // ── Portfolio types (Phase 0.9: real multi-account US/HK/CN holdings) ────
 // Separate from the paper-trading account shapes above. READ + DRAFT only.
 
-export type FinancePortfolioMarket = "US" | "HK" | "CN";
+export type FinancePortfolioMarket = "US" | "HK" | "CN" | "KR" | "CRYPTO";
 export type FinancePortfolioProvider = "manual" | "ibkr";
 export type FinancePortfolioAccountType = "cash" | "margin";
-export type FinanceInstrumentSecurityType = "stock" | "etf" | "fund";
+export type FinanceInstrumentSecurityType = "stock" | "etf" | "fund" | "crypto";
 export type FinancePortfolioDraftStatus =
   | "draft"
   | "confirmed"
@@ -3619,8 +3786,7 @@ export interface FinancePortfolioReconcile {
   drifts: FinancePortfolioDrift[];
 }
 
-export interface FinancePortfolioAggregateHolding
-  extends FinancePortfolioHolding {
+export interface FinancePortfolioAggregateHolding extends FinancePortfolioHolding {
   /** Ids of the accounts this aggregate row rolls up. */
   accounts: string[];
 }

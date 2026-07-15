@@ -12,9 +12,13 @@ the network (Loop.md §3).
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
+from urllib.parse import quote as urlquote, urlencode
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from swing_trader.interfaces import Bar, DataFeed, NewsItem, Quote
 from swing_trader.log import get_logger
@@ -22,7 +26,7 @@ from swing_trader.schemas import utcnow
 
 logger = get_logger(__name__)
 
-__all__ = ["DataFeedError", "RetryingFeed", "StubPaidFeed", "YFinanceFeed"]
+__all__ = ["DataFeedError", "FundAwareFeed", "RetryingFeed", "StubPaidFeed", "YFinanceFeed"]
 
 #: Ticker used for market-wide news when no symbol is given (Loop.md §11.A).
 MARKET_PROXY_SYMBOL = "SPY"
@@ -57,9 +61,54 @@ _PERIOD_FALLBACK: dict[str, str] = {
 
 _REQUIRED_BAR_COLUMNS = ("Open", "High", "Low", "Close")
 
+_YAHOO_CHART_URL = "https://query2.finance.yahoo.com/v8/finance/chart/{symbol}"
+
 
 class DataFeedError(Exception):
     """Raised when a data source cannot provide the requested data."""
+
+
+class FundAwareFeed(DataFeed):
+    """Route bare Chinese OTC fund codes to a NAV-history provider.
+
+    Yahoo is still authoritative for exchange instruments.  This adapter only
+    intercepts symbols that are unambiguously bare six-digit fund codes, so an
+    exchange ticker with ``.SS``/``.SZ`` continues through the regular feed.
+    """
+
+    def __init__(self, market_feed: DataFeed, fund_history: Any) -> None:
+        self._market = market_feed
+        self._fund_history = fund_history
+
+    @staticmethod
+    def _is_fund(symbol: str) -> bool:
+        from swing_trader.fund_nav import is_fund_code
+
+        return is_fund_code(symbol.strip().upper())
+
+    def get_quote(self, symbol: str) -> Quote:
+        if not self._is_fund(symbol):
+            return self._market.get_quote(symbol)
+        try:
+            last = self._fund_history.get_bars(symbol.strip().upper(), "1d", 1)[-1]
+        except Exception as exc:  # noqa: BLE001 — normalize provider boundary
+            raise DataFeedError(f"fund NAV unavailable for {symbol!r}: {exc}") from exc
+        return Quote(symbol=last.symbol, ts=last.ts, last=last.close)
+
+    def get_bars(self, symbol: str, timeframe: str = "1d", limit: int = 100) -> list[Bar]:
+        if not self._is_fund(symbol):
+            return self._market.get_bars(symbol, timeframe, limit)
+        try:
+            return self._fund_history.get_bars(symbol.strip().upper(), timeframe, limit)
+        except ValueError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — normalize provider boundary
+            raise DataFeedError(f"fund NAV history unavailable for {symbol!r}: {exc}") from exc
+
+    def get_news(self, symbol: Optional[str] = None, limit: int = 20) -> list[NewsItem]:
+        if symbol and self._is_fund(symbol):
+            return []
+        return self._market.get_news(symbol, limit)
 
 
 # --------------------------------------------------------------------------- helpers
@@ -128,6 +177,92 @@ def _fast_info_value(fast_info: Any, *names: str) -> Optional[float]:
     return None
 
 
+def _default_chart_fetcher(symbol: str, period: str, interval: str) -> dict:
+    """Fetch Yahoo's public chart JSON as a bounded yfinance fallback.
+
+    yfinance normally uses Yahoo's query1/crumb flow.  That path can be
+    throttled independently while query2's chart endpoint remains available;
+    keeping this small fallback in the same adapter prevents every K-line from
+    hanging behind repeated yfinance failures.
+    """
+    query = urlencode(
+        {
+            "range": period,
+            "interval": interval,
+            "includePrePost": "false",
+            "events": "div,splits",
+        }
+    )
+    url = f"{_YAHOO_CHART_URL.format(symbol=urlquote(symbol, safe=''))}?{query}"
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0 HermesFinance/1.0"})
+    last_error: Exception | None = None
+    for _attempt in range(2):
+        try:
+            with urlopen(request, timeout=5.0) as response:  # noqa: S310 — fixed Yahoo host
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError:
+            # A real 4xx (notably an unsupported symbol) is deterministic; do
+            # not turn it into a second outbound request.
+            raise
+        except Exception as exc:  # noqa: BLE001 — one short transport retry
+            last_error = exc
+    assert last_error is not None
+    raise last_error
+
+
+def _chart_result(payload: dict, symbol: str) -> dict:
+    try:
+        result = payload["chart"]["result"][0]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise DataFeedError(f"no Yahoo chart result for {symbol}") from exc
+    if not isinstance(result, dict):
+        raise DataFeedError(f"invalid Yahoo chart result for {symbol}")
+    return result
+
+
+def _chart_bars(payload: dict, symbol: str, limit: int) -> list[Bar]:
+    result = _chart_result(payload, symbol)
+    timestamps = result.get("timestamp") or []
+    try:
+        quote = result["indicators"]["quote"][0]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise DataFeedError(f"Yahoo chart bars missing for {symbol}") from exc
+    if not isinstance(quote, dict):
+        raise DataFeedError(f"Yahoo chart bars invalid for {symbol}")
+
+    fields = {name: quote.get(name) or [] for name in ("open", "high", "low", "close", "volume")}
+    rows: list[Bar] = []
+    for index, epoch in enumerate(timestamps):
+        try:
+            opened = _as_float(fields["open"][index])
+            high = _as_float(fields["high"][index])
+            low = _as_float(fields["low"][index])
+            close = _as_float(fields["close"][index])
+        except (IndexError, TypeError):
+            continue
+        if None in (opened, high, low, close):
+            continue
+        try:
+            ts = datetime.fromtimestamp(float(epoch), tz=timezone.utc)
+        except (TypeError, ValueError, OverflowError, OSError):
+            continue
+        volume = _as_float(fields["volume"][index]) if index < len(fields["volume"]) else None
+        rows.append(
+            Bar(
+                symbol=symbol,
+                ts=ts,
+                open=opened,
+                high=high,
+                low=low,
+                close=close,
+                volume=volume or 0.0,
+            )
+        )
+    if not rows:
+        raise DataFeedError(f"no usable Yahoo chart bars for {symbol}")
+    return rows[-limit:]
+
+
 # --------------------------------------------------------------------------- yfinance
 
 
@@ -139,8 +274,41 @@ class YFinanceFeed(DataFeed):
     at module import time.
     """
 
-    def __init__(self, ticker_factory: Callable[[str], Any] | None = None) -> None:
+    def __init__(
+        self,
+        ticker_factory: Callable[[str], Any] | None = None,
+        chart_fetcher: Callable[[str, str, str], dict] | None = None,
+        prefer_chart: bool = False,
+        chart_only: bool = False,
+    ) -> None:
         self._ticker_factory = ticker_factory
+        # Injected fake tickers remain completely offline in tests.  Production
+        # enables the query2 fallback; tests can opt in with chart_fetcher.
+        self._chart_fallback_enabled = ticker_factory is None or chart_fetcher is not None
+        self._chart_fetcher = chart_fetcher or _default_chart_fetcher
+        self._prefer_chart = prefer_chart or chart_fetcher is not None
+        self._chart_only = chart_only
+
+    def _direct_chart_bars(
+        self, symbol: str, timeframe: str, limit: int
+    ) -> list[Bar]:
+        interval = _TIMEFRAME_TO_INTERVAL[timeframe]
+        period = _period_for(timeframe, limit)
+        return _chart_bars(self._chart_fetcher(symbol, period, interval), symbol, limit)
+
+    def _fallback_bars(
+        self, symbol: str, timeframe: str, limit: int, original: Exception
+    ) -> list[Bar]:
+        if not self._chart_fallback_enabled:
+            raise original
+        try:
+            return self._direct_chart_bars(symbol, timeframe, limit)
+        except Exception as exc:  # noqa: BLE001 — normalize the fallback boundary
+            if isinstance(exc, DataFeedError):
+                fallback_error = exc
+            else:
+                fallback_error = DataFeedError(f"Yahoo chart fallback failed for {symbol}: {exc}")
+            raise DataFeedError(f"{original}; fallback: {fallback_error}") from exc
 
     def _ticker(self, symbol: str) -> Any:
         factory = self._ticker_factory
@@ -155,6 +323,23 @@ class YFinanceFeed(DataFeed):
 
     def get_quote(self, symbol: str) -> Quote:
         sym = symbol.strip().upper()
+        # query2 is the fast, bounded production path.  It does not require
+        # Yahoo's crumb/cookie cache (which can hang or be independently rate
+        # limited in containers).  Injected unit-test tickers keep the original
+        # yfinance-first behavior unless a chart_fetcher is explicitly supplied.
+        if self._prefer_chart:
+            try:
+                last = self._direct_chart_bars(sym, "1d", 5)[-1]
+                return Quote(symbol=sym, ts=last.ts, last=last.close)
+            except Exception as exc:  # noqa: BLE001 — yfinance remains fallback
+                if self._chart_only:
+                    raise DataFeedError(
+                        f"Yahoo chart quote path failed for {sym}: {exc}"
+                    ) from exc
+                logger.warning(
+                    "Yahoo chart quote path failed; falling back to yfinance",
+                    extra={"symbol": sym, "error": str(exc)[:160]},
+                )
         ticker = self._ticker(sym)
 
         try:
@@ -177,9 +362,15 @@ class YFinanceFeed(DataFeed):
         try:
             df = ticker.history(period="5d", interval="1d")
         except Exception as exc:  # noqa: BLE001 — any upstream failure is a feed error
-            raise DataFeedError(f"quote fallback history failed for {sym}: {exc}") from exc
+            original = DataFeedError(f"quote fallback history failed for {sym}: {exc}")
+            bars = self._fallback_bars(sym, "1d", 5, original)
+            last = bars[-1]
+            return Quote(symbol=sym, ts=last.ts, last=last.close)
         if df is None or len(df) == 0 or "Close" not in df.columns:
-            raise DataFeedError(f"no quote data available for {sym}")
+            original = DataFeedError(f"no quote data available for {sym}")
+            bars = self._fallback_bars(sym, "1d", 5, original)
+            last = bars[-1]
+            return Quote(symbol=sym, ts=last.ts, last=last.close)
         close = _as_float(df["Close"].iloc[-1])
         if close is None or close <= 0:
             raise DataFeedError(f"no usable close price for {sym}")
@@ -199,14 +390,32 @@ class YFinanceFeed(DataFeed):
         sym = symbol.strip().upper()
         interval = _TIMEFRAME_TO_INTERVAL[timeframe]
         period = _period_for(timeframe, limit)
+        if self._prefer_chart:
+            try:
+                return self._direct_chart_bars(sym, timeframe, limit)
+            except Exception as exc:  # noqa: BLE001 — yfinance remains fallback
+                if self._chart_only:
+                    raise DataFeedError(
+                        f"Yahoo chart bars path failed for {sym} ({timeframe}): {exc}"
+                    ) from exc
+                logger.warning(
+                    "Yahoo chart bars path failed; falling back to yfinance",
+                    extra={
+                        "symbol": sym,
+                        "timeframe": timeframe,
+                        "error": str(exc)[:160],
+                    },
+                )
         ticker = self._ticker(sym)
         try:
             df = ticker.history(period=period, interval=interval)
         except Exception as exc:  # noqa: BLE001
-            raise DataFeedError(f"history failed for {sym} ({timeframe}): {exc}") from exc
+            original = DataFeedError(f"history failed for {sym} ({timeframe}): {exc}")
+            return self._fallback_bars(sym, timeframe, limit, original)
 
         if df is None or len(df) == 0:
-            raise DataFeedError(f"no bars returned for {sym} ({timeframe})")
+            original = DataFeedError(f"no bars returned for {sym} ({timeframe})")
+            return self._fallback_bars(sym, timeframe, limit, original)
         missing = [c for c in _REQUIRED_BAR_COLUMNS if c not in df.columns]
         if missing:
             raise DataFeedError(f"bars for {sym} missing columns {missing}")

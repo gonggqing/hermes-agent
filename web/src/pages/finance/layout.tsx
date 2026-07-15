@@ -53,6 +53,7 @@ export function SidebarGroup({
 export function SidebarButton({
   active,
   disabled,
+  leading,
   onClick,
   trailing,
   subtitle,
@@ -60,6 +61,7 @@ export function SidebarButton({
 }: {
   active: boolean;
   disabled?: boolean;
+  leading?: ReactNode;
   onClick?: () => void;
   trailing?: ReactNode;
   subtitle?: ReactNode;
@@ -80,6 +82,7 @@ export function SidebarButton({
         disabled && "cursor-not-allowed opacity-40 hover:bg-transparent",
       )}
     >
+      {leading}
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate">{children}</span>
         {subtitle && (
@@ -125,7 +128,10 @@ export function ModeToggle({
       aria-label={ft.page.toggleMode}
       title={
         serviceMode
-          ? ft.layout.modeFollowsService.replace("{mode}", modeLabel(serviceMode))
+          ? ft.layout.modeFollowsService.replace(
+              "{mode}",
+              modeLabel(serviceMode),
+            )
           : undefined
       }
       className={cn(

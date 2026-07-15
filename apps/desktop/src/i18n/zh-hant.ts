@@ -22,8 +22,7 @@ export const zhHant = defineLocale({
       marketJapan: '日本',
       comingSoon: '即將推出',
       phaseBadge: '階段 0.9',
-      regionNote:
-        'A 股與港股使用獨立的研究會話、交易日曆、市場狀態與新鮮度；跨市場關聯只在明確的中港綜合中呈現。',
+      regionNote: 'A 股與港股使用獨立的研究會話、交易日曆、市場狀態與新鮮度；跨市場關聯只在明確的中港綜合中呈現。',
       runResearch: '立即更新研究',
       runningResearch: '更新中…',
       runResearchDone: '研究已更新',
@@ -39,6 +38,20 @@ export const zhHant = defineLocale({
         rates: '利率與債券',
         crypto: '加密貨幣'
       },
+      custom: {
+        groupLabel: '我的自選',
+        newGroup: '新自選組',
+        namePlaceholder: '自選組名稱',
+        empty: '這個自選組仍是空的。可搜尋標的，或從現有持倉快速加入。',
+        add: '新增標的',
+        searchPlaceholder: '搜尋代碼或公司／基金名稱',
+        heldSuggestions: '從現有持倉加入',
+        noMatches: '找不到相符標的，請嘗試代碼、完整名稱或市場後綴。',
+        rename: '重新命名',
+        delete: '刪除',
+        remove: '從自選組移除',
+        readOnly: '個人研究自選組 —— 唯讀，不會加入自動交易範圍。'
+      },
       labels: {
         'GC=F': 'COMEX 黃金',
         GLD: '黃金 ETF（SPDR）',
@@ -50,6 +63,10 @@ export const zhHant = defineLocale({
         TLT: '20 年期公債 ETF',
         'BTC-USD': '比特幣',
         'ETH-USD': '以太幣',
+        'SOL-USD': 'Solana',
+        'BNB-USD': 'BNB',
+        'XRP-USD': 'XRP',
+        'ADA-USD': 'Cardano',
         AU9999: '國內金價'
       },
       units: {

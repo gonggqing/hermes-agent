@@ -37,7 +37,12 @@ UNIVERSE: list[WatchlistItem] = [
     # A. Base / reference indices — context, low-vol anchors
     *_mk("SPY VOO IVV DIA QQQ VTI", "base-index", AiPhase.NONE, Role.CORE),
     # B. AI infra — compute & chips (current conviction)
-    *_mk("NVDA AMD AVGO MRVL TSM ASML AMAT LRCX KLAC", "compute-chips", AiPhase.INFRA, Role.CONVICTION),
+    *_mk(
+        "NVDA AMD AVGO MRVL TSM ASML AMAT LRCX KLAC",
+        "compute-chips",
+        AiPhase.INFRA,
+        Role.CONVICTION,
+    ),
     # C. AI infra — memory / storage (supercycle)
     *_mk("MU WDC SNDK", "memory-storage", AiPhase.MEMORY, Role.CONVICTION),
     # D. AI infra — networking / optical
@@ -58,8 +63,16 @@ UNIVERSE: list[WatchlistItem] = [
     *_mk("XLE XOP XOM CVX", "energy-oilgas", AiPhase.NONE, Role.HEDGE),
     *_mk("GLD IAU", "gold", AiPhase.NONE, Role.HEDGE),
     *_mk("TLT IEF", "bonds", AiPhase.NONE, Role.HEDGE),
-    # I. Crypto — DISABLED until OSL permission + API support confirmed (§11-I)
-    *_mk("BTC-USD ETH-USD", "crypto", AiPhase.NONE, Role.ROTATION, enabled=False),
+    # I. Crypto research universe — still DISABLED for automatic trading until
+    # OSL permission + broker/API support are confirmed (§11-I). BTC/ETH are
+    # core observations; SOL/BNB/XRP/ADA are higher-volatility satellites.
+    *_mk(
+        "BTC-USD ETH-USD SOL-USD BNB-USD XRP-USD ADA-USD",
+        "crypto",
+        AiPhase.NONE,
+        Role.ROTATION,
+        enabled=False,
+    ),
 ]
 
 _BY_SYMBOL = {item.symbol: item for item in UNIVERSE}

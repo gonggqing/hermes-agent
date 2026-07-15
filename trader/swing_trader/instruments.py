@@ -67,6 +67,9 @@ def normalize_symbol(raw: str, market: MarketScope | str) -> str:
             return s  # non-numeric HK ticker (rare) — leave as-is
         return f"{int(base):04d}.HK"
 
+    if market in {MarketScope.KR, MarketScope.CRYPTO}:
+        return s
+
     # CN: Shanghai (.SS) vs Shenzhen (.SZ)
     if s.endswith(".SS") or s.endswith(".SZ"):
         return s
@@ -105,8 +108,7 @@ class InstrumentSearchResult:
 class InstrumentSearchProvider(Protocol):
     def search(
         self, query: str, *, market: Optional[MarketScope] = None, limit: int = 10
-    ) -> list[InstrumentMatch]:
-        ...
+    ) -> list[InstrumentMatch]: ...
 
 
 # ---------------------------------------------------------- seed catalog
@@ -126,8 +128,11 @@ class _Seed:
 _US = MarketScope.US
 _HK = MarketScope.HK
 _CN = MarketScope.CN
+_KR = MarketScope.KR
+_CRYPTO = MarketScope.CRYPTO
 _ST = SecurityType.STOCK
 _ETF = SecurityType.ETF
+_COIN = SecurityType.CRYPTO
 
 #: Curated, offline seed set covering the watchlist + common CN/HK names. Not
 #: exhaustive — a live adapter behind the same port broadens it later; the seed
@@ -164,6 +169,16 @@ _SEED_CATALOG: tuple[_Seed, ...] = (
     _Seed("300750.SZ", "CATL", _CN, "SZSE", "CNY", _ST, ("宁德时代", "catl")),
     _Seed("510300.SS", "CSI 300 ETF", _CN, "SSE", "CNY", _ETF, ("沪深300", "csi 300", "hs300")),
     _Seed("510050.SS", "SSE 50 ETF", _CN, "SSE", "CNY", _ETF, ("上证50",)),
+    # Korea — semiconductor research desk.
+    _Seed("005930.KS", "Samsung Electronics", _KR, "KRX", "KRW", _ST, ("samsung", "三星电子")),
+    _Seed("000660.KS", "SK Hynix", _KR, "KRX", "KRW", _ST, ("hynix", "海力士")),
+    # Crypto — research only; return-oriented assets (stablecoins omitted).
+    _Seed("BTC-USD", "Bitcoin", _CRYPTO, "CRYPTO", "USD", _COIN, ("btc",)),
+    _Seed("ETH-USD", "Ethereum", _CRYPTO, "CRYPTO", "USD", _COIN, ("eth",)),
+    _Seed("SOL-USD", "Solana", _CRYPTO, "CRYPTO", "USD", _COIN, ("sol",)),
+    _Seed("BNB-USD", "BNB", _CRYPTO, "CRYPTO", "USD", _COIN),
+    _Seed("XRP-USD", "XRP", _CRYPTO, "CRYPTO", "USD", _COIN),
+    _Seed("ADA-USD", "Cardano", _CRYPTO, "CRYPTO", "USD", _COIN, ("ada",)),
 )
 
 
@@ -228,9 +243,7 @@ class StaticInstrumentProvider:
 
 # ------------------------------------------------------------- live discovery
 
-_EASTMONEY_SEARCH_URL = (
-    "https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx"
-)
+_EASTMONEY_SEARCH_URL = "https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx"
 
 
 def _default_eastmoney_search(query: str, timeout: float) -> list[dict]:
@@ -272,8 +285,12 @@ class EastmoneyInstrumentProvider:
             if not (code.isdigit() and len(code) == 6):
                 return None
             return InstrumentMatch(
-                canonical_symbol=code, display_name=name, market=_CN,
-                exchange="OTC", currency="CNY", security_type=SecurityType.FUND,
+                canonical_symbol=code,
+                display_name=name,
+                market=_CN,
+                exchange="OTC",
+                currency="CNY",
+                security_type=SecurityType.FUND,
             )
         if desc in {"沪市", "深市"}:
             if not (code.isdigit() and len(code) == 6):
@@ -281,20 +298,30 @@ class EastmoneyInstrumentProvider:
             market_symbol = normalize_symbol(code, _CN)
             is_etf = code.startswith(("15", "16", "50", "51", "56", "58", "59"))
             return InstrumentMatch(
-                canonical_symbol=market_symbol, display_name=name, market=_CN,
-                exchange="SSE" if desc == "沪市" else "SZSE", currency="CNY",
+                canonical_symbol=market_symbol,
+                display_name=name,
+                market=_CN,
+                exchange="SSE" if desc == "沪市" else "SZSE",
+                currency="CNY",
                 security_type=SecurityType.ETF if is_etf else SecurityType.STOCK,
             )
         if desc == "港股" and code.isdigit():
             return InstrumentMatch(
-                canonical_symbol=f"{int(code):04d}.HK", display_name=name,
-                market=_HK, exchange="SEHK", currency="HKD",
+                canonical_symbol=f"{int(code):04d}.HK",
+                display_name=name,
+                market=_HK,
+                exchange="SEHK",
+                currency="HKD",
                 security_type=SecurityType.STOCK,
             )
         if desc == "美股":
             return InstrumentMatch(
-                canonical_symbol=code.upper(), display_name=name, market=_US,
-                exchange="US", currency="USD", security_type=SecurityType.STOCK,
+                canonical_symbol=code.upper(),
+                display_name=name,
+                market=_US,
+                exchange="US",
+                currency="USD",
+                security_type=SecurityType.STOCK,
             )
         return None
 
@@ -304,8 +331,7 @@ class EastmoneyInstrumentProvider:
         try:
             rows = self._search(query.strip(), self._timeout)
         except Exception as exc:  # live discovery failure -> no guessed result
-            logger.warning("eastmoney instrument search failed",
-                           extra={"error": str(exc)[:160]})
+            logger.warning("eastmoney instrument search failed", extra={"error": str(exc)[:160]})
             return []
         out: list[InstrumentMatch] = []
         seen: set[str] = set()
@@ -325,8 +351,13 @@ def _default_yfinance_search(query: str, limit: int, timeout: float) -> list[dic
     import yfinance as yf
 
     result = yf.Search(
-        query, max_results=limit, news_count=0, lists_count=0,
-        include_cb=False, timeout=timeout, raise_errors=True,
+        query,
+        max_results=limit,
+        news_count=0,
+        lists_count=0,
+        include_cb=False,
+        timeout=timeout,
+        raise_errors=True,
     )
     return list(result.quotes or [])
 
@@ -355,6 +386,12 @@ class YFinanceInstrumentProvider:
         elif symbol.endswith((".SS", ".SZ")) or exchange_code in {"SHH", "SHZ"}:
             market, currency = _CN, "CNY"
             exchange = "SSE" if symbol.endswith(".SS") or exchange_code == "SHH" else "SZSE"
+        elif symbol.endswith((".KS", ".KQ")) or exchange_code in {"KSC", "KOE"}:
+            market, currency, exchange = _KR, "KRW", "KRX"
+        elif (
+            symbol.endswith("-USD") or str(quote.get("quoteType") or "").upper() == "CRYPTOCURRENCY"
+        ):
+            market, currency, exchange = _CRYPTO, "USD", "CRYPTO"
         elif exchange_code in cls._US_EXCHANGES and "." not in symbol:
             market, currency = _US, "USD"
             exchange = str(quote.get("exchDisp") or exchange_code)
@@ -362,16 +399,22 @@ class YFinanceInstrumentProvider:
             return None
         qtype = str(quote.get("quoteType") or "").upper()
         security_type = (
-            SecurityType.ETF if qtype == "ETF"
-            else SecurityType.FUND if qtype in {"MUTUALFUND", "FUND"}
+            SecurityType.CRYPTO
+            if market is _CRYPTO
+            else SecurityType.ETF
+            if qtype == "ETF"
+            else SecurityType.FUND
+            if qtype in {"MUTUALFUND", "FUND"}
             else SecurityType.STOCK
         )
-        name = str(
-            quote.get("longname") or quote.get("shortname") or symbol
-        ).strip()
+        name = str(quote.get("longname") or quote.get("shortname") or symbol).strip()
         return InstrumentMatch(
-            canonical_symbol=symbol, display_name=name, market=market,
-            exchange=exchange, currency=currency, security_type=security_type,
+            canonical_symbol=symbol,
+            display_name=name,
+            market=market,
+            exchange=exchange,
+            currency=currency,
+            security_type=security_type,
         )
 
     def search(
@@ -380,8 +423,7 @@ class YFinanceInstrumentProvider:
         try:
             rows = self._search(query.strip(), max(1, limit), self._timeout)
         except Exception as exc:  # live discovery failure -> no guessed result
-            logger.warning("yfinance instrument search failed",
-                           extra={"error": str(exc)[:160]})
+            logger.warning("yfinance instrument search failed", extra={"error": str(exc)[:160]})
             return []
         out: list[InstrumentMatch] = []
         seen: set[str] = set()
@@ -432,8 +474,11 @@ class PortfolioInstrumentProvider:
     @staticmethod
     def _sec_type(symbol: str) -> SecurityType:
         # user's on-exchange holdings are ETFs; bare fund codes are funds
-        return (SecurityType.ETF if symbol.upper().endswith((".SS", ".SZ", ".HK"))
-                else SecurityType.FUND)
+        return (
+            SecurityType.ETF
+            if symbol.upper().endswith((".SS", ".SZ", ".HK"))
+            else SecurityType.FUND
+        )
 
     def search(
         self, query: str, *, market: Optional[MarketScope] = None, limit: int = 10
@@ -446,8 +491,7 @@ class PortfolioInstrumentProvider:
         try:
             events = self._journal.get_events()  # all accounts
         except Exception as exc:  # noqa: BLE001 — search must never crash
-            logger.warning("portfolio instrument search failed",
-                           extra={"error": str(exc)[:160]})
+            logger.warning("portfolio instrument search failed", extra={"error": str(exc)[:160]})
             return []
         for e in events:
             sym = e.symbol
@@ -481,14 +525,25 @@ class CompositeInstrumentProvider:
         self, query: str, *, market: Optional[MarketScope] = None, limit: int = 10
     ) -> list[InstrumentMatch]:
         out: list[InstrumentMatch] = []
-        seen: set[str] = set()
+        positions: dict[str, int] = {}
         for p in self._providers:
             for m in p.search(query, market=market, limit=limit):
-                if m.canonical_symbol not in seen:
-                    seen.add(m.canonical_symbol)
-                    out.append(m)
-                    if len(out) >= limit:
-                        return out
+                existing = positions.get(m.canonical_symbol)
+                if existing is not None:
+                    # A portfolio event may know the symbol but not its name.
+                    # Let a later authoritative metadata provider enrich that
+                    # row without moving it or creating a duplicate.
+                    current = out[existing]
+                    if (
+                        current.display_name.strip().upper() == current.canonical_symbol
+                        and m.display_name.strip().upper() != m.canonical_symbol
+                    ):
+                        out[existing] = m
+                    continue
+                positions[m.canonical_symbol] = len(out)
+                out.append(m)
+                if len(out) >= limit:
+                    return out
         return out
 
 

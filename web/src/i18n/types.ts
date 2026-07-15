@@ -326,6 +326,18 @@ export interface FinanceTranslations {
     oil: string;
     rates: string;
     crypto: string;
+    customGroup: string;
+    newCustomGroup: string;
+    groupNamePlaceholder: string;
+    emptyCustomGroup: string;
+    addInstrument: string;
+    instrumentSearchPlaceholder: string;
+    heldSuggestions: string;
+    noInstrumentMatches: string;
+    renameCustomGroup: string;
+    deleteCustomGroup: string;
+    removeInstrument: string;
+    customGroupReadOnly: string;
     readOnlyNote: string; // "Read-only watch module — no orders (Loop.md §3)"
     price: string;
     bid: string;

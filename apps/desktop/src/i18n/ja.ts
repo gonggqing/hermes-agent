@@ -39,6 +39,20 @@ export const ja = defineLocale({
         rates: '金利・債券',
         crypto: '暗号資産'
       },
+      custom: {
+        groupLabel: 'マイウォッチリスト',
+        newGroup: '新しいウォッチリスト',
+        namePlaceholder: 'リスト名',
+        empty: 'このリストは空です。銘柄を検索するか、保有銘柄から追加できます。',
+        add: '銘柄を追加',
+        searchPlaceholder: 'ティッカーまたは会社・ファンド名を検索',
+        heldSuggestions: '保有銘柄から追加',
+        noMatches: '一致する銘柄がありません。コード、正式名、市場サフィックスをお試しください。',
+        rename: '名前を変更',
+        delete: '削除',
+        remove: 'リストから削除',
+        readOnly: '個人調査用リスト — 読み取り専用で、自動取引には追加されません。'
+      },
       labels: {
         'GC=F': 'COMEX 金',
         GLD: '金 ETF（SPDR）',
@@ -50,6 +64,10 @@ export const ja = defineLocale({
         TLT: '20 年国債 ETF',
         'BTC-USD': 'ビットコイン',
         'ETH-USD': 'イーサリアム',
+        'SOL-USD': 'Solana',
+        'BNB-USD': 'BNB',
+        'XRP-USD': 'XRP',
+        'ADA-USD': 'Cardano',
         AU9999: '国内金価'
       },
       units: {
@@ -260,7 +278,8 @@ export const ja = defineLocale({
       remoteSignInHint: signInLabel =>
         `保存済みのリモートブラウザセッションからサインアウトし、${signInLabel}を開きます。代わりにバンドルされたバックエンドに切り替えるには「ローカルゲートウェイを使用」を選択してください。`,
       signOutAndSignIn: 'サインアウトして再サインイン',
-      remoteFailureHint: '「ゲートウェイ設定」でゲートウェイの URL とサインインを確認するか、ローカルゲートウェイに切り替えてください。',
+      remoteFailureHint:
+        '「ゲートウェイ設定」でゲートウェイの URL とサインインを確認するか、ローカルゲートウェイに切り替えてください。',
       hideRecentLogs: '最近のログを非表示',
       showRecentLogs: '最近のログを表示',
       signedInTitle: 'サインインしました',

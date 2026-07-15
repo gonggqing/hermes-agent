@@ -540,8 +540,7 @@ export const en: Translations = {
       localDesc: 'Start a private Hermes backend on localhost. This is the default and works offline.',
       remoteTitle: 'Remote gateway',
       remoteDesc: 'Connect this desktop shell to a remote Hermes backend.',
-      remoteAuthHint:
-        'Hosted gateways use OAuth or a username and password; self-hosted ones may use a session token.',
+      remoteAuthHint: 'Hosted gateways use OAuth or a username and password; self-hosted ones may use a session token.',
       cloudTitle: 'Hermes Cloud',
       cloudDesc: 'Sign in once to Hermes Cloud and pick from the agents on your account — no URL to paste.',
       cloudSignInTitle: 'Hermes Cloud',
@@ -1603,8 +1602,7 @@ export const en: Translations = {
       sessionRunFailed: 'Failed to run session',
       sessionPushedSummary: (pushed, riskApproved, cutoff) =>
         `Pushed ${pushed} of ${riskApproved} risk-approved candidate(s) · approval cutoff ${cutoff} ET`,
-      sessionEntriesHalted:
-        "New entries halted — dead-man's switch (stale data / drift). Exits still flow.",
+      sessionEntriesHalted: "New entries halted — dead-man's switch (stale data / drift). Exits still flow.",
       sessionFinalizeConfirmTitle: 'Finalize & place approved orders?',
       sessionFinalizeConfirmBody:
         'This places live orders for every candidate you already approved and expires the rest. It cannot be undone.',
@@ -1777,6 +1775,20 @@ export const en: Translations = {
         rates: 'Rates & Bonds',
         crypto: 'Crypto'
       },
+      custom: {
+        groupLabel: 'My watchlists',
+        newGroup: 'New watchlist',
+        namePlaceholder: 'Watchlist name',
+        empty: 'This watchlist is empty. Search below or add one of your holdings.',
+        add: 'Add instrument',
+        searchPlaceholder: 'Search ticker or company name',
+        heldSuggestions: 'From your holdings',
+        noMatches: 'No matching instrument. Try a ticker, full name, or market suffix.',
+        rename: 'Rename',
+        delete: 'Delete',
+        remove: 'Remove from watchlist',
+        readOnly: 'Personal research watchlist — read-only and never added to automatic trading.'
+      },
       labels: {
         'GC=F': 'COMEX Gold',
         GLD: 'Gold ETF (SPDR)',
@@ -1788,6 +1800,10 @@ export const en: Translations = {
         TLT: '20Y Treasury ETF',
         'BTC-USD': 'Bitcoin',
         'ETH-USD': 'Ethereum',
+        'SOL-USD': 'Solana',
+        'BNB-USD': 'BNB',
+        'XRP-USD': 'XRP',
+        'ADA-USD': 'Cardano',
         AU9999: 'Domestic spot gold'
       },
       units: {
@@ -2034,8 +2050,7 @@ export const en: Translations = {
       refreshPrices: 'Refresh prices',
       refreshing: 'Refreshing…',
       refreshTitle: 'Prices refreshed',
-      refreshDone: (refreshed, skipped, failed) =>
-        `${refreshed} refreshed · ${skipped} skipped · ${failed} failed`,
+      refreshDone: (refreshed, skipped, failed) => `${refreshed} refreshed · ${skipped} skipped · ${failed} failed`,
       refreshFailed: 'Could not refresh prices.',
       updateMark: 'Update price',
       updateMarkTitle: symbol => `Update price · ${symbol}`,

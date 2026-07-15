@@ -49,7 +49,8 @@ export const financeEn: FinanceTranslations = {
       title: "Market regime",
       vix: "VIX",
       breadth: "Breadth >50dma",
-      unavailable: "No market regime snapshot — the market monitor has not run.",
+      unavailable:
+        "No market regime snapshot — the market monitor has not run.",
     },
     movers: {
       title: "Watchlist movers",
@@ -308,6 +309,21 @@ export const financeEn: FinanceTranslations = {
     oil: "Oil",
     rates: "Rates & Bonds",
     crypto: "Crypto",
+    customGroup: "My watchlists",
+    newCustomGroup: "New watchlist",
+    groupNamePlaceholder: "Watchlist name",
+    emptyCustomGroup:
+      "This watchlist is empty. Search below or add one of your holdings.",
+    addInstrument: "Add instrument",
+    instrumentSearchPlaceholder: "Search ticker or company name",
+    heldSuggestions: "From your holdings",
+    noInstrumentMatches:
+      "No matching instrument. Try a ticker, full name, or another market suffix.",
+    renameCustomGroup: "Rename",
+    deleteCustomGroup: "Delete",
+    removeInstrument: "Remove from watchlist",
+    customGroupReadOnly:
+      "Personal research watchlist — read-only and never added to automatic trading.",
     readOnlyNote: "Read-only watch module — no orders (Loop.md §3).",
     price: "Last",
     bid: "Bid",
@@ -364,7 +380,8 @@ export const financeEn: FinanceTranslations = {
       volDesc:
         "Volume: how much traded; big moves on high volume are more convincing.",
       macd: "MACD",
-      macdDesc: "Trend + momentum; MACD crossing above its signal line is bullish.",
+      macdDesc:
+        "Trend + momentum; MACD crossing above its signal line is bullish.",
       rsi: "RSI",
       rsiDesc: "Momentum 0–100; above 70 overbought, below 30 oversold.",
       kdj: "KDJ",
@@ -1028,7 +1045,8 @@ export const en: Translations = {
     inactive: "inactive",
     installBtn: "Install",
     installHeading: "Install from GitHub / Git URL",
-    installHint: "Use owner/repo shorthand or a full https:// or git@ clone URL. For a plugin in a subdirectory, append the path: owner/repo/path/to/plugin (or <url>#path/to/plugin).",
+    installHint:
+      "Use owner/repo shorthand or a full https:// or git@ clone URL. For a plugin in a subdirectory, append the path: owner/repo/path/to/plugin (or <url>#path/to/plugin).",
     memoryProviderLabel: "Memory provider",
     missingEnvWarn: "Set these in Keys before the plugin can run:",
     noDashboardTab: "No dashboard tab",
@@ -1041,9 +1059,11 @@ export const en: Translations = {
       "Writes memory.provider (empty = built-in) and context.engine to config.yaml. Takes effect next session.",
     refreshDashboard: "Rescan dashboard extensions",
     removeConfirm: "Remove this plugin from ~/.hermes/plugins/?",
-    removeHint: "Only user-installed plugins under ~/.hermes/plugins can be removed.",
+    removeHint:
+      "Only user-installed plugins under ~/.hermes/plugins can be removed.",
     rescanHeading: "SPA plugin registry",
-    rescanHint: "Rescan after adding files on disk so the dashboard sidebar picks up new manifests.",
+    rescanHint:
+      "Rescan after adding files on disk so the dashboard sidebar picks up new manifests.",
     runtimeHeading: "Gateway runtime (YAML plugins)",
     saveProviders: "Save provider settings",
     savedProviders: "Provider settings saved.",
@@ -1088,7 +1108,8 @@ export const en: Translations = {
     importConfig: "Import config from JSON",
     resetDefaults: "Reset to defaults",
     resetScopeTooltip: "Reset {scope} to defaults",
-    confirmResetScope: "Reset all {scope} settings to their defaults? This only updates the form — changes aren't written to config.yaml until you press Save.",
+    confirmResetScope:
+      "Reset all {scope} settings to their defaults? This only updates the form — changes aren't written to config.yaml until you press Save.",
     resetScopeToast: "{scope} reset to defaults — review and Save to persist",
     rawYaml: "Raw YAML Configuration",
     searchResults: "Search Results",
@@ -1121,7 +1142,8 @@ export const en: Translations = {
   },
 
   env: {
-    changesNote: "Changes are saved to disk immediately. Active sessions pick up new keys automatically.",
+    changesNote:
+      "Changes are saved to disk immediately. Active sessions pick up new keys automatically.",
     confirmClearMessage:
       "The stored value for this variable will be removed from your .env file. This cannot be undone from the UI.",
     confirmClearTitle: "Clear this key?",
@@ -1159,7 +1181,8 @@ export const en: Translations = {
       "{connected} of {total} OAuth providers connected. Use Login for dashboard-supported flows; CLI commands remain available for external or fallback setup.",
     connected: "Connected",
     expired: "Expired",
-    notConnected: "Not connected. Use Login when available, or run {command} in a terminal.",
+    notConnected:
+      "Not connected. Use Login when available, or run {command} in a terminal.",
     runInTerminal: "in a terminal.",
     noProviders: "No OAuth-capable providers detected.",
     login: "Login",
@@ -1167,7 +1190,8 @@ export const en: Translations = {
     managedExternally: "Managed externally",
     copied: "Copied ✓",
     copyCode: "Copy code",
-    copyFailed: "Could not copy automatically. Select the code and copy it manually.",
+    copyFailed:
+      "Could not copy automatically. Select the code and copy it manually.",
     cli: "Copy",
     copyCliCommand: "Copy CLI command (for external / fallback)",
     connect: "Connect",
@@ -1308,11 +1332,10 @@ export const en: Translations = {
       copy_button: "Copy image",
       copied: "Copied ✓",
       download_button: "Download PNG",
-      hint:
-        "Share on X opens a pre-filled post in a new tab. Click Copy image first if you want the 1200×630 badge attached — X lets you paste it right into the tweet composer. Download PNG saves the file for use anywhere.",
+      hint: "Share on X opens a pre-filled post in a new tab. Click Copy image first if you want the 1200×630 badge attached — X lets you paste it right into the tweet composer. Download PNG saves the file for use anywhere.",
       clipboard_unsupported:
         "Clipboard image copy not supported in this browser — use Download instead.",
-      tweet_text: "Just unlocked {tier_part}\"{name}\" in Hermes Agent ☤",
+      tweet_text: 'Just unlocked {tier_part}"{name}" in Hermes Agent ☤',
     },
   },
 

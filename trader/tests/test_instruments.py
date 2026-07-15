@@ -31,31 +31,54 @@ from swing_trader.portfolio_journal import PortfolioJournal
 
 
 class TestNormalize:
-    @pytest.mark.parametrize("raw,out", [
-        ("nvda", "NVDA"), ("NVDA", "NVDA"), ("brk.b", "BRK"),
-    ])
+    @pytest.mark.parametrize(
+        "raw,out",
+        [
+            ("nvda", "NVDA"),
+            ("NVDA", "NVDA"),
+            ("brk.b", "BRK"),
+        ],
+    )
     def test_us(self, raw, out):
         assert normalize_symbol(raw, MarketScope.US) == out
 
-    @pytest.mark.parametrize("raw,out", [
-        ("700", "0700.HK"), ("0700", "0700.HK"), ("0700.hk", "0700.HK"),
-        ("9988", "9988.HK"),
-    ])
+    @pytest.mark.parametrize(
+        "raw,out",
+        [
+            ("700", "0700.HK"),
+            ("0700", "0700.HK"),
+            ("0700.hk", "0700.HK"),
+            ("9988", "9988.HK"),
+        ],
+    )
     def test_hk_pads_to_four_digits(self, raw, out):
         assert normalize_symbol(raw, MarketScope.HK) == out
 
-    @pytest.mark.parametrize("raw,out", [
-        ("600519", "600519.SS"),  # Shanghai (6…)
-        ("510300", "510300.SS"),  # Shanghai fund (5…)
-        ("000001", "000001.SZ"),  # Shenzhen (0…)
-        ("300750", "300750.SZ"),  # ChiNext (3…)
-        ("600519.ss", "600519.SS"),  # already-suffixed idempotent
-    ])
+    @pytest.mark.parametrize(
+        "raw,out",
+        [
+            ("600519", "600519.SS"),  # Shanghai (6…)
+            ("510300", "510300.SS"),  # Shanghai fund (5…)
+            ("000001", "000001.SZ"),  # Shenzhen (0…)
+            ("300750", "300750.SZ"),  # ChiNext (3…)
+            ("600519.ss", "600519.SS"),  # already-suffixed idempotent
+        ],
+    )
     def test_cn_shanghai_vs_shenzhen(self, raw, out):
         assert normalize_symbol(raw, MarketScope.CN) == out
 
     def test_string_market_accepted(self):
         assert normalize_symbol("700", "HK") == "0700.HK"
+
+    @pytest.mark.parametrize(
+        "raw,market,out",
+        [
+            ("005930.ks", MarketScope.KR, "005930.KS"),
+            ("btc-usd", MarketScope.CRYPTO, "BTC-USD"),
+        ],
+    )
+    def test_research_only_markets_preserve_provider_symbol(self, raw, market, out):
+        assert normalize_symbol(raw, market) == out
 
     def test_empty_raises(self):
         with pytest.raises(ValueError, match="empty"):
@@ -77,20 +100,26 @@ class TestStaticProvider:
         syms = [m.canonical_symbol for m in provider.search("NV")]
         assert "NVDA" in syms
 
-    @pytest.mark.parametrize("q,expect", [
-        ("070", "0700.HK"),   # partial HK code
-        ("6005", "600519.SS"),  # partial Shanghai code
-        ("0000", "000001.SZ"),  # partial Shenzhen code
-    ])
+    @pytest.mark.parametrize(
+        "q,expect",
+        [
+            ("070", "0700.HK"),  # partial HK code
+            ("6005", "600519.SS"),  # partial Shanghai code
+            ("0000", "000001.SZ"),  # partial Shenzhen code
+        ],
+    )
     def test_partial_code(self, provider, q, expect):
         assert expect in [m.canonical_symbol for m in provider.search(q)]
 
-    @pytest.mark.parametrize("q,expect", [
-        ("NVIDIA", "NVDA"),
-        ("腾讯", "0700.HK"),
-        ("贵州茅台", "600519.SS"),
-        ("沪深300", "510300.SS"),
-    ])
+    @pytest.mark.parametrize(
+        "q,expect",
+        [
+            ("NVIDIA", "NVDA"),
+            ("腾讯", "0700.HK"),
+            ("贵州茅台", "600519.SS"),
+            ("沪深300", "510300.SS"),
+        ],
+    )
     def test_name_and_alias_search(self, provider, q, expect):
         assert expect in [m.canonical_symbol for m in provider.search(q)]
 
@@ -113,6 +142,19 @@ class TestStaticProvider:
         nvda = provider.search("NVDA")[0]
         assert nvda.security_type is SecurityType.STOCK
 
+    @pytest.mark.parametrize(
+        "query,symbol,market,security_type",
+        [
+            ("Samsung", "005930.KS", MarketScope.KR, SecurityType.STOCK),
+            ("Bitcoin", "BTC-USD", MarketScope.CRYPTO, SecurityType.CRYPTO),
+            ("Cardano", "ADA-USD", MarketScope.CRYPTO, SecurityType.CRYPTO),
+        ],
+    )
+    def test_korea_and_crypto_research_seeds(self, provider, query, symbol, market, security_type):
+        match = next(item for item in provider.search(query) if item.canonical_symbol == symbol)
+        assert match.market is market
+        assert match.security_type is security_type
+
     def test_limit_respected(self, provider):
         assert len(provider.search("0", limit=2)) <= 2
 
@@ -125,14 +167,14 @@ class TestStaticProvider:
 
 class TestLiveProviders:
     def test_eastmoney_fund_name_and_code_metadata(self):
-        rows = [{
-            "CODE": "015894",
-            "NAME": "平安中证消费电子主题ETF发起式联接A",
-            "CATEGORYDESC": "基金",
-        }]
-        provider = EastmoneyInstrumentProvider(
-            search_fn=lambda _query, _timeout: rows
-        )
+        rows = [
+            {
+                "CODE": "015894",
+                "NAME": "平安中证消费电子主题ETF发起式联接A",
+                "CATEGORYDESC": "基金",
+            }
+        ]
+        provider = EastmoneyInstrumentProvider(search_fn=lambda _query, _timeout: rows)
         match = provider.search("消费电子")[0]
         assert match.canonical_symbol == "015894"
         assert match.market is MarketScope.CN and match.exchange == "OTC"
@@ -140,24 +182,33 @@ class TestLiveProviders:
 
     def test_eastmoney_maps_cn_exchange_instrument(self):
         rows = [{"CODE": "300750", "NAME": "宁德时代", "CATEGORYDESC": "深市"}]
-        match = EastmoneyInstrumentProvider(
-            search_fn=lambda _q, _t: rows
-        ).search("宁德时代")[0]
+        match = EastmoneyInstrumentProvider(search_fn=lambda _q, _t: rows).search("宁德时代")[0]
         assert match.canonical_symbol == "300750.SZ"
         assert match.exchange == "SZSE" and match.security_type is SecurityType.STOCK
 
     def test_yfinance_filters_to_supported_markets(self):
         rows = [
-            {"symbol": "NVDA", "exchange": "NMS", "quoteType": "EQUITY",
-             "longname": "NVIDIA Corporation", "exchDisp": "NASDAQ"},
-            {"symbol": "0700.HK", "exchange": "HKG", "quoteType": "EQUITY",
-             "longname": "Tencent Holdings"},
-            {"symbol": "APC.F", "exchange": "FRA", "quoteType": "EQUITY",
-             "longname": "Apple Frankfurt"},
+            {
+                "symbol": "NVDA",
+                "exchange": "NMS",
+                "quoteType": "EQUITY",
+                "longname": "NVIDIA Corporation",
+                "exchDisp": "NASDAQ",
+            },
+            {
+                "symbol": "0700.HK",
+                "exchange": "HKG",
+                "quoteType": "EQUITY",
+                "longname": "Tencent Holdings",
+            },
+            {
+                "symbol": "APC.F",
+                "exchange": "FRA",
+                "quoteType": "EQUITY",
+                "longname": "Apple Frankfurt",
+            },
         ]
-        provider = YFinanceInstrumentProvider(
-            search_fn=lambda _query, _limit, _timeout: rows
-        )
+        provider = YFinanceInstrumentProvider(search_fn=lambda _query, _limit, _timeout: rows)
         matches = provider.search("tech")
         assert [m.canonical_symbol for m in matches] == ["NVDA", "0700.HK"]
         assert matches[0].currency == "USD" and matches[1].currency == "HKD"
@@ -200,9 +251,14 @@ class _FailingProvider:
 
 
 def _match():
-    return InstrumentMatch(canonical_symbol="NVDA", display_name="NVIDIA Corp",
-                           market=MarketScope.US, exchange="NASDAQ",
-                           currency="USD", security_type=SecurityType.STOCK)
+    return InstrumentMatch(
+        canonical_symbol="NVDA",
+        display_name="NVIDIA Corp",
+        market=MarketScope.US,
+        exchange="NASDAQ",
+        currency="USD",
+        security_type=SecurityType.STOCK,
+    )
 
 
 class TestPortfolioProvider:
@@ -210,15 +266,28 @@ class TestPortfolioProvider:
 
     @pytest.fixture()
     def journal(self, tmp_path):
-        j = PortfolioJournal(url=f"sqlite:///{tmp_path/'p.db'}")
+        j = PortfolioJournal(url=f"sqlite:///{tmp_path / 'p.db'}")
         acct = j.create_account(name="平安证券", market_scope="CN", base_currency="CNY")
+
         def ev(sym, market, note):
-            j.append_event(PortfolioEvent(
-                account_id=acct.id, event_type=EventType.OPENING_BALANCE, symbol=sym,
-                market=market, currency="CNY", qty=100, price=1.0,
-                occurred_at=datetime(2026, 7, 13, tzinfo=timezone.utc),
-                source=EventSource.CSV, idempotency_key=sym, actor="g", surface="web",
-                note=note))
+            j.append_event(
+                PortfolioEvent(
+                    account_id=acct.id,
+                    event_type=EventType.OPENING_BALANCE,
+                    symbol=sym,
+                    market=market,
+                    currency="CNY",
+                    qty=100,
+                    price=1.0,
+                    occurred_at=datetime(2026, 7, 13, tzinfo=timezone.utc),
+                    source=EventSource.CSV,
+                    idempotency_key=sym,
+                    actor="g",
+                    surface="web",
+                    note=note,
+                )
+            )
+
         ev("510300.SS", MarketScope.CN, "华泰柏瑞沪深300ETF|核心层·沪深300")
         ev("588200.SS", MarketScope.CN, "科创芯片ETF嘉实|成长层·芯片/半导体")
         ev("017436", MarketScope.US, "华宝纳斯达克精选(QDII)A|成长层·美股科技(纳指主动)")
@@ -256,36 +325,81 @@ class TestPortfolioProvider:
         assert all(m.market is MarketScope.US for m in us)
 
     def test_empty_journal(self, tmp_path):
-        j = PortfolioJournal(url=f"sqlite:///{tmp_path/'e.db'}")
+        j = PortfolioJournal(url=f"sqlite:///{tmp_path / 'e.db'}")
         assert PortfolioInstrumentProvider(j).search("nvda") == []
 
 
 class TestComposite:
+    def test_later_metadata_provider_enriches_code_only_duplicate(self):
+        code_only = InstrumentMatch(
+            canonical_symbol="017470",
+            display_name="017470",
+            market=MarketScope.CN,
+            exchange="OTC",
+            currency="CNY",
+            security_type=SecurityType.FUND,
+        )
+        named = code_only.model_copy(
+            update={"display_name": "嘉实上证科创板芯片ETF联接C"}
+        )
+        composite = CompositeInstrumentProvider(
+            [_CountingProvider([code_only]), _CountingProvider([named])]
+        )
+        matches = composite.search("017470")
+        assert len(matches) == 1
+        assert matches[0].display_name == "嘉实上证科创板芯片ETF联接C"
+
     def test_static_then_portfolio_deduped(self, tmp_path):
-        j = PortfolioJournal(url=f"sqlite:///{tmp_path/'c.db'}")
+        j = PortfolioJournal(url=f"sqlite:///{tmp_path / 'c.db'}")
         acct = j.create_account(name="A", market_scope="CN", base_currency="CNY")
-        j.append_event(PortfolioEvent(
-            account_id=acct.id, event_type=EventType.OPENING_BALANCE, symbol="588200.SS",
-            market=MarketScope.CN, currency="CNY", qty=100, price=3.0,
-            occurred_at=datetime(2026, 7, 13, tzinfo=timezone.utc), source=EventSource.CSV,
-            idempotency_key="k", actor="g", surface="web", note="科创芯片ETF嘉实|芯片"))
-        comp = CompositeInstrumentProvider([StaticInstrumentProvider(),
-                                            PortfolioInstrumentProvider(j)])
+        j.append_event(
+            PortfolioEvent(
+                account_id=acct.id,
+                event_type=EventType.OPENING_BALANCE,
+                symbol="588200.SS",
+                market=MarketScope.CN,
+                currency="CNY",
+                qty=100,
+                price=3.0,
+                occurred_at=datetime(2026, 7, 13, tzinfo=timezone.utc),
+                source=EventSource.CSV,
+                idempotency_key="k",
+                actor="g",
+                surface="web",
+                note="科创芯片ETF嘉实|芯片",
+            )
+        )
+        comp = CompositeInstrumentProvider(
+            [StaticInstrumentProvider(), PortfolioInstrumentProvider(j)]
+        )
         # static-only symbol still found
         assert "NVDA" in [m.canonical_symbol for m in comp.search("NVDA")]
         # held-only symbol now found (was missing before)
         assert "588200.SS" in [m.canonical_symbol for m in comp.search("588200")]
 
     def test_no_duplicate_symbols(self, tmp_path):
-        j = PortfolioJournal(url=f"sqlite:///{tmp_path/'d.db'}")
+        j = PortfolioJournal(url=f"sqlite:///{tmp_path / 'd.db'}")
         acct = j.create_account(name="A", market_scope="US", base_currency="USD")
-        j.append_event(PortfolioEvent(  # a symbol also in the static catalog
-            account_id=acct.id, event_type=EventType.OPENING_BALANCE, symbol="NVDA",
-            market=MarketScope.US, currency="USD", qty=1, price=1.0,
-            occurred_at=datetime(2026, 7, 13, tzinfo=timezone.utc), source=EventSource.MANUAL,
-            idempotency_key="k", actor="g", surface="web", note="NVIDIA"))
-        comp = CompositeInstrumentProvider([StaticInstrumentProvider(),
-                                            PortfolioInstrumentProvider(j)])
+        j.append_event(
+            PortfolioEvent(  # a symbol also in the static catalog
+                account_id=acct.id,
+                event_type=EventType.OPENING_BALANCE,
+                symbol="NVDA",
+                market=MarketScope.US,
+                currency="USD",
+                qty=1,
+                price=1.0,
+                occurred_at=datetime(2026, 7, 13, tzinfo=timezone.utc),
+                source=EventSource.MANUAL,
+                idempotency_key="k",
+                actor="g",
+                surface="web",
+                note="NVIDIA",
+            )
+        )
+        comp = CompositeInstrumentProvider(
+            [StaticInstrumentProvider(), PortfolioInstrumentProvider(j)]
+        )
         syms = [m.canonical_symbol for m in comp.search("NVDA")]
         assert syms.count("NVDA") == 1
 
@@ -321,7 +435,9 @@ class TestCache:
         clk = _Clock(datetime(2026, 7, 1, tzinfo=timezone.utc))
 
         class Flaky:
-            def __init__(self): self.n = 0
+            def __init__(self):
+                self.n = 0
+
             def search(self, query, *, market=None, limit=10):
                 self.n += 1
                 if self.n == 1:
@@ -329,8 +445,8 @@ class TestCache:
                 raise RuntimeError("down")
 
         cached = CachedInstrumentSearch(Flaky(), ttl_s=10, clock=clk)
-        cached.search("NV")           # populates cache
-        clk.advance(11)               # expire
-        res = cached.search("NV")     # inner fails → stale served, flagged
+        cached.search("NV")  # populates cache
+        clk.advance(11)  # expire
+        res = cached.search("NV")  # inner fails → stale served, flagged
         assert res.degraded is True and res.source == "stale"
         assert res.matches[0].canonical_symbol == "NVDA"

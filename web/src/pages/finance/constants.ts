@@ -100,6 +100,10 @@ export const WATCH_MODULES: Record<WatchModuleKey, WatchSymbol[]> = {
     // Crypto renders currency-prefixed, no unit → "$67,000".
     { symbol: "BTC-USD", label: "Bitcoin", currency: "$", unit: null },
     { symbol: "ETH-USD", label: "Ethereum", currency: "$", unit: null },
+    { symbol: "SOL-USD", label: "Solana", currency: "$", unit: null },
+    { symbol: "BNB-USD", label: "BNB", currency: "$", unit: null },
+    { symbol: "XRP-USD", label: "XRP", currency: "$", unit: null },
+    { symbol: "ADA-USD", label: "Cardano", currency: "$", unit: null },
   ],
 };
 

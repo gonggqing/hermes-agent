@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Globe,
   Newspaper,
+  Plus,
   PlugZap,
   TrendingUp,
   Wallet,
@@ -26,15 +27,22 @@ import type {
   FinanceSnapshot,
   FinanceStats,
   FinanceWatchlistItem,
+  FinanceResearchWatchlist,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Badge } from "@nous-research/ui/ui/components/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@nous-research/ui/ui/components/card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@nous-research/ui/ui/components/card";
 import { CommandBlock } from "@nous-research/ui/ui/components/command-block";
 import { Segmented } from "@nous-research/ui/ui/components/segmented";
 import { Spinner } from "@nous-research/ui/ui/components/spinner";
 import { Stats } from "@nous-research/ui/ui/components/stats";
 import { Toast } from "@nous-research/ui/ui/components/toast";
+import { Input } from "@nous-research/ui/ui/components/input";
 import { useToast } from "@nous-research/ui/hooks/use-toast";
 import { useI18n } from "@/i18n";
 import { ApprovalQueue, SessionControls } from "@/pages/finance/ApprovalQueue";
@@ -42,6 +50,7 @@ import { HistorySection } from "@/pages/finance/HistorySection";
 import { PortfolioManager } from "@/pages/finance/PortfolioManager";
 import { ResearchBrief } from "@/pages/finance/ResearchBrief";
 import { WatchModule } from "@/pages/finance/WatchModule";
+import { ResearchWatchlistDetail } from "@/pages/finance/ResearchWatchlistDetail";
 import {
   FinanceBottomBar,
   MasterDetail,
@@ -223,7 +232,9 @@ function AccountSection({
         <CardHeader>
           <div className="flex items-center gap-2">
             <TrendingUp className="h-5 w-5 text-muted-foreground" />
-            <CardTitle className="text-base">{ft.account.equityCurve}</CardTitle>
+            <CardTitle className="text-base">
+              {ft.account.equityCurve}
+            </CardTitle>
           </div>
         </CardHeader>
         <CardContent>
@@ -285,9 +296,15 @@ function PositionsCard({ view }: { view: FinanceAccountView | null }) {
                       <span className="font-mono-ui text-xs">{p.symbol}</span>
                     </td>
                     <td className="text-right py-2 px-4">{fmtQty(p.qty)}</td>
-                    <td className="text-right py-2 px-4">{fmtMoney(p.avg_px)}</td>
-                    <td className="text-right py-2 px-4">{fmtMoney(p.mkt_px)}</td>
-                    <td className={cn("text-right py-2 px-4", pnlClass(p.upnl))}>
+                    <td className="text-right py-2 px-4">
+                      {fmtMoney(p.avg_px)}
+                    </td>
+                    <td className="text-right py-2 px-4">
+                      {fmtMoney(p.mkt_px)}
+                    </td>
+                    <td
+                      className={cn("text-right py-2 px-4", pnlClass(p.upnl))}
+                    >
                       {fmtSigned(p.upnl)}
                     </td>
                     <td className="py-2 pl-4">
@@ -364,7 +381,9 @@ function OrdersCard({ view }: { view: FinanceAccountView | null }) {
                     <td className="py-2 px-4 text-muted-foreground">
                       {o.order_type}
                     </td>
-                    <td className="text-right py-2 px-4">{fmtMoney(o.limit)}</td>
+                    <td className="text-right py-2 px-4">
+                      {fmtMoney(o.limit)}
+                    </td>
                     <td className="text-right py-2 px-4">{fmtMoney(o.stop)}</td>
                     <td className="py-2 pl-4">
                       <Badge tone="outline">{o.status}</Badge>
@@ -584,10 +603,16 @@ function OfflinePanel() {
 
 function ResearchDetail({
   desk,
+  customGroup,
+  onCustomChange,
+  onCustomDelete,
   briefs,
   ft,
 }: {
   desk: FinanceDesk;
+  customGroup: FinanceResearchWatchlist | null;
+  onCustomChange: (group: FinanceResearchWatchlist) => void;
+  onCustomDelete: (id: string) => void;
   briefs: {
     us: FinanceResearchBriefData | null;
     cn: FinanceResearchBriefData | null;
@@ -596,6 +621,16 @@ function ResearchDetail({
   };
   ft: FinanceTranslations;
 }) {
+  if (customGroup) {
+    return (
+      <ResearchWatchlistDetail
+        key={customGroup.id}
+        group={customGroup}
+        onChange={onCustomChange}
+        onDelete={onCustomDelete}
+      />
+    );
+  }
   if (isWatchDesk(desk)) {
     // Keyed by desk so switching watch modules remounts with a fresh selection
     // + analysis state (no reset effect needed).
@@ -614,21 +649,28 @@ function ResearchDetail({
       <p className="border border-border/60 bg-secondary/20 px-3 py-2 font-mondwest normal-case text-xs text-muted-foreground">
         {ft.layout.perRegionNote}
       </p>
-      <ResearchBrief brief={regionalBrief} market={desk === "hk" ? "hk" : "cn"} />
+      <ResearchBrief
+        brief={regionalBrief}
+        market={desk === "hk" ? "hk" : "cn"}
+      />
     </div>
   );
 }
 
 function ResearchView({
   desk,
+  customGroupId,
   onDeskChange,
+  onCustomGroupChange,
   briefs,
   ft,
   onRunResearch,
   researchRunning,
 }: {
   desk: FinanceDesk;
+  customGroupId: string | null;
   onDeskChange: (desk: FinanceDesk) => void;
+  onCustomGroupChange: (id: string | null) => void;
   briefs: {
     us: FinanceResearchBriefData | null;
     cn: FinanceResearchBriefData | null;
@@ -639,17 +681,56 @@ function ResearchView({
   onRunResearch: () => void;
   researchRunning: boolean;
 }) {
+  const { t } = useI18n();
+  const [customGroups, setCustomGroups] = useState<FinanceResearchWatchlist[]>(
+    [],
+  );
+  const [creatingGroup, setCreatingGroup] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [groupBusy, setGroupBusy] = useState(false);
+  const selectedCustomGroup =
+    customGroups.find((group) => group.id === customGroupId) ?? null;
+
+  useEffect(() => {
+    api.financeResearchWatchlists().then(setCustomGroups, () => {});
+  }, []);
+
+  const createCustomGroup = async () => {
+    if (!newGroupName.trim()) return;
+    setGroupBusy(true);
+    try {
+      const created = await api.financeCreateResearchWatchlist(newGroupName);
+      setCustomGroups((groups) => [...groups, created]);
+      setNewGroupName("");
+      setCreatingGroup(false);
+      onCustomGroupChange(created.id);
+    } finally {
+      setGroupBusy(false);
+    }
+  };
+
+  const updateCustomGroup = (updated: FinanceResearchWatchlist) =>
+    setCustomGroups((groups) =>
+      groups.map((group) => (group.id === updated.id ? updated : group)),
+    );
+  const deleteCustomGroup = (id: string) => {
+    setCustomGroups((groups) => groups.filter((group) => group.id !== id));
+    onCustomGroupChange(null);
+  };
+
   // The manual "run research now" button only applies to markets with their
   // own research session (China/HK → CN, Korea → KR); US research is driven by
   // the trading loop and watch modules are cross-asset, so no button there.
-  const canRun = desk === "china" || desk === "hk" || desk === "korea";
+  const canRun =
+    !selectedCustomGroup &&
+    (desk === "china" || desk === "hk" || desk === "korea");
   const sidebar = (
     <>
       <SidebarGroup label={ft.layout.marketsGroup}>
         {ACTIVE_MARKETS.map((m) => (
           <SidebarButton
             key={m}
-            active={desk === m}
+            active={!customGroupId && desk === m}
             onClick={() => onDeskChange(m)}
           >
             {marketName(m, ft)}
@@ -670,12 +751,65 @@ function ResearchView({
         {WATCH_MODULE_KEYS.map((k) => (
           <SidebarButton
             key={k}
-            active={desk === k}
+            active={!customGroupId && desk === k}
             onClick={() => onDeskChange(k)}
           >
             {watchModuleName(k, ft)}
           </SidebarButton>
         ))}
+      </SidebarGroup>
+      <SidebarGroup label={ft.watch.customGroup}>
+        {customGroups.map((group) => (
+          <SidebarButton
+            key={group.id}
+            active={customGroupId === group.id}
+            onClick={() => onCustomGroupChange(group.id)}
+            trailing={
+              <span className="text-xs text-muted-foreground">
+                {group.members.length}
+              </span>
+            }
+          >
+            {group.name}
+          </SidebarButton>
+        ))}
+        {creatingGroup ? (
+          <div className="flex flex-col gap-2 border-t border-dashed border-border p-2">
+            <Input
+              autoFocus
+              value={newGroupName}
+              placeholder={ft.watch.groupNamePlaceholder}
+              onChange={(event) => setNewGroupName(event.target.value)}
+              onKeyDown={(event) =>
+                event.key === "Enter" && void createCustomGroup()
+              }
+            />
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                disabled={groupBusy || !newGroupName.trim()}
+                onClick={() => void createCustomGroup()}
+              >
+                {t.common.create}
+              </Button>
+              <Button size="sm" ghost onClick={() => setCreatingGroup(false)}>
+                {t.common.cancel}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setNewGroupName(ft.watch.newCustomGroup);
+              setCreatingGroup(true);
+            }}
+            className="flex min-h-11 w-full items-center gap-2 border-t border-dashed border-border px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-secondary/30 hover:text-foreground"
+          >
+            <Plus className="h-4 w-4" />
+            {ft.watch.newCustomGroup}
+          </button>
+        )}
       </SidebarGroup>
     </>
   );
@@ -696,7 +830,14 @@ function ResearchView({
             </Button>
           </div>
         )}
-        <ResearchDetail desk={desk} briefs={briefs} ft={ft} />
+        <ResearchDetail
+          desk={desk}
+          customGroup={selectedCustomGroup}
+          onCustomChange={updateCustomGroup}
+          onCustomDelete={deleteCustomGroup}
+          briefs={briefs}
+          ft={ft}
+        />
       </div>
     </MasterDetail>
   );
@@ -939,6 +1080,7 @@ export default function FinancePage() {
     ? (tabParam as FinanceTab)
     : "research";
   const deskParam = searchParams.get("desk");
+  const customGroupId = searchParams.get("watch_group");
   const researchDesk: FinanceDesk =
     DESKS.includes(deskParam as FinanceDesk) &&
     // Disabled placeholders are never a valid selection.
@@ -965,8 +1107,32 @@ export default function FinancePage() {
     [setParam],
   );
   const setResearchDesk = useCallback(
-    (desk: FinanceDesk) => setParam("desk", desk),
-    [setParam],
+    (desk: FinanceDesk) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set("desk", desk);
+          next.delete("watch_group");
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+  const setCustomGroupId = useCallback(
+    (id: string | null) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (id) next.set("watch_group", id);
+          else next.delete("watch_group");
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
   );
 
   // The brief the Research desk needs: US, the shared CN brief, or none
@@ -978,9 +1144,9 @@ export default function FinancePage() {
         ? "cn"
         : researchDesk === "hk"
           ? "hk"
-        : researchDesk === "korea"
-          ? "kr"
-          : null;
+          : researchDesk === "korea"
+            ? "kr"
+            : null;
   // Mode threaded into the mode-scoped read endpoints. `undefined` lets the
   // service pick (follows /health.mode); an explicit override forces one.
   const modeParam: FinanceMode | undefined = modeOverride ?? undefined;
@@ -1051,7 +1217,8 @@ export default function FinancePage() {
   // meaningful for markets with their own session (CN via china/hk, KR).
   const [researchRunning, setResearchRunning] = useState(false);
   const runResearch = useCallback(async () => {
-    if (briefMarket !== "cn" && briefMarket !== "hk" && briefMarket !== "kr") return;
+    if (briefMarket !== "cn" && briefMarket !== "hk" && briefMarket !== "kr")
+      return;
     setResearchRunning(true);
     try {
       // Fires a BACKGROUND refresh (a full run does slow yfinance calls, ~1
@@ -1159,7 +1326,9 @@ export default function FinancePage() {
       {activeTab === "research" && (
         <ResearchView
           desk={researchDesk}
+          customGroupId={customGroupId}
           onDeskChange={setResearchDesk}
+          onCustomGroupChange={setCustomGroupId}
           briefs={briefs}
           ft={ft}
           onRunResearch={runResearch}

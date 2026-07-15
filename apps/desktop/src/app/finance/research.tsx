@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type * as React from 'react'
 import { useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import { StatusDot, type StatusTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
+  createResearchWatchlist,
   type FinanceBriefPendingCandidate,
   type FinanceDiscoveryPool,
   type FinanceFreshness,
@@ -14,16 +16,18 @@ import {
   type FinanceProvenanceLink,
   type FinanceRegimeView,
   type FinanceResearchBrief,
+  type FinanceResearchWatchlist,
   type FinanceRiskView,
   type FinanceSignalView,
   type FinanceThemeView,
   getFinanceResearchBrief,
+  getResearchWatchlists,
   postFinanceResearchRun,
   searchFinanceKnowledge
 } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { ExternalLink } from '@/lib/external-link'
-import { AlertTriangle, Bitcoin, Coin, GasStation, Info, Landmark, RefreshCw, Search } from '@/lib/icons'
+import { AlertTriangle, Info, Plus, RefreshCw, Search } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { notify, notifyError } from '@/store/notifications'
 
@@ -47,6 +51,7 @@ import {
 } from './lib'
 import { FinanceCard, FinancePill, FinanceSectionLabel, QuerySection, StatTile } from './primitives'
 import { WATCH_MODULE_IDS, type WatchModuleId, WatchModulePanel } from './watch'
+import { CustomWatchlistPanel } from './watchlists'
 
 // Investment Research — the DEFAULT Finance view (Loop.md §7 Phase 0.5):
 // research and risk awareness are primary; execution stays in the secondary
@@ -87,15 +92,6 @@ const MARKET_GLYPH: Record<string, { color: string; emoji: string }> = {
   japan: { color: '#EC4899', emoji: '🇯🇵' }
 }
 
-// Watch modules use crisp tabler asset marks: a coin for gold, a fuel pump for
-// oil, a bank/landmark for rates & bonds, and the Bitcoin mark for crypto.
-const MODULE_GLYPH: Record<WatchModuleId, { color: string; icon: React.ComponentType<React.SVGProps<SVGSVGElement>> }> = {
-  gold: { color: '#F59E0B', icon: Coin },
-  oil: { color: '#78716C', icon: GasStation },
-  rates: { color: '#0D9488', icon: Landmark },
-  crypto: { color: '#F7931A', icon: Bitcoin }
-}
-
 interface FinanceViewCommonProps {
   bottomBar: React.ReactNode
   enabled: boolean
@@ -108,15 +104,53 @@ export function FinanceResearchView({
 }: FinanceViewCommonProps & { onOpenQueue: () => void }) {
   const { t } = useI18n()
   const copy = t.finance.research
-  const [desk, setDesk] = useRouteEnumParam('desk', RESEARCH_DESKS, 'us')
+  const [desk] = useRouteEnumParam('desk', RESEARCH_DESKS, 'us')
+  const { hash, pathname, search } = useLocation()
+  const navigate = useNavigate()
+  const customGroupId = new URLSearchParams(search).get('watch_group')
+
+  const setCustomGroupId = (id: null | string) => {
+    const params = new URLSearchParams(search)
+
+    if (id) {params.set('watch_group', id)}
+    else {params.delete('watch_group')}
+
+    const query = params.toString()
+    navigate({ hash, pathname, search: query ? `?${query}` : '' }, { replace: true })
+  }
+
+  const selectDesk = (nextDesk: ResearchDesk) => {
+    const params = new URLSearchParams(search)
+
+    if (nextDesk === 'us') {params.delete('desk')}
+    else {params.set('desk', nextDesk)}
+
+    params.delete('watch_group')
+
+    const query = params.toString()
+    navigate({ hash, pathname, search: query ? `?${query}` : '' }, { replace: true })
+  }
+
+  const [creatingGroup, setCreatingGroup] = useState(false)
+  const [newGroupName, setNewGroupName] = useState('')
+
+  const watchlistsQuery = useQuery({
+    enabled,
+    queryFn: getResearchWatchlists,
+    queryKey: financeKey('research', 'watchlists'),
+    retry: 1
+  })
+
+  const customGroups = watchlistsQuery.data ?? []
+  const selectedCustomGroup = customGroups.find(group => group.id === customGroupId) ?? null
   const marketDesk = isMarketDesk(desk)
   const isCnHk = desk === 'china' || desk === 'hk'
   const researchOnly = marketDesk && desk !== 'us'
   const marketKey = desk === 'us' ? 'us' : desk === 'korea' ? 'kr' : desk === 'hk' ? 'hk' : 'cn'
 
   const briefQuery = useQuery({
-    enabled: enabled && marketDesk,
-    queryFn: () => getFinanceResearchBrief(desk === 'us' ? undefined : marketKey as 'cn' | 'hk' | 'kr'),
+    enabled: enabled && marketDesk && !customGroupId,
+    queryFn: () => getFinanceResearchBrief(desk === 'us' ? undefined : (marketKey as 'cn' | 'hk' | 'kr')),
     queryKey: financeKey('research', 'brief', marketKey),
     refetchInterval: BRIEF_POLL_MS,
     retry: 1
@@ -136,12 +170,11 @@ export function FinanceResearchView({
   // session (China/HK → cn, Korea → kr); US is loop-driven, watch modules are
   // cross-asset. Read-only (no orders) so it is ungated.
   const queryClient = useQueryClient()
-  const canRun = marketDesk && desk !== 'us'
+  const canRun = !selectedCustomGroup && marketDesk && desk !== 'us'
 
   const runMutation = useMutation({
     mutationFn: () => postFinanceResearchRun(marketKey as 'cn' | 'hk' | 'kr'),
-    onError: error =>
-      notifyError(error instanceof Error ? error : new Error(String(error)), copy.runResearchFailed),
+    onError: error => notifyError(error instanceof Error ? error : new Error(String(error)), copy.runResearchFailed),
     onSuccess: result => {
       void queryClient.invalidateQueries({ queryKey: financeKey('research', 'brief', marketKey) })
       notify({
@@ -152,16 +185,41 @@ export function FinanceResearchView({
     }
   })
 
+  const createGroupMutation = useMutation({
+    mutationFn: () => createResearchWatchlist(newGroupName),
+    onSuccess: created => {
+      queryClient.setQueryData<FinanceResearchWatchlist[]>(financeKey('research', 'watchlists'), groups => [
+        ...(groups ?? []),
+        created
+      ])
+      setCreatingGroup(false)
+      setNewGroupName('')
+      setCustomGroupId(created.id)
+    }
+  })
+
+  const updateCustomGroup = (updated: FinanceResearchWatchlist) =>
+    queryClient.setQueryData<FinanceResearchWatchlist[]>(financeKey('research', 'watchlists'), groups =>
+      (groups ?? []).map(group => (group.id === updated.id ? updated : group))
+    )
+
+  const deleteCustomGroup = (id: string) => {
+    queryClient.setQueryData<FinanceResearchWatchlist[]>(financeKey('research', 'watchlists'), groups =>
+      (groups ?? []).filter(group => group.id !== id)
+    )
+    setCustomGroupId(null)
+  }
+
   return (
     <MasterDetail>
       <ListColumn>
         <FinanceListGroup label={copy.marketsGroup}>
           {ACTIVE_MARKETS.map(id => (
             <FinanceNavRow
-              active={desk === id}
+              active={!customGroupId && desk === id}
               key={id}
               leading={<FinanceRowGlyph color={MARKET_GLYPH[id].color} emoji={MARKET_GLYPH[id].emoji} />}
-              onSelect={() => setDesk(id)}
+              onSelect={() => selectDesk(id)}
               title={marketLabel[id]}
             />
           ))}
@@ -170,20 +228,73 @@ export function FinanceResearchView({
         <FinanceListGroup label={copy.watchGroup}>
           {WATCH_MODULE_IDS.map(id => (
             <FinanceNavRow
-              active={desk === id}
+              active={!customGroupId && desk === id}
               key={id}
-              leading={<FinanceRowGlyph color={MODULE_GLYPH[id].color} icon={MODULE_GLYPH[id].icon} />}
-              onSelect={() => setDesk(id)}
+              onSelect={() => selectDesk(id)}
               title={t.finance.watch.modules[id]}
             />
           ))}
+        </FinanceListGroup>
+
+        <FinanceListGroup label={t.finance.watch.custom.groupLabel}>
+          {customGroups.map(group => (
+            <FinanceNavRow
+              active={customGroupId === group.id}
+              key={group.id}
+              meta={<span className="text-[0.6rem] text-muted-foreground">{group.members.length}</span>}
+              onSelect={() => setCustomGroupId(group.id)}
+              title={group.name}
+            />
+          ))}
+          {creatingGroup ? (
+            <div className="space-y-2 border-t border-dashed border-(--ui-stroke-tertiary) p-2">
+              <Input
+                autoFocus
+                onChange={event => setNewGroupName(event.target.value)}
+                onKeyDown={event => event.key === 'Enter' && newGroupName.trim() && createGroupMutation.mutate()}
+                placeholder={t.finance.watch.custom.namePlaceholder}
+                value={newGroupName}
+              />
+              <div className="flex gap-2">
+                <Button
+                  disabled={!newGroupName.trim() || createGroupMutation.isPending}
+                  onClick={() => createGroupMutation.mutate()}
+                  size="xs"
+                >
+                  {t.common.confirm}
+                </Button>
+                <Button onClick={() => setCreatingGroup(false)} size="xs" variant="ghost">
+                  {t.common.cancel}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <button
+              className="row-hover flex min-h-11 w-full items-center gap-2 border-t border-dashed border-(--ui-stroke-tertiary) px-2 py-2 text-left text-xs text-muted-foreground"
+              onClick={() => {
+                setNewGroupName(t.finance.watch.custom.newGroup)
+                setCreatingGroup(true)
+              }}
+              type="button"
+            >
+              <Plus className="size-4" />
+              {t.finance.watch.custom.newGroup}
+            </button>
+          )}
         </FinanceListGroup>
       </ListColumn>
 
       {/* The watch desks own the full-bleed K-chart, so drop the centered
           max-w column and let the candles fill the pane edge to edge. */}
-      <DetailColumn actionBar={bottomBar} bleed={!marketDesk}>
-        {marketDesk ? (
+      <DetailColumn actionBar={bottomBar} bleed={Boolean(selectedCustomGroup) || !marketDesk}>
+        {selectedCustomGroup ? (
+          <CustomWatchlistPanel
+            enabled={enabled}
+            group={selectedCustomGroup}
+            onChange={updateCustomGroup}
+            onDelete={deleteCustomGroup}
+          />
+        ) : marketDesk ? (
           <div className="space-y-5">
             {canRun && (
               <div className="flex justify-end">
@@ -281,7 +392,8 @@ function SynthesisSection({ synthesis }: { synthesis: FinanceResearchBrief['cros
       <div className="flex flex-wrap gap-2">
         {Object.values(synthesis.markets).map(market => (
           <FinancePill key={market.market}>
-            {market.market}: {market.available ? `${market.regime ?? 'unknown'} · ${market.freshness_status}` : 'missing'}
+            {market.market}:{' '}
+            {market.available ? `${market.regime ?? 'unknown'} · ${market.freshness_status}` : 'missing'}
           </FinancePill>
         ))}
       </div>
@@ -318,13 +430,19 @@ function DiscoverySection({ pool }: { pool?: FinanceDiscoveryPool | null }) {
             <FinanceCard className="space-y-2" key={candidate.symbol}>
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="text-xs font-semibold text-foreground">#{candidate.rank} {candidate.symbol}</div>
+                  <div className="text-xs font-semibold text-foreground">
+                    #{candidate.rank} {candidate.symbol}
+                  </div>
                   <div className="truncate text-[0.65rem] text-muted-foreground">{candidate.display_name}</div>
                 </div>
                 <FinancePill>{copy.discoveryScore(candidate.score.toFixed(1))}</FinancePill>
               </div>
-              <div className="text-[0.68rem] text-foreground">{candidate.theme} · {candidate.component}</div>
-              <div className="line-clamp-3 text-[0.65rem] leading-5 text-muted-foreground">{candidate.relationship}</div>
+              <div className="text-[0.68rem] text-foreground">
+                {candidate.theme} · {candidate.component}
+              </div>
+              <div className="line-clamp-3 text-[0.65rem] leading-5 text-muted-foreground">
+                {candidate.relationship}
+              </div>
               <div className="flex flex-wrap gap-2">
                 {candidate.evidence.slice(0, 2).map(evidence => (
                   <ExternalLink className="text-[0.62rem] text-primary" href={evidence.url} key={evidence.url}>
@@ -380,7 +498,11 @@ function BriefHeader({ brief, researchOnly }: { brief: FinanceResearchBrief; res
       <span className="text-[0.62rem] tabular-nums text-muted-foreground/70">{copy.briefAsOf(fmtTs(brief.as_of))}</span>
 
       <span className="flex flex-wrap items-center gap-1">
-        <FreshnessPill ageMinutes={freshness.market_age_minutes} label={copy.freshMarket} stale={freshness.market_stale} />
+        <FreshnessPill
+          ageMinutes={freshness.market_age_minutes}
+          label={copy.freshMarket}
+          stale={freshness.market_stale}
+        />
         <FreshnessPill ageMinutes={freshness.news_age_minutes} label={copy.freshNews} stale={freshness.news_stale} />
         <FreshnessPill
           ageMinutes={freshness.portfolio_age_minutes}
@@ -517,7 +639,11 @@ function RiskStatsRow({ stats }: { stats: Record<string, number> }) {
     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
       <StatTile label={account.statClosedWins} value={fmtQty(stats.n_closed)} />
       <StatTile label={account.statWinRate} value={fmtPct(stats.win_rate * 100, 0)} />
-      <StatTile label={account.statExpectancy} tone={pnlClass(stats.expectancy)} value={fmtSignedMoney(stats.expectancy)} />
+      <StatTile
+        label={account.statExpectancy}
+        tone={pnlClass(stats.expectancy)}
+        value={fmtSignedMoney(stats.expectancy)}
+      />
       <StatTile
         label={account.statMaxDrawdown}
         tone={(stats.max_drawdown_pct ?? 0) > 0 ? 'text-destructive' : undefined}
@@ -614,9 +740,7 @@ function MoversColumn({ movers, title }: { movers: FinanceMover[]; title: string
         <div className="flex items-baseline justify-between gap-2 text-xs tabular-nums" key={mover.symbol}>
           <span className="min-w-0 truncate">
             <span className="font-medium text-foreground">{mover.symbol}</span>{' '}
-            {mover.display_name && (
-              <span className="text-[0.62rem] text-muted-foreground">{mover.display_name}</span>
-            )}{' '}
+            {mover.display_name && <span className="text-[0.62rem] text-muted-foreground">{mover.display_name}</span>}{' '}
             <span className="text-[0.62rem] text-muted-foreground/80">{mover.theme}</span>
           </span>
           <span className="flex shrink-0 items-baseline gap-2">
@@ -648,12 +772,7 @@ function ThemesSection({ themes }: { themes: FinanceThemeView[] }) {
           {themes.map(theme => (
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs" key={theme.theme}>
               <span className="font-medium text-foreground">{theme.theme}</span>
-              <span
-                className={cn(
-                  'tabular-nums',
-                  theme.avg_dist_sma50_pct >= 0 ? 'text-primary' : 'text-destructive'
-                )}
-              >
+              <span className={cn('tabular-nums', theme.avg_dist_sma50_pct >= 0 ? 'text-primary' : 'text-destructive')}>
                 {copy.themeMeta(theme.n_symbols, fmtSignedPct(theme.avg_dist_sma50_pct))}
               </span>
               {theme.leaders.length > 0 && (
@@ -911,11 +1030,7 @@ function KnowledgeSearchSection({ enabled }: { enabled: boolean }) {
       <FinanceSectionLabel>{copy.searchTitle}</FinanceSectionLabel>
 
       <form className="flex items-center gap-2" onSubmit={handleSubmit}>
-        <Input
-          onChange={event => setInput(event.target.value)}
-          placeholder={copy.searchPlaceholder}
-          value={input}
-        />
+        <Input onChange={event => setInput(event.target.value)} placeholder={copy.searchPlaceholder} value={input} />
         <Button disabled={!enabled || input.trim().length < 2 || searchQuery.isFetching} size="sm" type="submit">
           <Search className="size-3.5" />
           {copy.searchRun}

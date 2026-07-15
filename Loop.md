@@ -192,6 +192,16 @@ Paper and live share identical schemas (only the `mode` tag differs) so paper-vs
 - **Build — independent CN and HK research:** replace the current shared China/Hong-Kong research session with separate `market_id`, exchange calendar/timezone, index/regime model, universe/scanner inputs, news/theme set, freshness state, schedule, persisted brief history, UI desk and Telegram summary for **CN** and **HK**. Cross-border themes, Stock Connect flows and shared supply chains belong in an explicit China↔HK synthesis section built from the two completed briefs; they must not make one market silently inherit the other's regime or freshness.
 - **Exit ⛔ Review Gate:** upstream sync merged + reported; IBKR-paper dry run clean; a guardrail audit passes end-to-end; runbook + kill switch verified; **human sign-off** to enter Phase 1. In addition, identical scanner inputs reproduce the same ranked discovery set with provenance, no unresolved symbol reaches research, no discovered symbol reaches execution without all normal gates, and CN/HK briefs can run/fail/recover independently without cross-market state contamination.
 
+### Phase 0.96 — Personal research watchlists & broader crypto coverage — human decision 2026-07-15
+- **Goal:** turn Research → Watch into a durable, operator-curated research workspace. The user can organize instruments into named groups across markets, while the system expands crypto observation without implying that any token preserves value or granting the watchlist trading authority.
+- **Hermes-native page design:** keep the existing Research master-detail shell, monochrome tokens, typography, cards, buttons, Lucide icon language, loading/error/empty states and translations. In the left **Watch** section, show existing system modules first, then user groups, and finish with one dashed secondary action named **`新自选组`**. Selecting a group opens its detail canvas; do not add a new top-level Finance tab or a second visual system.
+- **Group interaction:** a new group starts with the editable name `新自选组` (use a unique numeric suffix only when needed). The user may rename, reorder and delete groups. A group header shows its name, instrument count and one search/add control. If the name remains untouched, the UI may suggest a concise name from the resolved members, but must never overwrite a custom name. Deletion requires confirmation; removing a member offers undo and does not alter holdings, Ledger history or system watchlists.
+- **Instrument picker:** search by partial ticker or company/fund name and resolve to a canonical instrument before adding. Each result shows display name, canonical symbol, market/exchange, currency and security type; ambiguous symbols require a choice rather than suffix guessing. Support US, HK, mainland CN, KR and crypto in the same group. Added members receive their verified display name automatically; duplicates are blocked within one group but allowed across different groups. The picker has **Search** and **Held positions** sources, with the latter recommending instruments from the authoritative real-portfolio holdings by default (paper holdings remain explicitly separate). Multi-select add is supported.
+- **Group detail/navigation:** when a group has multiple instruments, use the same compact dropdown/selector pattern as existing Watch modules to switch the active symbol; persist `group` and `symbol` in the URL so refresh/back navigation restores context. Desktop/Web use the same API and interaction contract. Desktop keeps the existing left master list; narrow Web/Desktop layouts collapse groups into a selector and open create/edit flows in a sheet, with ≥44px targets, keyboard navigation, visible focus, no horizontal page scroll and no color-only status.
+- **Persistence and monitoring contract:** store user groups and members in the Finance service's durable SQLite state (`WatchlistGroup` + `WatchlistMember`, versioned and owner/profile scoped), never browser-local storage. Authenticated versioned CRUD APIs serve both Web and Desktop. Custom members join the lightweight quote/news/freshness observation layer and on-demand analysis, but do **not** silently enlarge the order universe, change risk roles or enter the candidate queue; deeper scheduled analysis must be explicit and budgeted. All names/symbols retain resolver source and as-of metadata, and data survives image rebuilds.
+- **Crypto research coverage:** separate research visibility from broker permission. The initial liquid/durable core is `BTC-USD` and `ETH-USD`; the higher-risk major-network set is `SOL-USD`, `BNB-USD`, `XRP-USD` and `ADA-USD`; `USDT-USD` and `USDC-USD` are peg/counterparty-risk monitors, not return assets. A deterministic **resilience** view may compare market-cap rank, 24h liquidity, asset age, 30/90/365-day return, realized volatility, max drawdown, distance from ATH and stablecoin peg deviation, always with source/as-of and methodology. Never label the score or any token as guaranteed “保值”. Trading remains disabled until a supported broker/venue, custody and permission path is independently approved.
+- **Exit / acceptance:** users can create/rename/reorder/delete groups; add/remove/reorder resolved multi-market members; multi-add from search or real holdings; recover the same state after service/image restart; deep-link to the selected group/symbol; and see clear stale/error/ambiguous states. Web/Desktop behavior and translations match, CRUD and resolver contracts are tested, crypto metrics are provenance/freshness tested, and no custom-watchlist or crypto path can approve or place an order.
+
 ### Phase 1 — Shadow & tiny live (AFTER IBKR opens & funds)
 - **Goal:** implement `IBKRBroker` (ib_async); run on **IBKR paper first**, then **tiny real money (a few hundred USD)**.
 - **Target:** quantify the **sim→real gap** (slippage, fill quality, timing) using paper-vs-live ledger comparison.
@@ -325,6 +335,15 @@ Python 3.11 · `ib_async` (later) · `alpaca-py` (optional) · `yfinance` · `pa
 - [x] Confirmation recovery is durable: pre-cutoff restarts restore cards/versions, post-cutoff restarts re-quote/re-risk and submit idempotently, a 12:00 ET watchdog warns/retries, and unplaced approvals expire with `missed execution` audit at the close.
 - [ ] Exit evidence remains external: complete the uninterrupted US paper day, real IBKR Paper dry run and human go-live sign-off before Phase 1.
 
+### Phase 0.96 backlog — personal research watchlists and crypto observation
+
+- [x] Added rebuild-safe SQLite research groups/members and versioned CRUD while keeping them completely separate from the trading universe.
+- [x] Extended canonical search to US/HK/CN/KR/crypto, added verified names and real-holdings recommendations, and blocked duplicates within a group.
+- [x] Built the Hermes-native Web/Desktop flow — semantic system icons, uniform custom-group icon, `新自选组`, rename/delete/add/remove, group deep link, existing Watch chart/analysis reuse and maintained translations.
+- [x] Expanded crypto Research to BTC/ETH, SOL/BNB/XRP/ADA and USDT/USDC peg monitors; all remain disabled for automatic trading.
+- [ ] Complete advanced group semantics: owner/profile scoping, reorder, optimistic concurrency, multi-add, member undo, symbol-level URL restoration and compact narrow-layout selector.
+- [ ] Add sourced crypto resilience metrics plus scheduled quote/news/freshness monitoring; verify provenance, accessibility and no-order-authority E2E.
+
 ---
 
 ## 11. Watchlist universe (monitored set, NOT a buy list)
@@ -343,7 +362,7 @@ Each symbol is tagged `{theme, ai_phase(infra|memory|network|power|application|c
 - **F. AI application / software / cloud** (the 2–3y upcycle to watch early) — hyperscalers `MSFT`, `AMZN`, `GOOGL`, `META`, `ORCL`; software/SaaS `PLTR`, `NOW`, `CRM`, `SNOW`, `DDOG`, `CRWD`, `ADBE`; software/cloud ETFs `IGV`, `WCLD`, `SKYY`.
 - **G. Rotation / rate-sensitive upcycle** — biotech `XBI`, `IBB` (benefit as rates fall); optional small-caps `IWM`.
 - **H. Hedges / diversifiers** (uncorrelated to the AI bet) — energy/oil&gas `XLE`, `XOP`, `XOM`, `CVX`; gold `GLD`/`IAU`; long/mid bonds `TLT`, `IEF`.
-- **I. Crypto** (only after OSL permission + API support confirmed) — `BTC`, `ETH`.
+- **I. Crypto research universe** (observation is allowed; execution remains disabled until venue/custody/permission approval) — liquid/durable core `BTC-USD`, `ETH-USD`; higher-risk major networks `SOL-USD`, `BNB-USD`, `XRP-USD`, `ADA-USD`; peg/counterparty monitors `USDT-USD`, `USDC-USD`. Rank by transparent resilience/liquidity metrics with source/as-of; never present “保值” as a guarantee.
 
 ---
 
@@ -375,6 +394,8 @@ Each symbol is tagged `{theme, ai_phase(infra|memory|network|power|application|c
 
 ## 13. Progress log (building agent appends; newest first)
 
+- 2026-07-15 — **Phase 0.96 foundation built.** Added durable personal research groups, multi-market/crypto resolution, holdings recommendations and matching Web/Desktop Watch workspaces with semantic asset icons; advanced ordering/profile/metrics work remains tracked.
+- 2026-07-15 — **Phase 0.96 specified.** Designed persistent multi-market personal Research groups with a `新自选组` entry, canonical symbol search/held-position recommendations, shared Web/Desktop UX and research-only expanded crypto observation.
 - 2026-07-15 — **Durable approval execution.** Added restart-safe confirmation restoration, candidate-correlated idempotent orders, pre-cutoff warning, intraday retry and close-time `EXPIRED / missed execution` audit without replaying stale approvals.
 - 2026-07-15 — **Phase 0.95 local build.** Added provenance-gated dynamic discovery, independent CN/HK sessions and explicit cross-market synthesis across API, Web, Desktop and Telegram; external paper-day/IBKR/human exit evidence remains pending.
 - 2026-07-14 — **CI and analysis-date integrity.** Restored cross-platform lockfile dependencies, cleared repository lint failures and surfaced each signal's source-bar timestamp across API, brief, Web and Desktop.

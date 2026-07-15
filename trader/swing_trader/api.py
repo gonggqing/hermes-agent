@@ -84,6 +84,9 @@ class FinanceRuntime:
     instrument_search: Any = None  # CachedInstrumentSearch | None
     portfolio: Any = None  # swing_trader.portfolio_journal.PortfolioJournal | None
     portfolio_drafts: Any = None  # swing_trader.portfolio_draft.PortfolioDraftService
+    # Phase 0.96: user-defined, research-only watchlist groups.  Kept separate
+    # from watchlist.UNIVERSE so adding a symbol cannot affect trading.
+    research_watchlists: Any = None  # ResearchWatchlistStore | None
     # Phase 0.9 (missed-session catch-up): manual trading-session trigger.
     run_session: Any = None  # Callable[[], dict] — loop.run_session_now
     finalize_session: Any = None  # Callable[[], dict] — loop.finalize_session_now
@@ -116,6 +119,19 @@ class ActionRequest(BaseModel):
     # Fallback for clients whose transport cannot set custom headers (the
     # Desktop IPC bridge forwards only method/body). Header wins when set.
     surface: Optional[str] = None
+
+
+class ResearchWatchlistCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+class ResearchWatchlistMemberRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=32)
+    display_name: str = Field(default="", max_length=160)
+    market: Optional[str] = Field(default=None, max_length=16)
+    exchange: Optional[str] = Field(default=None, max_length=32)
+    currency: Optional[str] = Field(default=None, max_length=12)
+    security_type: Optional[str] = Field(default=None, max_length=24)
 
 
 _RESULT_HTTP: dict[ResultCode, int] = {
@@ -275,8 +291,7 @@ def create_app(runtime: FinanceRuntime):
                 "as_of": h.as_of.isoformat(),
                 "warnings": list(h.warnings),
                 "checks": [
-                    {"name": c.name, "level": c.level.value, "detail": c.detail}
-                    for c in h.checks
+                    {"name": c.name, "level": c.level.value, "detail": c.detail} for c in h.checks
                 ],
             }
         # Phase 0.95: the operator kill-switch state (cheap filesystem check) so
@@ -331,8 +346,7 @@ def create_app(runtime: FinanceRuntime):
 
     @app.get(f"/{API_VERSION}/fills")
     def fills(mode: Optional[str] = Query(default=None)) -> list[dict]:
-        return [f.model_dump(mode="json")
-                for f in runtime.ledger.get_fills(_mode(mode))]
+        return [f.model_dump(mode="json") for f in runtime.ledger.get_fills(_mode(mode))]
 
     @app.get(f"/{API_VERSION}/trades")
     def trades(
@@ -340,11 +354,15 @@ def create_app(runtime: FinanceRuntime):
         open_only: bool = Query(default=False),
     ) -> list[dict]:
         rows = runtime.ledger.get_trades(_mode(mode), open_only=open_only)
-        return [t.__dict__ | {
-            "mode": t.mode.value,
-            "entry_ts": t.entry_ts.isoformat(),
-            "exit_ts": t.exit_ts.isoformat() if t.exit_ts else None,
-        } for t in rows]
+        return [
+            t.__dict__
+            | {
+                "mode": t.mode.value,
+                "entry_ts": t.entry_ts.isoformat(),
+                "exit_ts": t.exit_ts.isoformat() if t.exit_ts else None,
+            }
+            for t in rows
+        ]
 
     @app.get(f"/{API_VERSION}/stats")
     def stats(mode: Optional[str] = Query(default=None)) -> dict:
@@ -366,9 +384,7 @@ def create_app(runtime: FinanceRuntime):
         try:
             return store.get_latest(market_key)
         except Exception:  # noqa: BLE001 — corrupt archive degrades honestly
-            logger.warning(
-                "latest brief archive read failed", extra={"market": market_key}
-            )
+            logger.warning("latest brief archive read failed", extra={"market": market_key})
             return None
 
     def _market_from_brief(brief: object) -> Optional[dict]:
@@ -386,9 +402,7 @@ def create_app(runtime: FinanceRuntime):
 
         payload = dict(regime)
         freshness = brief.get("freshness")
-        market_as_of = (
-            freshness.get("market_as_of") if isinstance(freshness, dict) else None
-        )
+        market_as_of = freshness.get("market_as_of") if isinstance(freshness, dict) else None
         ts = market_as_of or brief.get("as_of")
         if ts:
             payload["ts"] = ts
@@ -419,6 +433,119 @@ def create_app(runtime: FinanceRuntime):
     def get_watchlist() -> list[dict]:
         return [i.model_dump(mode="json") for i in watchlist_mod.UNIVERSE]
 
+    def _need_research_watchlists():
+        if runtime.research_watchlists is None:
+            raise HTTPException(503, "research watchlists not available")
+        return runtime.research_watchlists
+
+    @app.get(f"/{API_VERSION}/research/watchlists")
+    def research_watchlists() -> list[dict]:
+        """User-created research groups; never part of the trading universe."""
+        return [
+            group.model_dump(mode="json") for group in _need_research_watchlists().list_groups()
+        ]
+
+    @app.post(f"/{API_VERSION}/research/watchlists", status_code=201)
+    def create_research_watchlist(body: ResearchWatchlistCreateRequest) -> dict:
+        try:
+            group = _need_research_watchlists().create_group(body.name)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return group.model_dump(mode="json")
+
+    @app.patch(f"/{API_VERSION}/research/watchlists/{{group_id}}")
+    def rename_research_watchlist(group_id: str, body: ResearchWatchlistCreateRequest) -> dict:
+        try:
+            group = _need_research_watchlists().rename_group(group_id, body.name)
+        except KeyError as exc:
+            raise HTTPException(404, f"unknown watchlist {group_id!r}") from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return group.model_dump(mode="json")
+
+    @app.delete(f"/{API_VERSION}/research/watchlists/{{group_id}}")
+    def delete_research_watchlist(group_id: str) -> dict:
+        if not _need_research_watchlists().delete_group(group_id):
+            raise HTTPException(404, f"unknown watchlist {group_id!r}")
+        return {"ok": True}
+
+    @app.post(
+        f"/{API_VERSION}/research/watchlists/{{group_id}}/members",
+        status_code=201,
+    )
+    def add_research_watchlist_member(group_id: str, body: ResearchWatchlistMemberRequest) -> dict:
+        try:
+            group = _need_research_watchlists().add_member(
+                group_id,
+                symbol=body.symbol,
+                display_name=body.display_name,
+                market=body.market,
+                exchange=body.exchange,
+                currency=body.currency,
+                security_type=body.security_type,
+            )
+        except KeyError as exc:
+            raise HTTPException(404, f"unknown watchlist {group_id!r}") from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return group.model_dump(mode="json")
+
+    @app.delete(f"/{API_VERSION}/research/watchlists/{{group_id}}/members/{{symbol:path}}")
+    def remove_research_watchlist_member(group_id: str, symbol: str) -> dict:
+        try:
+            group = _need_research_watchlists().remove_member(group_id, symbol)
+        except KeyError as exc:
+            raise HTTPException(404, f"unknown watchlist {group_id!r}") from exc
+        return group.model_dump(mode="json")
+
+    @app.get(f"/{API_VERSION}/research/watchlists/recommendations/holdings")
+    def research_watchlist_holding_recommendations() -> list[dict]:
+        """Deduplicated held symbols for the add-member picker.
+
+        The endpoint is read-only and intentionally returns no trading status;
+        selecting a recommendation only adds it to a research group.
+        """
+        if runtime.portfolio is None:
+            return []
+        aggregate = runtime.portfolio.aggregate()
+        names = _symbol_names()
+        # Imported opening balances can predate name capture.  Resolve bare OTC
+        # fund names from the same NAV source used by valuation; parallelism
+        # keeps opening the picker bounded, and CachedNavProvider prevents
+        # repeated network work on subsequent opens.
+        unresolved = [
+            holding.symbol
+            for holding in aggregate.holdings
+            if holding.qty > 0
+            and not names.get(holding.symbol)
+            and holding.symbol.isdigit()
+            and len(holding.symbol) == 6
+        ]
+        if unresolved and runtime.nav_provider is not None:
+            from concurrent.futures import ThreadPoolExecutor
+
+            def resolve_fund_name(symbol: str) -> tuple[str, str]:
+                try:
+                    quote = runtime.nav_provider.get_nav(symbol)
+                    return symbol, (quote.name.strip() if quote and quote.name else "")
+                except Exception:  # metadata is cosmetic; retain code fallback
+                    return symbol, ""
+
+            with ThreadPoolExecutor(max_workers=min(6, len(unresolved))) as pool:
+                for symbol, name in pool.map(resolve_fund_name, unresolved):
+                    if name:
+                        names[symbol] = name
+        return [
+            {
+                "symbol": holding.symbol,
+                "display_name": names.get(holding.symbol, holding.symbol),
+                "market": holding.market.value if holding.market else None,
+                "currency": holding.currency,
+            }
+            for holding in aggregate.holdings
+            if holding.qty > 0
+        ]
+
     @app.get(f"/{API_VERSION}/reports/latest")
     def latest_reports() -> dict:
         return runtime.latest_reports
@@ -436,15 +563,13 @@ def create_app(runtime: FinanceRuntime):
             return payload
         from swing_trader.research_synthesis import build_cn_hk_synthesis
 
-        cn = payload if key == "cn" else (runtime.latest_briefs.get("cn") or
-                                          _archived_brief("cn"))
-        hk = payload if key == "hk" else (runtime.latest_briefs.get("hk") or
-                                          _archived_brief("hk"))
+        cn = payload if key == "cn" else (runtime.latest_briefs.get("cn") or _archived_brief("cn"))
+        hk = payload if key == "hk" else (runtime.latest_briefs.get("hk") or _archived_brief("hk"))
         return {
             **payload,
-            "cross_market_synthesis": build_cn_hk_synthesis(
-                cn, hk, now=runtime.clock()
-            ).model_dump(mode="json"),
+            "cross_market_synthesis": build_cn_hk_synthesis(cn, hk, now=runtime.clock()).model_dump(
+                mode="json"
+            ),
         }
 
     @app.get(f"/{API_VERSION}/research/brief")
@@ -459,7 +584,8 @@ def create_app(runtime: FinanceRuntime):
         if key in _RESEARCH_MARKETS:
             # Prefer the per-market slot; keep CN's legacy slot as a fallback.
             cached = runtime.latest_briefs.get(key) or (
-                runtime.latest_brief_cn if key == "cn" else None)
+                runtime.latest_brief_cn if key == "cn" else None
+            )
             if cached:
                 return _with_cn_hk_synthesis(key, cached)
             archived = _archived_brief(key)
@@ -472,8 +598,12 @@ def create_app(runtime: FinanceRuntime):
 
             tz_name, label = _RESEARCH_MARKETS[key]
             brief = build_research_brief(
-                runtime.ledger, runtime.mode, now=runtime.clock(),
-                signals=[], candidates=[], include_account=False,
+                runtime.ledger,
+                runtime.mode,
+                now=runtime.clock(),
+                signals=[],
+                candidates=[],
+                include_account=False,
                 trading_tz=ZoneInfo(tz_name),
                 extra_uncertainty=[
                     f"{label} research session has not run yet today — "
@@ -488,9 +618,7 @@ def create_app(runtime: FinanceRuntime):
         if archived:
             runtime.latest_brief = archived
             return archived
-        brief = build_research_brief(
-            runtime.ledger, runtime.mode, now=runtime.clock()
-        )
+        brief = build_research_brief(runtime.ledger, runtime.mode, now=runtime.clock())
         return brief.model_dump(mode="json")
 
     @app.post(f"/{API_VERSION}/research/run")
@@ -508,8 +636,10 @@ def create_app(runtime: FinanceRuntime):
         fn = runtime.run_research.get(key)
         if fn is None:
             raise HTTPException(
-                404, f"no research session for market {market!r} "
-                     f"(available: {sorted(runtime.run_research) or 'none'})")
+                404,
+                f"no research session for market {market!r} "
+                f"(available: {sorted(runtime.run_research) or 'none'})",
+            )
         if key in runtime.research_running:
             return {"status": "already_running", "market": key}
         runtime.research_running.add(key)
@@ -523,8 +653,11 @@ def create_app(runtime: FinanceRuntime):
                 runtime.research_running.discard(key)
 
         threading.Thread(target=_run, daemon=True, name=f"research-run-{key}").start()
-        return {"status": "started", "market": key,
-                "note": "research refreshing in the background (~1 min)"}
+        return {
+            "status": "started",
+            "market": key,
+            "note": "research refreshing in the background (~1 min)",
+        }
 
     @app.get(f"/{API_VERSION}/research/synthesis")
     def research_synthesis() -> dict:
@@ -558,8 +691,7 @@ def create_app(runtime: FinanceRuntime):
                 raise HTTPException(422, "market is required with date")
             payload = runtime.brief_store.get_by_date(market, date)
             if payload is None:
-                raise HTTPException(
-                    404, f"no {market!r} brief archived for {date!r}")
+                raise HTTPException(404, f"no {market!r} brief archived for {date!r}")
             return {"brief": payload}
         return {"snapshots": runtime.brief_store.list_snapshots(market, limit)}
 
@@ -636,7 +768,8 @@ def create_app(runtime: FinanceRuntime):
 
         try:
             result = analyze_symbol(
-                runtime.feed, symbol,
+                runtime.feed,
+                symbol,
                 fundamentals=runtime.fundamentals,
                 llm_analyst=runtime.llm_analyst,
                 knowledge=runtime.knowledge,
@@ -660,14 +793,26 @@ def create_app(runtime: FinanceRuntime):
         Returns available=False when no source is configured/reachable, so the
         Finance chart falls back to its derived GC=F×CNY value."""
         if runtime.gold_provider is None:
-            return {"symbol": symbol.upper(), "available": False,
-                    "note": "no domestic-gold source configured (chart uses derived AU9999)"}
+            return {
+                "symbol": symbol.upper(),
+                "available": False,
+                "note": "no domestic-gold source configured (chart uses derived AU9999)",
+            }
         q = runtime.gold_provider.get_spot(symbol)
         if q is None:
-            return {"symbol": symbol.upper(), "available": False,
-                    "note": "domestic-gold source unreachable (chart uses derived AU9999)"}
-        return {"symbol": q.symbol, "available": True, "price": q.price,
-                "unit": "CNY/gram", "as_of": q.as_of.isoformat(), "source": q.source}
+            return {
+                "symbol": symbol.upper(),
+                "available": False,
+                "note": "domestic-gold source unreachable (chart uses derived AU9999)",
+            }
+        return {
+            "symbol": q.symbol,
+            "available": True,
+            "price": q.price,
+            "unit": "CNY/gram",
+            "as_of": q.as_of.isoformat(),
+            "source": q.source,
+        }
 
     @app.get(f"/{API_VERSION}/instruments/search")
     def instruments_search(
@@ -708,9 +853,7 @@ def create_app(runtime: FinanceRuntime):
         from swing_trader.knowledge_pipeline import search_knowledge
 
         try:
-            return search_knowledge(
-                runtime.knowledge, runtime.knowledge_index, q, k=k
-            )
+            return search_knowledge(runtime.knowledge, runtime.knowledge_index, q, k=k)
         except KnowledgeUnavailable as exc:
             raise HTTPException(503, f"knowledge index unavailable: {exc}")
 
@@ -733,8 +876,11 @@ def create_app(runtime: FinanceRuntime):
             return []
         now = runtime.clock()
         return [
-            {"candidate": c.model_dump(mode="json"), "version": v,
-             "window_open": svc.in_window(now)}
+            {
+                "candidate": c.model_dump(mode="json"),
+                "version": v,
+                "window_open": svc.in_window(now),
+            }
             for c, v in svc.pending()
         ]
 
@@ -781,8 +927,7 @@ def create_app(runtime: FinanceRuntime):
             "code": result.code.value,
             "message": result.message,
             "version": result.version,
-            "candidate": result.candidate.model_dump(mode="json")
-            if result.candidate else None,
+            "candidate": result.candidate.model_dump(mode="json") if result.candidate else None,
         }
         return JSONResponse(payload, status_code=_RESULT_HTTP[result.code])
 
@@ -798,8 +943,9 @@ def create_app(runtime: FinanceRuntime):
             raise HTTPException(503, "portfolio draft service not available")
         return runtime.portfolio_drafts
 
-    def _resolve_surface(header: Optional[str], body_surface: Optional[str],
-                         default: str = "web") -> str:
+    def _resolve_surface(
+        header: Optional[str], body_surface: Optional[str], default: str = "web"
+    ) -> str:
         raw = header or body_surface or default
         try:
             return Surface(raw).value
@@ -1180,26 +1326,37 @@ def create_app(runtime: FinanceRuntime):
 
     @app.post(f"/{API_VERSION}/portfolio/drafts/{{draft_id}}/action")
     def portfolio_draft_action(
-        draft_id: str, body: PortfolioDraftAction,
+        draft_id: str,
+        body: PortfolioDraftAction,
         x_finance_surface: Optional[str] = Header(default=None),
     ):
         svc = _need_drafts()
         surface = _resolve_surface(x_finance_surface, body.surface)
         if body.action == "confirm":
             result = svc.confirm_draft(
-                draft_id, actor=body.actor, surface=surface,
+                draft_id,
+                actor=body.actor,
+                surface=surface,
                 idempotency_key=body.idempotency_key,
-                expected_version=body.expected_version, now=runtime.clock())
+                expected_version=body.expected_version,
+                now=runtime.clock(),
+            )
         elif body.action == "edit":
             result = svc.edit_draft(
-                draft_id, actor=body.actor, surface=surface,
-                edits=body.edits or {}, expected_version=body.expected_version)
+                draft_id,
+                actor=body.actor,
+                surface=surface,
+                edits=body.edits or {},
+                expected_version=body.expected_version,
+            )
         else:  # reject
             result = svc.reject_draft(
-                draft_id, actor=body.actor, surface=surface,
-                idempotency_key=body.idempotency_key)
+                draft_id, actor=body.actor, surface=surface, idempotency_key=body.idempotency_key
+            )
         payload = {
-            "ok": result.ok, "code": result.code.value, "message": result.message,
+            "ok": result.ok,
+            "code": result.code.value,
+            "message": result.message,
             "version": result.version,
             "draft": result.draft.model_dump(mode="json") if result.draft else None,
             "event": result.event.model_dump(mode="json") if result.event else None,
@@ -1417,10 +1574,21 @@ def create_app(runtime: FinanceRuntime):
     ) -> dict:
         pf = _need_portfolio()
         _resolve_surface(x_finance_surface, None)  # validate surface
-        m = pf.set_mark(body.symbol, body.price, currency=body.currency,
-                        source=body.source, actor=body.actor, as_of=runtime.clock())
-        return {"symbol": m.symbol, "price": m.price, "currency": m.currency,
-                "as_of": m.as_of.isoformat(), "source": m.source}
+        m = pf.set_mark(
+            body.symbol,
+            body.price,
+            currency=body.currency,
+            source=body.source,
+            actor=body.actor,
+            as_of=runtime.clock(),
+        )
+        return {
+            "symbol": m.symbol,
+            "price": m.price,
+            "currency": m.currency,
+            "as_of": m.as_of.isoformat(),
+            "source": m.source,
+        }
 
     @app.post(f"/{API_VERSION}/portfolio/marks/refresh")
     def portfolio_refresh_marks() -> dict:
@@ -1435,12 +1603,23 @@ def create_app(runtime: FinanceRuntime):
             base = sym.split(".")[0]
             quotable = sym.endswith((".SS", ".SZ", ".HK")) or base.isalpha()
             if quotable:
-                ccy = ("CNY" if sym.endswith((".SS", ".SZ"))
-                       else "HKD" if sym.endswith(".HK") else "USD")
+                ccy = (
+                    "CNY"
+                    if sym.endswith((".SS", ".SZ"))
+                    else "HKD"
+                    if sym.endswith(".HK")
+                    else "USD"
+                )
                 try:
                     q = runtime.feed.get_quote(sym)
-                    pf.set_mark(sym, q.last, currency=ccy, source="live",
-                                actor="system", as_of=runtime.clock())
+                    pf.set_mark(
+                        sym,
+                        q.last,
+                        currency=ccy,
+                        source="live",
+                        actor="system",
+                        as_of=runtime.clock(),
+                    )
                     refreshed.append(sym)
                 except Exception:  # noqa: BLE001 — one bad symbol must not fail the batch
                     failed.append(sym)
@@ -1453,8 +1632,9 @@ def create_app(runtime: FinanceRuntime):
                 except Exception:  # noqa: BLE001
                     nav = None
             if nav is not None:
-                pf.set_mark(sym, nav.price, currency="CNY", source="live",
-                            actor="system", as_of=nav.as_of)
+                pf.set_mark(
+                    sym, nav.price, currency="CNY", source="live", actor="system", as_of=nav.as_of
+                )
                 refreshed.append(sym)
             else:
                 skipped.append(sym)  # no NAV source / lookup failed
@@ -1552,15 +1732,20 @@ def create_app(runtime: FinanceRuntime):
         if runtime.execution is None:
             raise HTTPException(503, "execution engine not attached")
         surface = _human_session(x_finance_surface, body.surface, body.actor)
-        cancelled = runtime.execution.cancel_all_orders(
-            include_protection=body.include_protection
-        )
+        cancelled = runtime.execution.cancel_all_orders(include_protection=body.include_protection)
         return {
             "actor": body.actor,
             "surface": surface,
             "include_protection": body.include_protection,
-            "cancelled": [{"id": o.id, "symbol": o.symbol, "side": o.side.value,
-                           "order_type": o.order_type.value} for o in cancelled],
+            "cancelled": [
+                {
+                    "id": o.id,
+                    "symbol": o.symbol,
+                    "side": o.side.value,
+                    "order_type": o.order_type.value,
+                }
+                for o in cancelled
+            ],
             "n_cancelled": len(cancelled),
         }
 
