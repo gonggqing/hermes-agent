@@ -2978,6 +2978,11 @@ class TelegramAdapter(BasePlatformAdapter):
         if home and self._is_telegram_group_id(getattr(home, "chat_id", None)):
             groups.add(str(home.chat_id))
         for env_name in (
+            # This local Finance deployment uses one shared group destination
+            # for the general and finance bots. Keep the generic destination
+            # key alongside Hermes' standard routing keys so startup sticker
+            # sync does not depend on a prior persisted group session.
+            "TELEGRAM_CHAT_ID",
             "TELEGRAM_GROUP_ALLOWED_CHATS",
             "TELEGRAM_FREE_RESPONSE_CHATS",
         ):

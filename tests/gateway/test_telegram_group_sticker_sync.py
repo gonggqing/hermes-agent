@@ -81,7 +81,8 @@ def test_top_level_sticker_config_is_forwarded_to_adapter():
     assert extras["stickers"]["auto_import_group_set"] is True
 
 
-def test_previously_seen_group_is_discovered_from_session_store():
+def test_previously_seen_group_is_discovered_from_session_store(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
     adapter = _adapter()
     adapter._session_store = SimpleNamespace(list_sessions=lambda: [
         SimpleNamespace(origin=SimpleNamespace(
@@ -96,3 +97,10 @@ def test_previously_seen_group_is_discovered_from_session_store():
     ])
 
     assert adapter._configured_sticker_group_ids() == {"-100456"}
+
+
+def test_shared_telegram_chat_id_is_a_startup_group(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "-100789")
+    adapter = _adapter()
+
+    assert "-100789" in adapter._configured_sticker_group_ids()
