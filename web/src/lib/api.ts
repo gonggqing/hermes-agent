@@ -3309,7 +3309,9 @@ export interface FinanceResearchWatchlistRecommendation {
   symbol: string;
   display_name: string;
   market: string | null;
+  exchange: string;
   currency: string | null;
+  security_type: "etf" | "stock";
 }
 
 /** kind -> plain-text report (e.g. ``{morning: "..."}``). */

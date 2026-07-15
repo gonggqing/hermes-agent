@@ -21,7 +21,6 @@ import pytest
 from swing_trader.datafeed import (
     MARKET_PROXY_SYMBOL,
     DataFeedError,
-    FundAwareFeed,
     RetryingFeed,
     StubPaidFeed,
     YFinanceFeed,
@@ -220,52 +219,6 @@ def test_chart_only_fails_fast_without_calling_yfinance_fallback() -> None:
     with pytest.raises(DataFeedError, match="chart quote path failed"):
         feed.get_quote("GLD")
     assert requested == []
-
-
-def test_fund_aware_feed_routes_bare_fund_without_touching_market_feed() -> None:
-    class Market:
-        def get_quote(self, symbol):
-            raise AssertionError(symbol)
-
-        def get_bars(self, symbol, timeframe="1d", limit=100):
-            raise AssertionError(symbol)
-
-        def get_news(self, symbol=None, limit=20):
-            raise AssertionError(symbol)
-
-    class History:
-        def get_bars(self, code, timeframe, limit):
-            assert (code, timeframe, limit) == ("017470", "1d", 2)
-            return [
-                Bar(
-                    symbol=code,
-                    ts=datetime(2026, 7, 14, tzinfo=UTC),
-                    open=3.5,
-                    high=3.5,
-                    low=3.5,
-                    close=3.5,
-                    volume=0,
-                )
-            ]
-
-    feed = FundAwareFeed(Market(), History())
-    assert feed.get_bars("017470", "1d", 2)[0].close == 3.5
-    assert feed.get_news("017470") == []
-
-
-def test_fund_aware_feed_delegates_exchange_symbols() -> None:
-    class Market:
-        def get_quote(self, symbol):
-            return Quote(symbol=symbol, ts=datetime(2026, 7, 14, tzinfo=UTC), last=4.2)
-
-        def get_bars(self, symbol, timeframe="1d", limit=100):
-            return []
-
-        def get_news(self, symbol=None, limit=20):
-            return []
-
-    feed = FundAwareFeed(Market(), object())
-    assert feed.get_quote("510300.SS").last == 4.2
 
 
 # --------------------------------------------------------------------------- get_bars

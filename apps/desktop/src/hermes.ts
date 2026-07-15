@@ -1406,7 +1406,9 @@ export interface FinanceResearchWatchlistRecommendation {
   symbol: string
   display_name: string
   market: null | string
+  exchange: string
   currency: null | string
+  security_type: 'etf' | 'stock'
 }
 
 export interface FinanceCandidate {

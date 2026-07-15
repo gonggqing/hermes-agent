@@ -26,7 +26,7 @@ from swing_trader.schemas import utcnow
 
 logger = get_logger(__name__)
 
-__all__ = ["DataFeedError", "FundAwareFeed", "RetryingFeed", "StubPaidFeed", "YFinanceFeed"]
+__all__ = ["DataFeedError", "RetryingFeed", "StubPaidFeed", "YFinanceFeed"]
 
 #: Ticker used for market-wide news when no symbol is given (Loop.md §11.A).
 MARKET_PROXY_SYMBOL = "SPY"
@@ -66,49 +66,6 @@ _YAHOO_CHART_URL = "https://query2.finance.yahoo.com/v8/finance/chart/{symbol}"
 
 class DataFeedError(Exception):
     """Raised when a data source cannot provide the requested data."""
-
-
-class FundAwareFeed(DataFeed):
-    """Route bare Chinese OTC fund codes to a NAV-history provider.
-
-    Yahoo is still authoritative for exchange instruments.  This adapter only
-    intercepts symbols that are unambiguously bare six-digit fund codes, so an
-    exchange ticker with ``.SS``/``.SZ`` continues through the regular feed.
-    """
-
-    def __init__(self, market_feed: DataFeed, fund_history: Any) -> None:
-        self._market = market_feed
-        self._fund_history = fund_history
-
-    @staticmethod
-    def _is_fund(symbol: str) -> bool:
-        from swing_trader.fund_nav import is_fund_code
-
-        return is_fund_code(symbol.strip().upper())
-
-    def get_quote(self, symbol: str) -> Quote:
-        if not self._is_fund(symbol):
-            return self._market.get_quote(symbol)
-        try:
-            last = self._fund_history.get_bars(symbol.strip().upper(), "1d", 1)[-1]
-        except Exception as exc:  # noqa: BLE001 — normalize provider boundary
-            raise DataFeedError(f"fund NAV unavailable for {symbol!r}: {exc}") from exc
-        return Quote(symbol=last.symbol, ts=last.ts, last=last.close)
-
-    def get_bars(self, symbol: str, timeframe: str = "1d", limit: int = 100) -> list[Bar]:
-        if not self._is_fund(symbol):
-            return self._market.get_bars(symbol, timeframe, limit)
-        try:
-            return self._fund_history.get_bars(symbol.strip().upper(), timeframe, limit)
-        except ValueError:
-            raise
-        except Exception as exc:  # noqa: BLE001 — normalize provider boundary
-            raise DataFeedError(f"fund NAV history unavailable for {symbol!r}: {exc}") from exc
-
-    def get_news(self, symbol: Optional[str] = None, limit: int = 20) -> list[NewsItem]:
-        if symbol and self._is_fund(symbol):
-            return []
-        return self._market.get_news(symbol, limit)
 
 
 # --------------------------------------------------------------------------- helpers

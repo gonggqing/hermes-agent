@@ -32,6 +32,14 @@ function watchCurrency(currency: null | string): WatchCurrency | null {
   return null
 }
 
+function isListedInstrument(item: { exchange: null | string; security_type: null | string }): boolean {
+  return (
+    (item.security_type === 'stock' || item.security_type === 'etf') &&
+    Boolean(item.exchange) &&
+    item.exchange?.toUpperCase() !== 'OTC'
+  )
+}
+
 export function CustomWatchlistPanel({
   enabled,
   group,
@@ -72,7 +80,7 @@ export function CustomWatchlistPanel({
 
   const symbols = useMemo<WatchSymbolConfig[]>(
     () =>
-      group.members.map(member => ({
+      group.members.filter(isListedInstrument).map(member => ({
         currency: watchCurrency(member.currency),
         label: member.display_name || member.symbol,
         symbol: member.symbol,
@@ -85,6 +93,7 @@ export function CustomWatchlistPanel({
     notifyError(error instanceof Error ? error : new Error(String(error)), copy.readOnly)
 
   const add = async (item: FinanceInstrumentMatch | FinanceResearchWatchlistRecommendation) => {
+    if (!isListedInstrument(item)) {return}
     setBusy(true)
 
     try {
@@ -144,8 +153,11 @@ export function CustomWatchlistPanel({
     }
   }
 
-  const held = (recommendationsQuery.data ?? []).filter(item => !existing.has(item.symbol)).slice(0, 8)
-  const matches = searchQuery.data?.matches ?? []
+  const held = (recommendationsQuery.data ?? [])
+    .filter(item => isListedInstrument(item) && !existing.has(item.symbol))
+    .slice(0, 8)
+
+  const matches = (searchQuery.data?.matches ?? []).filter(isListedInstrument)
 
   const headerActions = (
     <>
@@ -248,7 +260,7 @@ export function CustomWatchlistPanel({
                   ))}
                   {held.map(item => (
                     <button
-                      className="row-hover flex min-h-10 w-full items-center gap-3 border-t border-dashed border-(--ui-stroke-tertiary) px-3 py-2 text-left disabled:opacity-40"
+                      className="row-hover flex min-h-10 w-full items-center gap-3 border-t border-(--ui-stroke-tertiary) px-3 py-2 text-left disabled:opacity-40"
                       disabled={busy}
                       key={item.symbol}
                       onClick={() => void add(item)}

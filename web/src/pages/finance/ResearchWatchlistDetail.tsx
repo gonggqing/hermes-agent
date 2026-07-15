@@ -19,6 +19,17 @@ function displayCurrency(currency: string | null): WatchCurrency | null {
   return null;
 }
 
+function isListedInstrument(item: {
+  exchange: string | null;
+  security_type: string | null;
+}): boolean {
+  return (
+    (item.security_type === "stock" || item.security_type === "etf") &&
+    Boolean(item.exchange) &&
+    item.exchange?.toUpperCase() !== "OTC"
+  );
+}
+
 export function ResearchWatchlistDetail({
   group,
   onChange,
@@ -96,7 +107,7 @@ export function ResearchWatchlistDetail({
 
   const symbols = useMemo<WatchSymbol[]>(
     () =>
-      group.members.map((member) => ({
+      group.members.filter(isListedInstrument).map((member) => ({
         symbol: member.symbol,
         label: member.display_name || member.symbol,
         currency: displayCurrency(member.currency),
@@ -112,6 +123,7 @@ export function ResearchWatchlistDetail({
   const addMember = async (
     item: FinanceInstrumentMatch | FinanceResearchWatchlistRecommendation,
   ) => {
+    if (!isListedInstrument(item)) return;
     setBusy(true);
     setError(null);
     try {
@@ -169,8 +181,9 @@ export function ResearchWatchlistDetail({
   };
 
   const availableRecommendations = recommendations
-    .filter((item) => !existing.has(item.symbol))
+    .filter((item) => isListedInstrument(item) && !existing.has(item.symbol))
     .slice(0, 8);
+  const listedMatches = matches.filter(isListedInstrument);
 
   const actions = (
     <>
@@ -247,10 +260,10 @@ export function ResearchWatchlistDetail({
               {query.trim() ? (
                 searching ? (
                   <p className="px-3 py-3 text-sm text-muted-foreground">{t.common.loading}</p>
-                ) : matches.length === 0 ? (
+                ) : listedMatches.length === 0 ? (
                   <p className="px-3 py-3 text-sm text-muted-foreground">{ft.watch.noInstrumentMatches}</p>
                 ) : (
-                  matches.map((match) => {
+                  listedMatches.map((match) => {
                     const added = existing.has(match.canonical_symbol);
                     return (
                       <button
@@ -291,7 +304,7 @@ export function ResearchWatchlistDetail({
                       key={item.symbol}
                       disabled={busy}
                       onClick={() => void addMember(item)}
-                      className="flex min-h-10 w-full items-center gap-3 border-t border-dashed border-border/60 px-3 py-2 text-left hover:bg-secondary/30 disabled:opacity-40"
+                      className="flex min-h-10 w-full items-center gap-3 border-t border-border/60 px-3 py-2 text-left hover:bg-secondary/30 disabled:opacity-40"
                     >
                       <Plus className="h-4 w-4 shrink-0" />
                       <span className="min-w-0 flex-1 truncate text-sm">{item.display_name}</span>

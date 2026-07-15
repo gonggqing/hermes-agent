@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   Globe,
   Newspaper,
-  Plus,
   PlugZap,
   TrendingUp,
   Wallet,
@@ -764,17 +763,12 @@ function ResearchView({
             key={group.id}
             active={customGroupId === group.id}
             onClick={() => onCustomGroupChange(group.id)}
-            trailing={
-              <span className="text-xs text-muted-foreground">
-                {group.members.length}
-              </span>
-            }
           >
             {group.name}
           </SidebarButton>
         ))}
         {creatingGroup ? (
-          <div className="flex flex-col gap-2 border-t border-dashed border-border p-2">
+          <div className="flex flex-col gap-2 border-t border-border p-2">
             <Input
               autoFocus
               value={newGroupName}
@@ -798,17 +792,15 @@ function ResearchView({
             </div>
           </div>
         ) : (
-          <button
-            type="button"
+          <SidebarButton
+            active={false}
             onClick={() => {
               setNewGroupName(ft.watch.newCustomGroup);
               setCreatingGroup(true);
             }}
-            className="flex min-h-11 w-full items-center gap-2 border-t border-dashed border-border px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-secondary/30 hover:text-foreground"
           >
-            <Plus className="h-4 w-4" />
             {ft.watch.newCustomGroup}
-          </button>
+          </SidebarButton>
         )}
       </SidebarGroup>
     </>

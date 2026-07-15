@@ -42,7 +42,14 @@ def test_group_and_member_crud_is_durable(tmp_path):
     # Duplicate add is an idempotent no-op, not a second row.
     replay = client.post(
         f"/v1/research/watchlists/{group['id']}/members",
-        json={"symbol": "NVDA", "display_name": "NVIDIA"},
+        json={
+            "symbol": "NVDA",
+            "display_name": "NVIDIA",
+            "market": "US",
+            "exchange": "NASDAQ",
+            "currency": "USD",
+            "security_type": "stock",
+        },
     )
     assert len(replay.json()["members"]) == 1
 
@@ -79,13 +86,20 @@ def test_personal_groups_do_not_change_trading_watchlist(tmp_path):
     group = client.post("/v1/research/watchlists", json={"name": "Mine"}).json()
     client.post(
         f"/v1/research/watchlists/{group['id']}/members",
-        json={"symbol": "NEWCO", "display_name": "New Company"},
+        json={
+            "symbol": "NEWCO",
+            "display_name": "New Company",
+            "market": "US",
+            "exchange": "NASDAQ",
+            "currency": "USD",
+            "security_type": "stock",
+        },
     )
     assert client.get("/v1/watchlist").json() == before
     assert all(item["symbol"] != "NEWCO" for item in before)
 
 
-def test_holding_recommendations_resolve_missing_fund_names(tmp_path):
+def test_holding_recommendations_only_include_listed_stocks_and_etfs(tmp_path):
     client, runtime = _client(tmp_path)
 
     class Portfolio:
@@ -97,30 +111,73 @@ def test_holding_recommendations_resolve_missing_fund_names(tmp_path):
                         qty=100,
                         market=SimpleNamespace(value="CN"),
                         currency="CNY",
-                    )
+                    ),
+                    SimpleNamespace(
+                        symbol="588200.SS",
+                        qty=200,
+                        market=SimpleNamespace(value="CN"),
+                        currency="CNY",
+                    ),
+                    SimpleNamespace(
+                        symbol="NVDA",
+                        qty=2,
+                        market=SimpleNamespace(value="US"),
+                        currency="USD",
+                    ),
                 ]
             )
 
         def get_events(self, _account_id=None):
             return []
 
-    class Navs:
-        def get_nav(self, symbol):
-            return SimpleNamespace(symbol=symbol, name="嘉实上证科创板芯片ETF联接C")
-
     runtime.portfolio = Portfolio()
-    runtime.nav_provider = Navs()
     response = client.get("/v1/research/watchlists/recommendations/holdings")
     assert response.status_code == 200
-    assert response.json()[0]["display_name"] == "嘉实上证科创板芯片ETF联接C"
+    assert response.json() == [
+        {
+            "symbol": "588200.SS",
+            "display_name": "588200.SS",
+            "market": "CN",
+            "exchange": "SSE",
+            "currency": "CNY",
+            "security_type": "etf",
+        },
+        {
+            "symbol": "NVDA",
+            "display_name": "NVDA",
+            "market": "US",
+            "exchange": "US",
+            "currency": "USD",
+            "security_type": "stock",
+        },
+    ]
+
+
+def test_otc_fund_cannot_be_added_to_research_watchlist(tmp_path):
+    client, _ = _client(tmp_path)
+    group = client.post("/v1/research/watchlists", json={"name": "Funds"}).json()
+    response = client.post(
+        f"/v1/research/watchlists/{group['id']}/members",
+        json={
+            "symbol": "017470",
+            "display_name": "嘉实上证科创板芯片ETF联接C",
+            "market": "CN",
+            "exchange": "OTC",
+            "currency": "CNY",
+            "security_type": "fund",
+        },
+    )
+    assert response.status_code == 422
+    assert "exchange-traded stocks and ETFs" in response.json()["detail"]
 
 
 def test_legacy_code_only_watchlist_member_is_hydrated_on_read(tmp_path):
     client, runtime = _client(tmp_path)
-    group = client.post("/v1/research/watchlists", json={"name": "Funds"}).json()
-    client.post(
-        f"/v1/research/watchlists/{group['id']}/members",
-        json={"symbol": "005698", "display_name": "005698"},
+    group = runtime.research_watchlists.create_group("Funds")
+    runtime.research_watchlists.add_member(
+        group.id,
+        symbol="005698",
+        display_name="005698",
     )
 
     class Navs:

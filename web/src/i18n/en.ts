@@ -315,10 +315,10 @@ export const financeEn: FinanceTranslations = {
     emptyCustomGroup:
       "This watchlist is empty. Search below or add one of your holdings.",
     addInstrument: "Add instrument",
-    instrumentSearchPlaceholder: "Search ticker or company name",
+    instrumentSearchPlaceholder: "Search listed stock or ETF",
     heldSuggestions: "From your holdings",
     noInstrumentMatches:
-      "No matching instrument. Try a ticker, full name, or another market suffix.",
+      "No listed stock or ETF found. Try a ticker, name, or market suffix.",
     renameCustomGroup: "Rename",
     deleteCustomGroup: "Delete",
     removeInstrument: "Remove from watchlist",

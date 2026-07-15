@@ -98,8 +98,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
     from swing_trader.api import FinanceRuntime, create_app
     from swing_trader.dailyloop import DailyLoop, TelegramSurfaceAdapter
-    from swing_trader.datafeed import FundAwareFeed, RetryingFeed, YFinanceFeed
-    from swing_trader.fund_nav import EastmoneyFundHistory
+    from swing_trader.datafeed import RetryingFeed, YFinanceFeed
     from swing_trader.ledger import Ledger
     from swing_trader.llm import LLMAnalyst, llm_settings_from_env
     from swing_trader.scheduler import DailyLoopRunner
@@ -142,14 +141,8 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     # The on-demand API and US loop share this feed.  Prefer Yahoo's bounded
     # query2 chart endpoint so K-line requests do not wait on yfinance's
     # crumb/cookie path; yfinance remains the adapter's fallback.
-    fund_history = EastmoneyFundHistory()
-    api_feed = FundAwareFeed(
-        YFinanceFeed(prefer_chart=True, chart_only=True),
-        fund_history,
-    )
-    feed = RetryingFeed(
-        FundAwareFeed(YFinanceFeed(prefer_chart=True), fund_history)
-    )
+    api_feed = YFinanceFeed(prefer_chart=True, chart_only=True)
+    feed = RetryingFeed(YFinanceFeed(prefer_chart=True))
     # Real fundamentals (Loop.md Phase 0.75 thrust A): yfinance-backed, cached,
     # fail-None. Feeds the scheduled FundamentalAgent AND on-demand /v1/analyze.
     from swing_trader.earnings import YFinanceEarnings

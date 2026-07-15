@@ -44,11 +44,11 @@ API_VERSION = "v1"
 
 #: Honest provenance/delay note on every on-demand quote/bar (Loop.md §5.9,
 #: §8 data policy): free market data can lag real time and must never be
-#: treated as an execution-grade tick. Bare six-digit OTC funds use confirmed
-#: Eastmoney NAV history; exchange instruments use Yahoo Finance.
+#: treated as an execution-grade tick. Candles are exchange-market data only;
+#: Chinese OTC-fund NAV remains a portfolio-valuation input, never fake OHLCV.
 MARKET_DATA_NOTE = (
-    "market data via Yahoo Finance; Chinese OTC funds via Eastmoney NAV — may "
-    "be delayed; for research/analysis only, not execution timing"
+    "prices/bars via Yahoo Finance — may be delayed (~15 min for many symbols); "
+    "for research/analysis only, not execution timing"
 )
 
 
@@ -495,6 +495,13 @@ def create_app(runtime: FinanceRuntime):
         status_code=201,
     )
     def add_research_watchlist_member(group_id: str, body: ResearchWatchlistMemberRequest) -> dict:
+        security_type = (body.security_type or "").strip().lower()
+        exchange = (body.exchange or "").strip().upper()
+        if security_type not in {"stock", "etf"} or not exchange or exchange == "OTC":
+            raise HTTPException(
+                422,
+                "research watchlists accept exchange-traded stocks and ETFs only",
+            )
         try:
             group = _need_research_watchlists().add_member(
                 group_id,
@@ -530,42 +537,48 @@ def create_app(runtime: FinanceRuntime):
             return []
         aggregate = runtime.portfolio.aggregate()
         names = _symbol_names()
-        # Imported opening balances can predate name capture.  Resolve bare OTC
-        # fund names from the same NAV source used by valuation; parallelism
-        # keeps opening the picker bounded, and CachedNavProvider prevents
-        # repeated network work on subsequent opens.
-        unresolved = [
-            holding.symbol
-            for holding in aggregate.holdings
-            if holding.qty > 0
-            and not names.get(holding.symbol)
-            and holding.symbol.isdigit()
-            and len(holding.symbol) == 6
-        ]
-        if unresolved and runtime.nav_provider is not None:
-            from concurrent.futures import ThreadPoolExecutor
 
-            def resolve_fund_name(symbol: str) -> tuple[str, str]:
-                try:
-                    quote = runtime.nav_provider.get_nav(symbol)
-                    return symbol, (quote.name.strip() if quote and quote.name else "")
-                except Exception:  # metadata is cosmetic; retain code fallback
-                    return symbol, ""
-
-            with ThreadPoolExecutor(max_workers=min(6, len(unresolved))) as pool:
-                for symbol, name in pool.map(resolve_fund_name, unresolved):
-                    if name:
-                        names[symbol] = name
-        return [
-            {
-                "symbol": holding.symbol,
-                "display_name": names.get(holding.symbol, holding.symbol),
-                "market": holding.market.value if holding.market else None,
-                "currency": holding.currency,
+        def listed_metadata(symbol: str, market: str | None) -> tuple[str, str] | None:
+            upper = symbol.upper()
+            suffixes = {
+                ".SS": "SSE",
+                ".SZ": "SZSE",
+                ".HK": "SEHK",
+                ".KS": "KRX",
+                ".KQ": "KRX",
             }
-            for holding in aggregate.holdings
-            if holding.qty > 0
-        ]
+            exchange = next((value for suffix, value in suffixes.items() if upper.endswith(suffix)), None)
+            if exchange is not None:
+                code = upper.split(".", 1)[0]
+                security_type = (
+                    "etf"
+                    if exchange in {"SSE", "SZSE"}
+                    and code.startswith(("15", "16", "50", "51", "56", "58", "59"))
+                    else "stock"
+                )
+                return exchange, security_type
+            if market == "US" and upper[:1].isalpha() and not upper.endswith("-USD"):
+                return "US", "stock"
+            return None
+
+        recommendations = []
+        for holding in aggregate.holdings:
+            market = holding.market.value if holding.market else None
+            metadata = listed_metadata(holding.symbol, market)
+            if holding.qty <= 0 or metadata is None:
+                continue
+            exchange, security_type = metadata
+            recommendations.append(
+                {
+                    "symbol": holding.symbol,
+                    "display_name": names.get(holding.symbol, holding.symbol),
+                    "market": market,
+                    "exchange": exchange,
+                    "currency": holding.currency,
+                    "security_type": security_type,
+                }
+            )
+        return recommendations
 
     @app.get(f"/{API_VERSION}/reports/latest")
     def latest_reports() -> dict:

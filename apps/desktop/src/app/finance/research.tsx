@@ -27,7 +27,7 @@ import {
 } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { ExternalLink } from '@/lib/external-link'
-import { AlertTriangle, Info, Plus, RefreshCw, Search } from '@/lib/icons'
+import { AlertTriangle, Info, RefreshCw, Search } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { notify, notifyError } from '@/store/notifications'
 
@@ -241,13 +241,12 @@ export function FinanceResearchView({
             <FinanceNavRow
               active={customGroupId === group.id}
               key={group.id}
-              meta={<span className="text-[0.6rem] text-muted-foreground">{group.members.length}</span>}
               onSelect={() => setCustomGroupId(group.id)}
               title={group.name}
             />
           ))}
           {creatingGroup ? (
-            <div className="space-y-2 border-t border-dashed border-(--ui-stroke-tertiary) p-2">
+            <div className="space-y-2 border-t border-(--ui-stroke-tertiary) p-2">
               <Input
                 autoFocus
                 onChange={event => setNewGroupName(event.target.value)}
@@ -269,17 +268,14 @@ export function FinanceResearchView({
               </div>
             </div>
           ) : (
-            <button
-              className="row-hover flex min-h-11 w-full items-center gap-2 border-t border-dashed border-(--ui-stroke-tertiary) px-2 py-2 text-left text-xs text-muted-foreground"
-              onClick={() => {
+            <FinanceNavRow
+              active={false}
+              onSelect={() => {
                 setNewGroupName(t.finance.watch.custom.newGroup)
                 setCreatingGroup(true)
               }}
-              type="button"
-            >
-              <Plus className="size-4" />
-              {t.finance.watch.custom.newGroup}
-            </button>
+              title={t.finance.watch.custom.newGroup}
+            />
           )}
         </FinanceListGroup>
       </ListColumn>

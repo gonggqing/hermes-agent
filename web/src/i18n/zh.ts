@@ -902,10 +902,10 @@ export const zh: Translations = {
       emptyCustomGroup:
         "这个自选组还是空的。可以搜索标的，或从已有持仓中快速添加。",
       addInstrument: "添加标的",
-      instrumentSearchPlaceholder: "搜索代码或公司/基金名称",
+      instrumentSearchPlaceholder: "搜索场内股票或 ETF",
       heldSuggestions: "从已有持仓添加",
       noInstrumentMatches:
-        "没有匹配标的，请尝试代码、完整名称或带市场后缀的代码。",
+        "没有匹配的场内股票或 ETF，请尝试代码、名称或市场后缀。",
       renameCustomGroup: "重命名",
       deleteCustomGroup: "删除",
       removeInstrument: "从自选组移除",
