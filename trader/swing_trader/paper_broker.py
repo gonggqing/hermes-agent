@@ -27,6 +27,7 @@ Design notes
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 
 from swing_trader.config import Mode
@@ -277,11 +278,18 @@ class PaperBroker(BrokerInterface):
 
     # ------------------------------------------------------------------ stepping
 
-    def step(self, bars: dict[str, Bar]) -> list[Fill]:
+    def step(
+        self,
+        bars: dict[str, Bar],
+        *,
+        execution_ts: Optional[datetime] = None,
+    ) -> list[Fill]:
         """Advance one bar per symbol; fill resting orders; update marks.
 
         Orders activated mid-step (bracket children) become fillable from
-        the next bar, not the bar that filled their parent.
+        the next bar, not the bar that filled their parent.  ``execution_ts``
+        records the real callback instant for runtime audit; deterministic
+        simulations may omit it and retain the candle timestamp.
         """
         fills: list[Fill] = []
         # snapshot: children activated during this step must wait one bar
@@ -302,7 +310,7 @@ class PaperBroker(BrokerInterface):
                 qty = min(qty, pos.qty if pos else 0.0)
             if qty <= _EPS:
                 continue
-            fills.append(self._apply_fill(order, qty, px, bar))
+            fills.append(self._apply_fill(order, qty, px, bar, execution_ts=execution_ts))
         # marks: last close per symbol
         for symbol, bar in bars.items():
             self._marks[symbol] = bar.close
@@ -356,10 +364,22 @@ class PaperBroker(BrokerInterface):
             return None
         return None  # pragma: no cover - all order types handled above
 
-    def _apply_fill(self, order: Order, qty: float, px: float, bar: Bar) -> Fill:
+    def _apply_fill(
+        self,
+        order: Order,
+        qty: float,
+        px: float,
+        bar: Bar,
+        *,
+        execution_ts: Optional[datetime] = None,
+    ) -> Fill:
         commission = self.commission_per_order
         fill = Fill(
-            ts=bar.ts,
+            # ``bar.ts`` is the bar START (09:30 for a daily Yahoo candle),
+            # not the moment the 16:00 close callback executed. Runtime calls
+            # pass execution_ts so the audit cannot show a fill before its
+            # order; direct deterministic simulations retain bar.ts by default.
+            ts=execution_ts or bar.ts,
             order_id=order.id,
             symbol=order.symbol,
             side=order.side,

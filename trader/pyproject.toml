@@ -20,11 +20,16 @@ dependencies = [
 # library stays dependency-light and extractable.
 service = [
   "fastapi>=0.115,<1",
+  # yfinance earnings_dates parses Yahoo's HTML table through pandas.read_html.
+  # Keep it in the runtime extra so the scheduled evidence pipeline does not
+  # silently lose every earnings event inside the container.
+  "lxml>=5,<7",
   "uvicorn>=0.30,<1",
 ]
 # Knowledge store vector layer (Loop.md §5.10): embedded/local Qdrant.
 knowledge = [
   "qdrant-client>=1.9,<2",
+  "requests>=2.32,<3",
 ]
 # Live broker (Loop.md §5.1 / Phase 1): Interactive Brokers via ib_async.
 # Optional + imported LAZILY (only _IbAsyncClient.connect touches it) so the

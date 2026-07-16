@@ -95,8 +95,9 @@ def rehydrate_from_ledger(
                 new_qty = 0.0
             book[f.symbol] = (new_qty, avg)
 
+    marks = ledger.get_latest_market_marks(mode)
     positions = [
-        Position(symbol=sym, qty=qty, avg_px=avg)
+        Position(symbol=sym, qty=qty, avg_px=avg, mkt_px=marks.get(sym))
         for sym, (qty, avg) in book.items()
         if qty > 1e-9
     ]
@@ -105,6 +106,17 @@ def rehydrate_from_ledger(
     snapshots = ledger.get_snapshots(mode)
     if snapshots:
         last = snapshots[-1]
+        # Backwards-compatible recovery for ledgers created before per-symbol
+        # market marks existed. Aggregate equity can be decomposed safely only
+        # when exactly one position is open.
+        if (
+            len(positions) == 1
+            and positions[0].mkt_px is None
+            and positions[0].qty > 0
+        ):
+            inferred = (last.equity - last.cash) / positions[0].qty
+            if inferred >= 0:
+                positions[0].mkt_px = inferred
         # Only comparable when no fills landed after that snapshot.
         later_fills = [f for f in fills if f.ts > last.ts]
         if not later_fills and abs(last.cash - cash) > _SNAPSHOT_CASH_TOLERANCE:

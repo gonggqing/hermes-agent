@@ -100,6 +100,28 @@ def render_research_brief(
     for w in warnings[:_MAX_WARNINGS]:
         lines.append(f"{t['stale']}: {w}")
 
+    # The twice-daily delivery is the human-facing investment brief.  When the
+    # primary model produced a narrative, send that analysis rather than the
+    # old metric-dump template.  The deterministic modules remain available in
+    # the Finance tab and are used below only as an honest degraded fallback.
+    if brief.narrative is not None:
+        narrative = brief.narrative
+        lines.append("")
+        lines.append(f"【{narrative.headline}】")
+        lines.append(narrative.summary)
+        for section in narrative.sections:
+            lines.append("")
+            lines.append(f"【{section.title}】")
+            lines.append(section.analysis)
+        if narrative.watch_next:
+            lines.append("")
+            lines.append("【接下来关注】")
+            lines.extend(f"· {item}" for item in narrative.watch_next)
+        if brief.provenance:
+            lines.append("")
+            lines.append(f"{t['source']}: {brief.provenance[0].label}")
+        return clamp("\n".join(lines), max_chars)
+
     if brief.regime is not None:
         r = brief.regime
         lines.append(

@@ -6,7 +6,7 @@ worlds match — including the §4 invariant that protective stops come back
 up and still fire.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -81,6 +81,19 @@ class TestRoundTrip:
         assert set(new_pos) == set(orig_pos) == {"NVDA"}
         assert new_pos["NVDA"].qty == orig_pos["NVDA"].qty
         assert new_pos["NVDA"].avg_px == pytest.approx(orig_pos["NVDA"].avg_px)
+
+    def test_latest_market_marks_and_equity_survive_restart(self, session):
+        ledger, original = session
+        observed_at = NOW + timedelta(hours=1)
+        ledger.record_market_marks(original.get_positions(), Mode.PAPER, observed_at)
+        ledger.record_snapshot(
+            original.get_account().model_copy(update={"ts": observed_at})
+        )
+
+        fresh, _ = restart(ledger)
+        restored = {p.symbol: p for p in fresh.get_positions()}
+        assert restored["NVDA"].mkt_px == pytest.approx(100.0)
+        assert fresh.get_account().equity == pytest.approx(original.get_account().equity)
 
     def test_resting_orders_restored(self, session):
         ledger, original = session

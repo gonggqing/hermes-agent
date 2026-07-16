@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from swing_trader.brief import build_research_brief
+from swing_trader.brief import NarrativeSection, ResearchNarrative, build_research_brief
 from swing_trader.brief_telegram import render_research_brief
 from swing_trader.cn_watchlist import CN_UNIVERSE, build_cn_watchlist
 from swing_trader.datafeed import DataFeedError
@@ -210,7 +210,7 @@ def test_render_research_brief_zh_and_en():
 # ---------------------------------------------------------------- session
 
 
-def _make_session(feed, runtime=None, sent=None, ledger=None):
+def _make_session(feed, runtime=None, sent=None, ledger=None, brief_writer=None):
     wl = build_cn_watchlist("0700.HK,0981.HK,9988.HK")
     return ResearchSession(
         market_id="CN",
@@ -226,6 +226,7 @@ def _make_session(feed, runtime=None, sent=None, ledger=None):
         notify=(sent.append if sent is not None else None),
         focus_note="聚焦科技",
         clock=lambda: datetime(2026, 7, 13, 3, 0, tzinfo=UTC),
+        brief_writer=brief_writer,
     )
 
 
@@ -264,6 +265,44 @@ def test_research_session_run_now_refreshes_brief():
     summary2 = session.run_now(send=True)  # refresh AND push
     assert summary2["sent"] is True
     assert len(sent) == 1 and "China / HK" in sent[0]
+
+
+def test_research_session_persists_ai_narrative_with_market_context():
+    from swing_trader.api import FinanceRuntime
+
+    calls: list[dict] = []
+
+    class FakeWriter:
+        def write(self, brief, **context):
+            calls.append(context)
+            return ResearchNarrative(
+                generated_at=brief.as_of,
+                market=context["market_id"],
+                language=context["language"],
+                model="brief-test",
+                headline="结构性机会仍需等待证据确认",
+                summary="主题表现分化，不能用单一指数方向概括当前市场。",
+                sections=[
+                    NarrativeSection(title="市场结构", analysis="广度与主题方向并不一致。"),
+                    NarrativeSection(title="行业线索", analysis="半导体链条仍是后续研究重点。"),
+                    NarrativeSection(title="主要风险", analysis="新闻证据不足限制了判断强度。"),
+                    NarrativeSection(title="后续验证", analysis="下一步应确认主题内部是否继续扩散。"),
+                ],
+                watch_next=["观察半导体主题内部扩散"],
+            )
+
+    runtime = FinanceRuntime(ledger=Ledger(url="sqlite:///:memory:"), mode=Mode.PAPER)
+    session = _make_session(make_cn_feed(), runtime=runtime, brief_writer=FakeWriter())
+    session.run_now()
+
+    narrative = runtime.latest_briefs["cn"]["narrative"]
+    assert narrative["headline"] == "结构性机会仍需等待证据确认"
+    assert narrative["sections"][1]["title"] == "行业线索"
+    assert calls and calls[-1] == {
+        "market_id": "CN",
+        "market_label": "China / HK",
+        "language": "zh-CN",
+    }
 
 
 def test_movers_carry_region_cn_vs_hk():

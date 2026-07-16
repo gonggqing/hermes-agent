@@ -100,6 +100,7 @@ class FinanceRuntime:
     gold_provider: Any = None  # swing_trader.sge_gold.GoldProvider — 国内金价 (SGE)
     # Durable per-market brief history and restart source for volatile slots.
     brief_store: Any = None  # swing_trader.brief_store.BriefStore | None
+    prediction_ledger: Any = None  # independent longitudinal forecast ledger
     # User-set display-name overrides (finance-bot DM "改名"). Highest precedence.
     name_overrides: Any = None  # swing_trader.name_override.NameOverrideStore | None
     # Phase 0.95 (go-live gate): manual operator kill-switch (halts NEW entries).
@@ -728,6 +729,49 @@ def create_app(runtime: FinanceRuntime):
                 raise HTTPException(404, f"no {market!r} brief archived for {date!r}")
             return {"brief": payload}
         return {"snapshots": runtime.brief_store.list_snapshots(market, limit)}
+
+    @app.get(f"/{API_VERSION}/predictions/series")
+    def prediction_series(
+        market: Optional[str] = Query(default=None),
+        entity: Optional[str] = Query(default=None),
+        producer: Optional[str] = Query(default=None),
+        limit: int = Query(default=200, ge=1, le=1000),
+    ) -> dict:
+        """Longitudinal forecast series; never an order/approval surface."""
+        if runtime.prediction_ledger is None:
+            raise HTTPException(503, "prediction ledger not configured")
+        rows = runtime.prediction_ledger.list_series(
+            market=market, entity_key=entity, producer=producer, limit=limit
+        )
+        return {"series": [row.model_dump(mode="json") for row in rows]}
+
+    @app.get(f"/{API_VERSION}/predictions/checkpoints/due")
+    def prediction_checkpoints_due(
+        due_on_or_before: str = Query(min_length=10, max_length=10),
+        market: Optional[str] = Query(default=None),
+        limit: int = Query(default=500, ge=1, le=5000),
+    ) -> dict:
+        """Read-only evaluator queue; market-data workers write results internally."""
+        if runtime.prediction_ledger is None:
+            raise HTTPException(503, "prediction ledger not configured")
+        try:
+            items = runtime.prediction_ledger.list_due_checkpoints(
+                due_on_or_before=due_on_or_before,
+                market=market,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"items": items}
+
+    @app.get(f"/{API_VERSION}/predictions/series/{{series_id}}")
+    def prediction_series_history(series_id: str) -> dict:
+        if runtime.prediction_ledger is None:
+            raise HTTPException(503, "prediction ledger not configured")
+        payload = runtime.prediction_ledger.get_series_history(series_id)
+        if payload is None:
+            raise HTTPException(404, "forecast series not found")
+        return payload
 
     # --------------------------------------------- on-demand market analysis
     # Phase 0.75 thrust B: READ/ANALYSIS-ONLY endpoints for the conversational

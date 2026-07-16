@@ -59,6 +59,18 @@ class TestTelegramPollBeforeDecide:
         loop.on_confirm_poll()
         assert calls == [None]  # polled anyway, forwarding the None service
 
+    def test_telegram_network_failure_does_not_crash_loop(self, loop_env):
+        loop, _runtime, _clock, _days = loop_env
+
+        class _BrokenTelegram:
+            interactive = True
+
+            def poll(self, _service, _now):
+                raise TimeoutError("temporary getUpdates timeout")
+
+        loop.telegram = _BrokenTelegram()
+        loop.on_confirm_poll()  # isolated transport failure, no process restart
+
 
 class TestRunSessionNow:
     def test_publishes_into_now_anchored_window(self, loop_env):

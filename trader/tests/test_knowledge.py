@@ -28,6 +28,7 @@ from swing_trader.knowledge import (
     KnowledgeIndex,
     KnowledgeUnavailable,
     LicenseStatus,
+    OpenAIEmbedder,
     ResearchDocument,
     content_hash,
     research_ready,
@@ -246,6 +247,114 @@ def test_hashing_embedder_satisfies_provider_protocol():
     assert isinstance(HashingEmbedder(), EmbeddingProvider)
 
 
+# ---------------------------------------------------------- OpenAIEmbedder
+
+
+def test_openai_embedder_uses_native_1536_and_restores_response_order(monkeypatch):
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": [
+                    {"index": 1, "embedding": [2.0] * 1536},
+                    {"index": 0, "embedding": [1.0] * 1536},
+                ]
+            }
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response()
+
+    monkeypatch.setattr("requests.post", fake_post)
+    embedder = OpenAIEmbedder("test-secret")
+    vectors = embedder.embed(["first", "second"])
+
+    assert len(vectors) == 2
+    assert vectors[0][0] == 1.0
+    assert vectors[1][0] == 2.0
+    assert embedder.dim == 1536
+    assert embedder.model_id == "openai:text-embedding-3-small:1536"
+    assert calls[0][0] == "https://api.openai.com/v1/embeddings"
+    assert calls[0][1]["json"] == {
+        "model": "text-embedding-3-small",
+        "input": ["first", "second"],
+        "dimensions": 1536,
+        "encoding_format": "float",
+    }
+    assert calls[0][1]["headers"]["Authorization"] == "Bearer test-secret"
+
+
+def test_openai_embedder_never_exposes_api_key_on_transport_failure(monkeypatch):
+    secret = "sk-do-not-log-this"
+
+    def fake_post(*_args, **_kwargs):
+        raise RuntimeError(f"transport failed with {secret}")
+
+    monkeypatch.setattr("requests.post", fake_post)
+    with pytest.raises(RuntimeError) as caught:
+        OpenAIEmbedder(secret, max_attempts=1).embed(["research"])
+    assert secret not in str(caught.value)
+    assert caught.value.__cause__ is None
+
+
+def test_openai_embedder_retries_transient_transport_failure(monkeypatch):
+    attempts = 0
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"index": 0, "embedding": [1.0] * 4}]}
+
+    def fake_post(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("transient TLS failure")
+        return Response()
+
+    monkeypatch.setattr("requests.post", fake_post)
+    monkeypatch.setattr("swing_trader.knowledge.time.sleep", lambda _seconds: None)
+    vector = OpenAIEmbedder(
+        "test-secret", dimensions=4, max_attempts=2
+    ).embed(["research"])[0]
+    assert attempts == 2
+    assert vector == [1.0] * 4
+
+
+def test_openai_embedder_rejects_shape_mismatch(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"index": 0, "embedding": [1.0] * 10}]}
+
+    monkeypatch.setattr("requests.post", lambda *_args, **_kwargs: Response())
+    with pytest.raises(RuntimeError, match="shape mismatch"):
+        OpenAIEmbedder("test-secret").embed(["research"])
+
+
+def test_embedding_provider_failure_is_fail_closed(tmp_path):
+    class BrokenEmbedder:
+        dim = 1536
+        model_id = "broken"
+
+        def embed(self, _texts):
+            raise RuntimeError("provider unavailable")
+
+    index = KnowledgeIndex(path=tmp_path / "broken", embedder=BrokenEmbedder())
+    with pytest.raises(KnowledgeUnavailable, match="vector backend unavailable"):
+        index.index("doc-1", "research")
+    with pytest.raises(KnowledgeUnavailable, match="vector backend unavailable"):
+        index.search("research")
+
+
 # ----------------------------------------------- KnowledgeIndex (embedded)
 
 
@@ -266,6 +375,18 @@ def test_embedded_index_search_roundtrip(local_index):
     assert hits[0]["score"] >= hits[1]["score"] >= hits[2]["score"]
     assert hits[0]["payload"]["publisher"] == "Test IR"
     assert hits[0]["payload"]["document_id"] == "d-uranium"
+    assert local_index.count() == 3
+
+
+def test_embedded_batch_index_is_idempotent(local_index):
+    records = [
+        ("d1", "memory demand", {"publisher": "A"}),
+        ("d2", "gold real yield", {"publisher": "B"}),
+    ]
+    assert local_index.index_many(records) == 2
+    assert local_index.index_many(records) == 2
+    assert local_index.count() == 2
+    assert local_index.index_many([]) == 0
 
 
 def test_embedded_search_before_any_index_is_empty(local_index):

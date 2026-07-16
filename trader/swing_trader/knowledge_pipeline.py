@@ -41,6 +41,7 @@ from swing_trader.knowledge import (
     COLLECTION_NAME,
     DocType,
     DocumentStore,
+    EmbeddingProvider,
     FactsArchive,
     FinanceKnowledge,
     HashingEmbedder,
@@ -85,7 +86,8 @@ class KnowledgeConfig:
     example ``hermes-finance-vector``); when it is None the index runs
     embedded at ``qdrant_path`` (default ``root_dir / "vector"`` — an
     initial small local corpus is explicitly acceptable per §5.10). The
-    collection name stays ``finance_knowledge``.
+    collection defaults to ``finance_knowledge``; production semantic models
+    use a provider/model/dimension-versioned collection instead.
     """
 
     root_dir: Path
@@ -93,6 +95,7 @@ class KnowledgeConfig:
     qdrant_path: Path | None = None
     collection: str = COLLECTION_NAME
     embedder_dim: int = 256
+    embedder: EmbeddingProvider | None = None
 
     def __post_init__(self) -> None:
         self.root_dir = Path(self.root_dir)
@@ -122,6 +125,15 @@ class PipelineKnowledge(FinanceKnowledge):
         self.facts = facts
         self.documents = documents
 
+    def storage_only(self) -> "PipelineKnowledge":
+        """Return the same authoritative stores with semantic search disabled.
+
+        Used after a failed startup backfill.  Documents/facts remain writable,
+        while callers see the normal fail-closed "no index" behavior instead
+        of querying a partial collection.
+        """
+        return PipelineKnowledge(self.facts, self.documents, None)
+
 
 def build_knowledge(
     config: KnowledgeConfig,
@@ -143,7 +155,7 @@ def build_knowledge(
     root.mkdir(parents=True, exist_ok=True)
     facts = FactsArchive(root / "facts")
     documents = DocumentStore(f"sqlite:///{root / 'documents.db'}")
-    embedder = HashingEmbedder(dim=config.embedder_dim)
+    embedder = config.embedder or HashingEmbedder(dim=config.embedder_dim)
 
     index: KnowledgeIndex | None = None
     try:

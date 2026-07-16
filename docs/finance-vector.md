@@ -12,8 +12,8 @@ Key properties (all enforced in `docker-compose.yml`):
   attached only to the `finance-internal` network (`internal: true`), so it
   is unreachable from the host, the LAN, and every non-finance container.
 - **Only Finance-service containers may join `finance-internal`.** The
-  gateway and dashboard stay off it. A commented `finance-service` example in
-  `docker-compose.yml` shows how a future Finance container joins.
+  `finance` service joins it plus the normal Compose network for market/model
+  egress. Gateway and dashboard stay off the private network.
 - **Persistent named volume** `hermes-finance-vector-data` mounted at
   `/qdrant/storage`. Back it up before every image upgrade.
 - **Pinned image** `qdrant/qdrant:v1.15.4` (latest stable known as of
@@ -45,7 +45,7 @@ http://hermes-finance-vector:6333
 network). No credentials cross the host boundary because the network has no
 host route and no egress.
 
-**Host-run Phase 0 (no Docker):** the trader runs on the host and uses
+**Host-run development (no Docker):** the trader uses
 qdrant-client's embedded local mode instead of this service — per Loop.md
 §5.10, embedded/local persistence is acceptable for the initial small corpus.
 Install the `knowledge` extra (`trader/pyproject.toml`) and point the client
@@ -59,9 +59,46 @@ from qdrant_client import QdrantClient
 client = QdrantClient(path="../trader/data/finance_vector")
 ```
 
-Embedded mode and the Docker service must not share a storage directory; when
-the Finance service becomes long-running, migrate the corpus into this
-service and retire the embedded path.
+Embedded mode and the Docker service must not share a storage directory.
+
+## Historical migration
+
+The source of truth is `/opt/data/data/knowledge/documents.db`, not the old
+embedded Qdrant directory. Rebuild vectors from normalized documents because
+embedded and server Qdrant storage files are not a supported copy boundary.
+The command uses deterministic point IDs, so it is safe to repeat:
+
+```sh
+./docker/compose.sh exec finance \
+  /opt/hermes/trader/.venv/bin/python -m swing_trader migrate-vector \
+  --documents-db /opt/data/data/knowledge/documents.db \
+  --target-url http://hermes-finance-vector:6333 \
+  --embedding-provider openai \
+  --embedding-model text-embedding-3-small \
+  --embedding-dim 1536 \
+  --collection finance_knowledge_openai_te3s_1536 \
+  --batch-size 32
+```
+
+Success prints JSON with `verified: true`, equal `source_documents` and
+`target_after`, and resolved sample searches. Run it a second time after the
+first migration to close any ingestion race; `target_after` must remain
+unchanged. Keep `/opt/data/data/knowledge/vector` as a rollback snapshot until
+the remote service has passed normal search and backup/restore checks.
+
+Production retrieval uses OpenAI `text-embedding-3-small` at its native 1536
+dimensions in the versioned `finance_knowledge_openai_te3s_1536` collection.
+`OPENAI_API_KEY` remains a runtime secret in `~/.hermes/.env`; no key belongs
+in source or `config.yaml`. At startup Finance selects this profile when that
+key exists and idempotently fills any source/index count gap before enabling
+semantic search. A failed or partially verified migration disables retrieval
+for that process while authoritative documents and facts remain writable.
+
+The original `finance_knowledge` collection retains the deterministic
+256-dimensional `hashing-blake2b-v1` vectors as a rollback path. Never mix
+dimensions or embedding models in one collection, and never delete the old
+collection until the semantic collection has passed backup/restore and normal
+retrieval validation.
 
 ## Backup
 
@@ -108,13 +145,14 @@ docker compose stop hermes-finance-vector
 # 2. Take the backup.
 sh docker/finance/backup-vector.sh
 
-# 3. Destroy the volume (remove the stopped container first so the volume
-#    is unreferenced).
+# 3. Destroy the volume (resolve its real Compose-prefixed name before
+#    removing the stopped container).
+volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/qdrant/storage"}}{{.Name}}{{end}}{{end}}' hermes-finance-vector)
 docker compose rm -f hermes-finance-vector
-docker volume rm hermes-finance-vector-data
+docker volume rm "$volume"
 
-# 4. Recreate an empty volume and restore into it.
-docker volume create hermes-finance-vector-data
+# 4. Let Compose recreate an empty volume + stopped container, then restore.
+docker compose up --no-start hermes-finance-vector
 sh docker/finance/restore-vector.sh backups/finance-vector/<stamp>.tar.gz
 
 # 5. Start the service and verify the collection count matches step 0.

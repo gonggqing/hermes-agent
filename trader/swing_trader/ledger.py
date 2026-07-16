@@ -43,6 +43,7 @@ from swing_trader.schemas import (
     Order,
     OrderStatus,
     OrderType,
+    Position,
     Role,
     Side,
     Signal,
@@ -56,6 +57,7 @@ __all__ = [
     "CandidateRow",
     "FillRow",
     "Ledger",
+    "MarketMarkRow",
     "OrderRow",
     "SignalRow",
     "SnapshotRow",
@@ -224,6 +226,18 @@ class SnapshotRow(SQLModel, table=True):
     day_pnl: float = 0.0
     drawdown_pct: float = 0.0
     breaker_state: str = BreakerState.NORMAL.value
+
+
+class MarketMarkRow(SQLModel, table=True):
+    """Last observed per-symbol mark for deterministic broker rehydration."""
+
+    __tablename__ = "market_marks"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    ts: str = Field(index=True)
+    mode: str = Field(index=True)
+    symbol: str = Field(index=True)
+    px: float
 
 
 class AuditRow(SQLModel, table=True):
@@ -857,6 +871,45 @@ class Ledger:
         out = [_snapshot_from_row(r) for r in rows]
         out.sort(key=lambda s: s.ts)
         return out
+
+    def record_market_marks(
+        self,
+        positions: list[Position],
+        mode: Mode | str,
+        ts: datetime,
+    ) -> None:
+        """Append the current per-position marks alongside an account snapshot."""
+
+        rows = [
+            MarketMarkRow(
+                ts=_to_iso(ts),
+                mode=_mode_value(mode),
+                symbol=position.symbol,
+                px=position.mkt_px,
+            )
+            for position in positions
+            if position.mkt_px is not None
+        ]
+        if not rows:
+            return
+        with Session(self._engine) as session:
+            session.add_all(rows)
+            session.commit()
+
+    def get_latest_market_marks(self, mode: Mode | str) -> dict[str, float]:
+        """Return the newest persisted mark for each symbol in ``mode``."""
+
+        with Session(self._engine) as session:
+            stmt = (
+                select(MarketMarkRow)
+                .where(MarketMarkRow.mode == _mode_value(mode))
+                .order_by(MarketMarkRow.ts.asc(), MarketMarkRow.id.asc())
+            )
+            rows = session.exec(stmt).all()
+        marks: dict[str, float] = {}
+        for row in rows:
+            marks[row.symbol] = row.px
+        return marks
 
     # --------------------------------------------------------------- audit
 

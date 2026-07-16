@@ -45,6 +45,7 @@ __all__ = [
     "CN_HK_HOLIDAYS_2026",
     "CN_HOLIDAYS_2026",
     "CN_SCHEDULE",
+    "BEIJING_BRIEF_SCHEDULE",
     "ET",
     "EVENT_TIMES_ET",
     "KR_HOLIDAYS_2026",
@@ -84,6 +85,8 @@ class Event(str, Enum):
     PUSH_CANDIDATES = "PUSH_CANDIDATES"  # 11:30 — push approved candidates to Telegram
     CONFIRM_CUTOFF = "CONFIRM_CUTOFF"  # 12:30 — user confirmation window closes
     MARKET_CLOSE = "MARKET_CLOSE"  # 16:00 — MOC/LOC fill, resting GTC may fill
+    MORNING_BRIEF = "MORNING_BRIEF"  # 09:00 Asia/Shanghai — all-market brief
+    EVENING_BRIEF = "EVENING_BRIEF"  # 21:00 Asia/Shanghai — all-market brief
 
 
 EVENT_TIMES_ET: Mapping[Event, time] = {
@@ -164,6 +167,7 @@ class SessionSchedule:
     tz: ZoneInfo
     event_times: Mapping[Event, time]
     holidays: frozenset[date]
+    calendar_days: bool = False
 
     def events_chronological(self) -> tuple[Event, ...]:
         """Events defined for this session, ordered by wall-time."""
@@ -287,6 +291,23 @@ KR_SCHEDULE = SessionSchedule(
     holidays=KR_HOLIDAYS_2026,
 )
 
+#: One canonical, presentation-facing research cadence for every market.
+#: It is deliberately separate from the US execution state machine and from
+#: each market's intraday monitor/analysis schedule.  "Every day" means every
+#: Beijing calendar day, including weekends; stale/closed-market evidence is
+#: surfaced by the brief freshness fields rather than silently skipping the
+#: promised report.
+BEIJING_BRIEF_SCHEDULE = SessionSchedule(
+    market_id="GLOBAL_BRIEF",
+    tz=SHANGHAI,
+    event_times={
+        Event.MORNING_BRIEF: time(9, 0),
+        Event.EVENING_BRIEF: time(21, 0),
+    },
+    holidays=frozenset(),
+    calendar_days=True,
+)
+
 
 def is_trading_day(d: date, schedule: SessionSchedule = US_SCHEDULE) -> bool:
     """True when ``schedule``'s market is open on ``d``.
@@ -294,6 +315,8 @@ def is_trading_day(d: date, schedule: SessionSchedule = US_SCHEDULE) -> bool:
     Mon–Fri minus that session's full-day holidays. (US half days count as
     trading days — see module docstring.)
     """
+    if schedule.calendar_days:
+        return True
     return d.weekday() < 5 and d not in schedule.holidays
 
 

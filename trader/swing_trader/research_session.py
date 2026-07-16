@@ -85,6 +85,7 @@ class ResearchSession:
         lang: str = "zh",
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         discovery_scanner: Optional[MarketDiscoveryScanner] = None,
+        brief_writer=None,
     ) -> None:
         self.market_id = market_id
         self.market_label = market_label
@@ -105,6 +106,7 @@ class ResearchSession:
         self.lang = lang
         self.clock = clock
         self.discovery_scanner = discovery_scanner
+        self.brief_writer = brief_writer
 
         self._broker = PaperBroker(starting_cash=_STUB_CASH)
         self.market_monitor = MarketMonitor(
@@ -320,6 +322,24 @@ class ResearchSession:
                 ],
                 discovery=self._discovery,
             )
+            if self.brief_writer is not None:
+                brief.narrative = self.brief_writer.write(
+                    brief,
+                    market_id=self.market_id,
+                    market_label=self.market_label,
+                    language="zh-CN" if self.lang == "zh" else self.lang,
+                )
+            elif self.runtime is not None:
+                previous = self.runtime.latest_briefs.get(self.market_id.lower())
+                if (
+                    isinstance(previous, dict)
+                    and previous.get("narrative") is not None
+                ):
+                    from swing_trader.brief import ResearchNarrative
+
+                    brief.narrative = ResearchNarrative.model_validate(
+                        previous["narrative"]
+                    )
         except Exception:  # brief must never break the loop
             logger.exception("cn research brief build failed")
             return None
@@ -331,13 +351,9 @@ class ResearchSession:
                 self.runtime.latest_brief_cn = dump  # back-compat
             # Archive a durable snapshot so the brief survives restart and builds
             # a queryable history (latest_briefs alone is in-memory). Best-effort.
-            store = getattr(self.runtime, "brief_store", None)
-            if store is not None:
-                try:
-                    store.save(self.market_id.lower(), dump)
-                except Exception:  # never break the loop on an archive failure
-                    logger.warning("brief snapshot archive failed",
-                                   extra={"market": self.market_id})
+            from swing_trader.prediction_ledger import persist_brief_artifacts
+
+            persist_brief_artifacts(self.runtime, self.market_id.lower(), dump)
         return brief
 
     def _ingest_news(self) -> None:

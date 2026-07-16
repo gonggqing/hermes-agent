@@ -2,7 +2,13 @@
 
 import pytest
 
-from swing_trader.llm import LLMAnalyst, LLMSettings, llm_settings_from_env
+from swing_trader.llm import (
+    LLMAnalyst,
+    LLMSettings,
+    hermes_primary_model,
+    http_complete,
+    llm_settings_from_env,
+)
 from swing_trader.schemas import Direction
 
 SETTINGS = LLMSettings(base_url="https://x", model="test-model", api_key="k")
@@ -83,7 +89,69 @@ def test_search_role_pins_cheap_model():
     assert s.model == "deepseek-v4"
 
 
+def test_decision_role_uses_hermes_primary_model(tmp_path):
+    (tmp_path / "config.yaml").write_text(
+        "model:\n  default: MiniMax-M3\n  provider: minimax-cn\n",
+        encoding="utf-8",
+    )
+    env = {
+        "HERMES_HOME": str(tmp_path),
+        "FINANCE_LLM_PROVIDER": "minimax",
+        "MINIMAX_CN_API_KEY": "secret",
+    }
+    assert hermes_primary_model(env) == "MiniMax-M3"
+    settings = llm_settings_from_env(env, role="decision")
+    assert settings is not None and settings.model == "MiniMax-M3"
+
+
+def test_explicit_finance_decision_model_overrides_hermes_config(tmp_path):
+    (tmp_path / "config.yaml").write_text("model: primary-model\n", encoding="utf-8")
+    settings = llm_settings_from_env(
+        {
+            "HERMES_HOME": str(tmp_path),
+            "DEEPSEEK_API_KEY": "secret",
+            "FINANCE_LLM_MODEL": "explicit-finance-model",
+        },
+        role="decision",
+    )
+    assert settings is not None and settings.model == "explicit-finance-model"
+
+
 def test_key_never_in_signal():
     sig = analyst('{"direction": "long", "confidence": 0.6, "thesis": "t"}') \
         .analyze("NVDA", {}, [])
     assert "k" != sig.thesis and SETTINGS.api_key not in repr(sig)
+
+
+def test_http_complete_splits_minimax_reasoning_only(monkeypatch):
+    payloads: list[dict] = []
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"ok":true}'}}]}
+
+    def post(_url, *, headers, json, timeout):
+        assert headers["Authorization"] == "Bearer secret"
+        assert timeout == 20.0
+        payloads.append(json)
+        return _Response()
+
+    monkeypatch.setattr("requests.post", post)
+
+    minimax = LLMSettings(
+        base_url="https://api.minimaxi.com/v1",
+        model="MiniMax-M3",
+        api_key="secret",
+    )
+    other = LLMSettings(
+        base_url="https://api.deepseek.com/v1",
+        model="deepseek-v4-flash",
+        api_key="secret",
+    )
+    assert http_complete(minimax, "system", "prompt") == '{"ok":true}'
+    assert http_complete(other, "system", "prompt") == '{"ok":true}'
+    assert payloads[0]["reasoning_split"] is True
+    assert "reasoning_split" not in payloads[1]

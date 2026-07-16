@@ -72,8 +72,9 @@ services:
       # Finance service URL for BOTH the /api/finance/* dashboard proxy and the
       # general agent's read-only Finance toolset (get_quote / get_kline /
       # analyze_symbol / research_brief / search_research / account_view). Under
-      # network_mode:host, 127.0.0.1:9319 reaches the `finance` service below
-      # (its own container, also host-networked, binding the same loopback).
+      # The Finance container publishes only host loopback 127.0.0.1:9319;
+      # host-networked Gateway can therefore reach it without joining the
+      # private Finance/Qdrant network.
       # Setting this also auto-enables the "finance" toolset (Loop.md §3: the
       # toolset is read/analysis-only; no order or approval tool exists).
       - HERMES_FINANCE_SERVICE_URL=http://127.0.0.1:9319
@@ -106,14 +107,14 @@ services:
   # as its OWN container (own process) so heavy trading work never blocks the
   # dashboard event loop and there is exactly one server-authoritative
   # confirmation state machine — the gateway proxies /api/finance/* to it at
-  # 127.0.0.1:9319 (both host-networked, same loopback).
+  # 127.0.0.1:9319 (a loopback-only published port).
   #
   # It deliberately BYPASSES the s6 entrypoint (which would start a second
   # dashboard on :9119) and runs the baked trader/.venv python directly;
   # `restart: unless-stopped` is the supervisor for this single-process
   # container. CWD is the writable /opt/data volume, so the SQLite DB, the .env
-  # secrets, the kill-switch flag, and the embedded knowledge store all live on
-  # the durable mount — never the sealed, read-only /opt/hermes tree.
+  # secrets, the kill-switch flag, and authoritative Finance databases all live
+  # on the durable mount — never the sealed, read-only /opt/hermes tree.
   # PYTHONPATH makes the swing_trader package importable via `python -m`.
   #
   # This replaces the former host launchd job (com.hermes.finance); running
@@ -125,7 +126,14 @@ services:
     image: hermes-agent
     container_name: hermes-finance
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "127.0.0.1:9319:9319"
+    networks:
+      - default
+      - finance-internal
+    depends_on:
+      hermes-finance-vector:
+        condition: service_healthy
     working_dir: /opt/data
     user: "${HERMES_UID:-10000}:${HERMES_GID:-10000}"
     env_file:
@@ -135,11 +143,20 @@ services:
     environment:
       - PYTHONPATH=/opt/hermes/trader
       - HERMES_HOME=/opt/data
+      # This service bypasses s6 and runs as a numeric host UID, so Docker
+      # cannot infer a passwd home. Keep yfinance/provider caches on the same
+      # durable, writable mount instead of letting libraries fall back to `/`.
+      - HOME=/opt/data
+      - XDG_CACHE_HOME=/opt/data/.cache
+      # Qdrant is reachable only across finance-internal.  It remains search
+      # infrastructure: authoritative documents stay in documents.db and
+      # execution/ledger state never lives here.
+      - FINANCE_QDRANT_URL=http://hermes-finance-vector:6333
     entrypoint:
       - /opt/hermes/trader/.venv/bin/python
       - -m
       - swing_trader
-    command: ["serve", "--db", "/opt/data/trader.db", "--port", "9319"]
+    command: ["serve", "--host", "0.0.0.0", "--db", "/opt/data/trader.db", "--port", "9319"]
 
   # NOTE: the dashboard deliberately has NO separate service. It runs inside
   # the gateway container (HERMES_DASHBOARD=1 above) so the dashboard's
@@ -189,17 +206,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
-
-  # Example — how a future Finance-service container joins the private
-  # network (uncomment and adapt when the Finance service is containerized;
-  # ONLY Finance-service containers may join finance-internal):
-  # finance-service:
-  #   image: hermes-finance
-  #   restart: unless-stopped
-  #   networks:
-  #     - finance-internal
-  #   environment:
-  #     - QDRANT_URL=http://hermes-finance-vector:6333
 
 volumes:
   # Qdrant persistence for the Finance knowledge store. Back this volume up

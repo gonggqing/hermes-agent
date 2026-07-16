@@ -17,7 +17,7 @@
 #
 set -eu
 
-VOLUME="hermes-finance-vector-data"
+VOLUME=""
 HELPER_IMAGE="alpine:3.22"
 CONTAINER="hermes-finance-vector"
 
@@ -65,8 +65,11 @@ fi
 command -v docker >/dev/null 2>&1 || die "docker CLI not found in PATH"
 docker info >/dev/null 2>&1 || die "docker daemon is not reachable"
 [ -f "${ARCHIVE}" ] || die "archive not found: ${ARCHIVE}"
+VOLUME=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/qdrant/storage"}}{{.Name}}{{end}}{{end}}' "${CONTAINER}" 2>/dev/null || true)
+[ -n "${VOLUME}" ] \
+    || die "cannot resolve the target volume from container '${CONTAINER}' (create it with: docker compose up --no-start hermes-finance-vector)"
 docker volume inspect "${VOLUME}" >/dev/null 2>&1 \
-    || die "Docker volume '${VOLUME}' does not exist (create it first: docker volume create ${VOLUME})"
+    || die "Docker volume '${VOLUME}' does not exist"
 
 running=$(docker ps -q --filter "name=^${CONTAINER}\$")
 [ -z "${running}" ] \

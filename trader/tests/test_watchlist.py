@@ -1,7 +1,14 @@
 """Tests for the watchlist universe (Loop.md §11)."""
 
 from swing_trader.schemas import AiPhase, Role
-from swing_trader.watchlist import UNIVERSE, by_phase, by_role, enabled_symbols, get
+from swing_trader.watchlist import (
+    UNIVERSE,
+    by_phase,
+    by_role,
+    earnings_symbols,
+    enabled_symbols,
+    get,
+)
 
 
 def test_no_duplicate_symbols():
@@ -61,6 +68,13 @@ def test_get_normalizes_case():
 
 def test_unknown_symbol_returns_none():
     assert get("ZZZZZ") is None
+
+
+def test_earnings_universe_skips_etfs_and_crypto_but_keeps_companies():
+    selected = earnings_symbols(["SPY", "GLD", "NVDA", "XOM", "BTC-USD", "CUSTOM"])
+    assert selected == ["NVDA", "XOM", "CUSTOM"]
+    assert get("SPY").security_type == "etf"
+    assert get("BTC-USD").security_type == "crypto"
 
 
 def test_items_frozen():

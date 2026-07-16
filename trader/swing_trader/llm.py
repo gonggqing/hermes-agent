@@ -17,6 +17,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional
 
 from swing_trader.log import get_logger
@@ -24,7 +25,13 @@ from swing_trader.schemas import Direction, Signal
 
 logger = get_logger(__name__)
 
-__all__ = ["LLMAnalyst", "LLMSettings", "http_complete", "llm_settings_from_env"]
+__all__ = [
+    "LLMAnalyst",
+    "LLMSettings",
+    "hermes_primary_model",
+    "http_complete",
+    "llm_settings_from_env",
+]
 
 _PROVIDER_DEFAULTS = {
     # provider: (base_url, model, api-key env var)
@@ -56,6 +63,52 @@ class LLMSettings:
     timeout: float = 20.0
 
 
+def hermes_primary_model(env: Optional[dict] = None) -> Optional[str]:
+    """Read ``model.default`` from the active Hermes ``config.yaml``.
+
+    Finance runs in a small standalone virtualenv and deliberately does not
+    import the Hermes CLI/config stack.  Model names are behavioural config,
+    not secrets, so the canonical source remains ``config.yaml`` rather than a
+    new environment variable.  This tiny reader supports the two shapes Hermes
+    accepts (``model: name`` and ``model: {default: name}``) without adding a
+    YAML dependency to the trading core.
+    """
+
+    e = env if env is not None else os.environ
+    home = Path(e.get("HERMES_HOME") or (Path.home() / ".hermes"))
+    path = home / "config.yaml"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+
+    in_model = False
+    model_indent = 0
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip())
+        if indent == 0:
+            in_model = False
+            if not stripped.startswith("model:"):
+                continue
+            value = stripped.partition(":")[2].strip().strip("'\"")
+            if value:
+                return value
+            in_model = True
+            model_indent = indent
+            continue
+        if in_model and indent > model_indent:
+            key, sep, value = stripped.partition(":")
+            if sep and key.strip() in {"default", "model"}:
+                value = value.split("#", 1)[0].strip().strip("'\"")
+                return value or None
+        elif in_model and indent <= model_indent:
+            break
+    return None
+
+
 def llm_settings_from_env(
     env: Optional[dict] = None, *, role: str = "search"
 ) -> Optional[LLMSettings]:
@@ -81,7 +134,14 @@ def llm_settings_from_env(
             if role == "search":
                 model = e.get("FINANCE_LLM_SEARCH_MODEL", default_model)
             else:
-                model = e.get("FINANCE_LLM_MODEL", default_model)
+                # Final investment briefs use the same primary model as Hermes.
+                # FINANCE_LLM_MODEL remains a backwards-compatible explicit
+                # override, but normal configuration lives in config.yaml.
+                model = (
+                    e.get("FINANCE_LLM_MODEL")
+                    or hermes_primary_model(e)
+                    or default_model
+                )
             return LLMSettings(
                 base_url=e.get("FINANCE_LLM_BASE_URL", base).rstrip("/"),
                 model=model,
@@ -90,7 +150,13 @@ def llm_settings_from_env(
     return None
 
 
-def http_complete(settings: LLMSettings, system: str, prompt: str) -> str:
+def http_complete(
+    settings: LLMSettings,
+    system: str,
+    prompt: str,
+    *,
+    max_tokens: int = 800,
+) -> str:
     """One stateless OpenAI-compatible completion.
 
     Shared by the analysis voice and narrow structured extractors. Keeping it
@@ -99,20 +165,34 @@ def http_complete(settings: LLMSettings, system: str, prompt: str) -> str:
     """
     import requests
 
+    payload = {
+        "model": settings.model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.2,
+        # Headroom for reasoning models (MiniMax M-series / deepseek-v4)
+        # that spend tokens on <think> before the JSON verdict. Longer
+        # structured tasks (the daily brief writer) opt into a larger cap.
+        "max_tokens": max_tokens,
+    }
+    # MiniMax's OpenAI-compatible API otherwise places the complete reasoning
+    # trace in `content` before the answer. Long HK/CN evidence packets can
+    # consume the completion budget before the final JSON closes. The official
+    # provider extension separates reasoning into `reasoning_details`, leaving
+    # `content` as the parseable answer. This is stateless, so no reasoning
+    # history needs to be replayed. Do not send the extension to other vendors.
+    if (
+        "minimaxi.com" in settings.base_url.lower()
+        or settings.model.lower().startswith("minimax-")
+    ):
+        payload["reasoning_split"] = True
+
     resp = requests.post(
         f"{settings.base_url}/chat/completions",
         headers={"Authorization": f"Bearer {settings.api_key}"},
-        json={
-            "model": settings.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.2,
-            # Headroom for reasoning models (MiniMax M-series / deepseek-v4)
-            # that spend tokens on <think> before the JSON verdict.
-            "max_tokens": 800,
-        },
+        json=payload,
         timeout=settings.timeout,
     )
     resp.raise_for_status()

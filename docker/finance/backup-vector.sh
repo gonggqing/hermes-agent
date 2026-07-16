@@ -15,7 +15,8 @@
 #
 set -eu
 
-VOLUME="hermes-finance-vector-data"
+VOLUME=""
+CONTAINER="hermes-finance-vector"
 HELPER_IMAGE="alpine:3.22"
 BACKUP_DIR="./backups/finance-vector"
 
@@ -31,8 +32,11 @@ die() {
 # --- Prerequisites ----------------------------------------------------------
 command -v docker >/dev/null 2>&1 || die "docker CLI not found in PATH"
 docker info >/dev/null 2>&1 || die "docker daemon is not reachable"
+VOLUME=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/qdrant/storage"}}{{.Name}}{{end}}{{end}}' "${CONTAINER}" 2>/dev/null || true)
+[ -n "${VOLUME}" ] \
+    || die "cannot resolve the Qdrant volume from container '${CONTAINER}' (start the service once)"
 docker volume inspect "${VOLUME}" >/dev/null 2>&1 \
-    || die "Docker volume '${VOLUME}' does not exist (start the service once: docker compose up -d hermes-finance-vector)"
+    || die "Docker volume '${VOLUME}' does not exist"
 
 # --- Snapshot ----------------------------------------------------------------
 log "Creating backup directory ${BACKUP_DIR}"

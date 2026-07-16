@@ -58,14 +58,17 @@ __all__ = [
     "EARNINGS_NOT_WIRED_NOTE",
     "EventsView",
     "FreshnessInfo",
+    "ForecastClaim",
     "Mover",
     "MoversView",
     "NewsDigestItem",
     "NewsSection",
+    "NarrativeSection",
     "PendingCandidate",
     "ProvenanceLink",
     "RegimeView",
     "ResearchBrief",
+    "ResearchNarrative",
     "RiskView",
     "SignalView",
     "STALE_AFTER_MINUTES",
@@ -237,6 +240,7 @@ class NewsSection(BaseModel):
 class SignalView(BaseModel):
     """Analysis/debate signal summary (thesis truncated for the brief)."""
 
+    signal_id: str = ""
     symbol: str
     display_name: str = ""  # human name (or "" when unknown); see instrument_names
     direction: str
@@ -247,6 +251,9 @@ class SignalView(BaseModel):
     #: §5.10). Distinct from the brief's as_of (when it was generated). None for
     #: signals with no price bar (sentiment/macro).
     as_of_bar: Optional[str] = None
+    #: Price used by the source signal when available. This freezes the
+    #: revision baseline for later outcome evaluation.
+    baseline_value: Optional[float] = None
 
 
 class EventsView(BaseModel):
@@ -280,6 +287,72 @@ class ProvenanceLink(BaseModel):
     url: str
 
 
+class NarrativeSection(BaseModel):
+    """One market-specific analytical section written by the brief model."""
+
+    title: str = Field(min_length=1, max_length=80)
+    analysis: str = Field(min_length=1, max_length=1600)
+
+
+class ForecastClaim(BaseModel):
+    """One measurable primary-model claim emitted beside the prose brief.
+
+    A claim is not an order recommendation. It becomes an append-only
+    revision in the prediction ledger and is evaluated over explicit trading-
+    session horizons without parsing prose after publication.
+    """
+
+    entity_type: str = Field(pattern=r"^(market|instrument|theme|event)$")
+    entity_key: str = Field(min_length=1, max_length=160)
+    claim_type: str = Field(min_length=1, max_length=80)
+    direction: str = Field(min_length=1, max_length=32)
+    confidence: float = Field(ge=0.0, le=1.0)
+    horizons: list[int] = Field(min_length=1, max_length=6)
+    thesis: str = Field(min_length=1, max_length=1200)
+    invalidation: str = Field(default="", max_length=800)
+    benchmark: str = Field(default="", max_length=64)
+    expected_condition: str = Field(default="", max_length=800)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("horizons")
+    @classmethod
+    def _valid_horizons(cls, value: list[int]) -> list[int]:
+        allowed = {1, 3, 5, 10, 20, 60}
+        normalized = sorted(set(value))
+        if not normalized or any(item not in allowed for item in normalized):
+            raise ValueError("horizons must use 1/3/5/10/20/60 trading sessions")
+        return normalized
+
+
+class ResearchNarrative(BaseModel):
+    """Model-written synthesis of the complete structured research snapshot.
+
+    This is deliberately separate from the deterministic measurements below.
+    The measurements remain the source of truth; this object explains their
+    relationships and significance without acquiring any trading authority.
+    """
+
+    generated_at: datetime
+    market: str = Field(min_length=1, max_length=32)
+    language: str = Field(min_length=2, max_length=16)
+    model: str = Field(min_length=1, max_length=120)
+    prompt_version: str = Field(default="legacy", min_length=1, max_length=80)
+    evidence_hash: str = Field(default="", max_length=128)
+    edition: str = Field(default="", max_length=24)
+    headline: str = Field(min_length=1, max_length=180)
+    summary: str = Field(min_length=1, max_length=2400)
+    sections: list[NarrativeSection] = Field(min_length=4, max_length=7)
+    watch_next: list[str] = Field(default_factory=list, max_length=6)
+    claims: list[ForecastClaim] = Field(default_factory=list, max_length=20)
+
+    @field_validator("generated_at")
+    @classmethod
+    def _generated_at_tz_aware(cls, v: datetime) -> datetime:
+        if v.tzinfo is None:
+            raise ValueError("generated_at must be timezone-aware")
+        return v
+
+
 class ResearchBrief(BaseModel):
     """The daily Investment Research brief (Loop.md §7 Phase 0.5 acceptance:
     as-of time, citations/unknowns, PAPER/LIVE mode, actionable warnings)."""
@@ -301,6 +374,9 @@ class ResearchBrief(BaseModel):
     # Phase 0.95: research-only symbols discovered outside the static
     # watchlist. This object deliberately contains no order/candidate state.
     discovery: Optional[DiscoveryPool] = None
+    # Optional for old archives, degraded runs, or a failed/unconfigured model.
+    # Never substitute deterministic template prose for a missing narrative.
+    narrative: Optional[ResearchNarrative] = None
     uncertainty: list[str] = Field(default_factory=list)
     provenance: list[ProvenanceLink] = Field(default_factory=list)
 
@@ -624,6 +700,7 @@ def _signal_views(
     )
     return [
         SignalView(
+            signal_id=s.id,
             symbol=s.symbol,
             display_name=name_for(s.symbol),
             direction=s.direction.value,
@@ -631,6 +708,11 @@ def _signal_views(
             source_agent=s.source_agent,
             thesis=_truncate(s.thesis, THESIS_MAX_CHARS),
             as_of_bar=s.as_of_bar.isoformat() if s.as_of_bar is not None else None,
+            baseline_value=(
+                float(s.features_json["close"])
+                if isinstance(s.features_json.get("close"), (int, float))
+                else None
+            ),
         )
         for s in todays
     ]

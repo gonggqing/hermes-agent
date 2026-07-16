@@ -5,9 +5,8 @@
   Finance service API on :9319 (the Hermes dashboard proxies /api/finance/*
   here; Telegram attaches when TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID are set).
 
-NOTE (Phase 0 limitation, documented): the PaperBroker keeps positions in
-memory — restarting ``serve`` resets the paper account (the ledger keeps the
-full history). Rehydrating broker state from the ledger is a Phase-0.5 TODO.
+Paper positions, resting orders, fills and latest market marks are rehydrated
+from the durable ledger when ``serve`` restarts.
 """
 
 from __future__ import annotations
@@ -54,17 +53,92 @@ def _restore_latest_briefs(runtime, markets=("us", "cn", "hk", "kr")) -> list[st
 
 
 def _markets_missing_today(runtime, market_timezones: dict[str, str]) -> list[str]:
-    """Markets with no archived/in-memory brief for their current local date."""
+    """Markets needing startup evidence refresh.
+
+    A current 09:00/21:00 narrative wins over a market-local date rollover. For
+    example, Beijing morning is already the next US calendar date even though
+    the latest useful US evidence is still the prior close. Re-fetching there
+    would erase/rebuild a valid scheduled edition and spend four primary-model
+    calls after every midday container restart.
+    """
+    from datetime import datetime
     from zoneinfo import ZoneInfo
+
+    from swing_trader.brief_cycle import latest_due_brief_slot
 
     missing = []
     now = runtime.clock()
+    _, due = latest_due_brief_slot(now)
     for market, tz_name in market_timezones.items():
         payload = _runtime_brief(runtime, market) or {}
+        narrative = payload.get("narrative")
+        generated_raw = narrative.get("generated_at") if isinstance(narrative, dict) else None
+        try:
+            generated = datetime.fromisoformat(str(generated_raw).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            generated = None
+        if (
+            generated is not None
+            and generated.tzinfo is not None
+            and generated >= due.astimezone(generated.tzinfo)
+        ):
+            continue
         today = now.astimezone(ZoneInfo(tz_name)).date().isoformat()
         if str(payload.get("trading_date") or "") != today:
             missing.append(market)
     return missing
+
+
+def _backfill_brief_narratives(runtime, writer, markets) -> list[str]:
+    """Add model-written analysis to current structured briefs after upgrade.
+
+    Older archives intentionally remain valid without ``narrative``.  On the
+    first startup with the writer enabled, enrich only briefs that do not need
+    a full market-data refresh; this avoids leaving today's page blank until
+    the next scheduled research event and avoids fetching Yahoo data twice.
+    """
+
+    from swing_trader.brief import ResearchBrief
+
+    labels = {
+        "us": "United States",
+        "cn": "Mainland China",
+        "hk": "Hong Kong",
+        "kr": "Korea semiconductors",
+    }
+    enriched: list[str] = []
+    for raw_market in markets:
+        market = raw_market.lower()
+        payload = _runtime_brief(runtime, market)
+        if not payload or payload.get("narrative") is not None:
+            continue
+        try:
+            brief = ResearchBrief.model_validate(payload)
+            narrative = writer.write(
+                brief,
+                market_id=market.upper(),
+                market_label=labels.get(market, market.upper()),
+                language="zh-CN",
+            )
+            if narrative is None:
+                continue
+            brief.narrative = narrative
+            dump = brief.model_dump(mode="json")
+            if market == "us":
+                runtime.latest_brief = dump
+            else:
+                runtime.latest_briefs[market] = dump
+                if market == "cn":
+                    runtime.latest_brief_cn = dump
+            store = getattr(runtime, "brief_store", None)
+            if store is not None or getattr(runtime, "prediction_ledger", None) is not None:
+                from swing_trader.prediction_ledger import persist_brief_artifacts
+
+                persist_brief_artifacts(runtime, market, dump)
+            enriched.append(market)
+        except Exception:
+            logger.exception("restored brief narrative backfill failed", extra={"market": market})
+    return enriched
 
 
 def _cmd_simulate(args: argparse.Namespace) -> None:
@@ -101,7 +175,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     from swing_trader.datafeed import RetryingFeed, YFinanceFeed
     from swing_trader.ledger import Ledger
     from swing_trader.llm import LLMAnalyst, llm_settings_from_env
-    from swing_trader.scheduler import DailyLoopRunner
+    from swing_trader.scheduler import (
+        BEIJING_BRIEF_SCHEDULE,
+        DailyLoopRunner,
+        Event,
+    )
     from swing_trader.telegram_gateway import HttpTransport
 
     # ~/.hermes/.env is the SINGLE source of truth for secrets (Telegram
@@ -198,6 +276,25 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
     _briefs_url = f"sqlite:///{_DbPath(args.db or settings.db_path).parent / 'briefs.db'}"
     runtime.brief_store = BriefStore(url=_briefs_url)
+    from swing_trader.prediction_ledger import PredictionLedger, backfill_brief_history
+
+    _predictions_url = (
+        f"sqlite:///{_DbPath(args.db or settings.db_path).parent / 'prediction_evaluation.db'}"
+    )
+    runtime.prediction_ledger = PredictionLedger(url=_predictions_url)
+    prediction_backfill = backfill_brief_history(
+        runtime.brief_store, runtime.prediction_ledger
+    )
+    logger.info(
+        "prediction history backfilled",
+        extra={
+            "snapshots": prediction_backfill.snapshots,
+            "new_runs": prediction_backfill.new_runs,
+            "replayed_runs": prediction_backfill.replayed_runs,
+            "revisions": prediction_backfill.revisions,
+            "unchanged_revisions": prediction_backfill.unchanged_revisions,
+        },
+    )
     _restore_latest_briefs(runtime)
     # User-set display-name overrides (finance-bot DM "改名"): own DB, highest
     # precedence in _symbol_names. Lets the user fix a name with no code deploy.
@@ -308,27 +405,102 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     # research search fails closed while facts/documents keep working.
     from pathlib import Path as _Path
 
+    from swing_trader.knowledge import (
+        OPENAI_COLLECTION_NAME,
+        OPENAI_EMBEDDING_DIM,
+        OPENAI_EMBEDDING_MODEL,
+        OpenAIEmbedder,
+    )
     from swing_trader.knowledge_pipeline import KnowledgeConfig, build_knowledge
+    from swing_trader.vector_migration import migrate_document_store
+
+    openai_embedding_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    embedding_profile = "hashing-blake2b-v1"
+    knowledge_config = KnowledgeConfig(
+        root_dir=_Path("data/knowledge"),
+        qdrant_url=os.environ.get("FINANCE_QDRANT_URL") or None,
+    )
+    if openai_embedding_key:
+        knowledge_config.collection = OPENAI_COLLECTION_NAME
+        knowledge_config.embedder = OpenAIEmbedder(
+            openai_embedding_key,
+            model=OPENAI_EMBEDDING_MODEL,
+            dimensions=OPENAI_EMBEDDING_DIM,
+        )
+        embedding_profile = f"{OPENAI_EMBEDDING_MODEL}:{OPENAI_EMBEDDING_DIM}"
 
     knowledge, knowledge_index = build_knowledge(
-        KnowledgeConfig(
-            root_dir=_Path("data/knowledge"),
-            qdrant_url=os.environ.get("FINANCE_QDRANT_URL") or None,
-        )
+        knowledge_config
     )
-    logger.info("knowledge store ready", extra={"vector_ok": knowledge_index is not None})
+    vector_migration = None
+    if knowledge_index is not None:
+        try:
+            source_documents = knowledge.documents.count()
+            indexed_documents = knowledge_index.count()
+            if indexed_documents != source_documents:
+                vector_migration = migrate_document_store(
+                    knowledge.documents,
+                    knowledge_index,
+                    batch_size=32,
+                )
+                if not vector_migration.verified:
+                    raise RuntimeError("vector migration verification failed")
+        except Exception as exc:
+            # A partial collection must never masquerade as complete research.
+            # Keep authoritative documents/facts online but disable retrieval.
+            logger.warning(
+                "knowledge vector synchronization failed — semantic search disabled",
+                extra={"embedding_profile": embedding_profile, "error": str(exc)},
+            )
+            knowledge = knowledge.storage_only()
+            knowledge_index = None
+    logger.info(
+        "knowledge store ready",
+        extra={
+            "vector_ok": knowledge_index is not None,
+            "embedding_profile": embedding_profile,
+            "collection": knowledge_config.collection,
+            "migration": vector_migration.to_dict() if vector_migration else None,
+        },
+    )
 
-    llm_settings = llm_settings_from_env()
-    llm_analyst = LLMAnalyst(llm_settings) if llm_settings else None
+    search_llm_settings = llm_settings_from_env(role="search")
+    brief_llm_settings = llm_settings_from_env(role="decision")
+    llm_analyst = LLMAnalyst(search_llm_settings) if search_llm_settings else None
+    if brief_llm_settings:
+        from dataclasses import replace
+
+        from swing_trader.brief_writer import ResearchBriefWriter
+
+        brief_writer = ResearchBriefWriter(
+            replace(
+                brief_llm_settings,
+                # Primary reasoning models need materially longer than the
+                # compact search/extraction tier to synthesize a cited 4-7
+                # section report. This runs on the isolated brief worker, so
+                # the larger bound cannot delay Telegram or order execution.
+                timeout=max(180.0, brief_llm_settings.timeout),
+            )
+        )
+    else:
+        brief_writer = None
     if llm_analyst:
-        logger.info("llm analyst enabled", extra={"model": llm_settings.model})
+        logger.info(
+            "llm routing enabled",
+            extra={
+                "search_model": search_llm_settings.model,
+                "brief_model": brief_llm_settings.model if brief_llm_settings else None,
+            },
+        )
     else:
         logger.info("no LLM key found; rule-based analysis only")
 
-    if telegram is not None and llm_settings is not None:
+    if telegram is not None and search_llm_settings is not None:
         from swing_trader.candidate_reply import CandidateReasonSummarizer
 
-        telegram.set_candidate_reasoner(CandidateReasonSummarizer(llm_settings).summarize)
+        telegram.set_candidate_reasoner(
+            CandidateReasonSummarizer(search_llm_settings).summarize
+        )
 
     runtime.knowledge = knowledge
     runtime.knowledge_index = knowledge_index
@@ -376,13 +548,16 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         from swing_trader.trade_record import make_trade_recorder
         from swing_trader.trade_llm import LLMTradeExtractor
 
-        if llm_settings:
+        if search_llm_settings:
             from dataclasses import replace
 
             # Reasoning-capable high-speed models may spend several seconds in
             # <think> before their small JSON answer. This is a stateless,
             # infrequent human DM path; give it enough room and retry once.
-            trade_settings = replace(llm_settings, timeout=max(30.0, llm_settings.timeout))
+            trade_settings = replace(
+                search_llm_settings,
+                timeout=max(30.0, search_llm_settings.timeout),
+            )
             trade_extractor = LLMTradeExtractor(trade_settings, attempts=2)
         else:
             trade_extractor = None
@@ -590,7 +765,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             mode=settings.mode,
             runtime=runtime,
             notify=notify,  # REPORTER bot (outbound-only)
-            llm_analyst=LLMAnalyst(llm_settings) if llm_settings else None,
+            llm_analyst=(
+                LLMAnalyst(search_llm_settings) if search_llm_settings else None
+            ),
             knowledge=knowledge,
             knowledge_index=knowledge_index,
             focus_note="聚焦科技: 半导体 / 电子 / AI (其他板块仅作参考)",
@@ -605,7 +782,13 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             ),
         )
         cn_runner = DailyLoopRunner(
-            cn_session.callbacks(), clock=runtime.clock, schedule=CN_SCHEDULE
+            {
+                event: callback
+                for event, callback in cn_session.callbacks().items()
+                if event is not Event.PUSH_CANDIDATES
+            },
+            clock=runtime.clock,
+            schedule=CN_SCHEDULE,
         )
         runtime.run_research["cn"] = cn_session.run_now  # manual refresh button
         logger.info("cn research session enabled", extra={"n_symbols": len(cn_wl.symbols)})
@@ -635,7 +818,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             mode=settings.mode,
             runtime=runtime,
             notify=notify,
-            llm_analyst=LLMAnalyst(llm_settings) if llm_settings else None,
+            llm_analyst=(
+                LLMAnalyst(search_llm_settings) if search_llm_settings else None
+            ),
             knowledge=knowledge,
             knowledge_index=knowledge_index,
             focus_note="香港独立研究: 科技 / 平台 / 半导体供应链",
@@ -650,7 +835,13 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             ),
         )
         hk_runner = DailyLoopRunner(
-            hk_session.callbacks(), clock=runtime.clock, schedule=HK_SCHEDULE
+            {
+                event: callback
+                for event, callback in hk_session.callbacks().items()
+                if event is not Event.PUSH_CANDIDATES
+            },
+            clock=runtime.clock,
+            schedule=HK_SCHEDULE,
         )
         runtime.run_research["hk"] = hk_session.run_now
         logger.info("hk research session enabled", extra={"n_symbols": len(hk_wl.symbols)})
@@ -680,7 +871,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             mode=settings.mode,
             runtime=runtime,
             notify=notify,  # REPORTER bot (outbound-only)
-            llm_analyst=LLMAnalyst(llm_settings) if llm_settings else None,
+            llm_analyst=(
+                LLMAnalyst(search_llm_settings) if search_llm_settings else None
+            ),
             knowledge=knowledge,
             knowledge_index=knowledge_index,
             focus_note="仅半导体: 存储巨头(三星/海力士) + HBM 封装链; 关注财报 / news, "
@@ -689,14 +882,47 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             clock=runtime.clock,
         )
         kr_runner = DailyLoopRunner(
-            kr_session.callbacks(), clock=runtime.clock, schedule=KR_SCHEDULE
+            {
+                event: callback
+                for event, callback in kr_session.callbacks().items()
+                if event is not Event.PUSH_CANDIDATES
+            },
+            clock=runtime.clock,
+            schedule=KR_SCHEDULE,
         )
         runtime.run_research["kr"] = kr_session.run_now  # manual refresh button
         logger.info("kr research session enabled", extra={"n_symbols": len(kr_wl.symbols)})
 
+    # Human-facing research delivery has one canonical cadence, independent of
+    # every market's intraday monitor schedule and of the US execution state
+    # machine.  The coordinator refreshes US/CN/HK/KR with the same pipeline,
+    # asks the Hermes primary model for the final synthesis, persists it, then
+    # sends it.  Model/network work stays on its own daemon thread so Telegram
+    # callbacks and order execution cannot be starved by a slow brief.
+    brief_cycle = None
+    brief_runner = None
+    if brief_writer is not None:
+        from swing_trader.brief_cycle import BriefCycleCoordinator
+
+        brief_cycle = BriefCycleCoordinator(runtime, brief_writer, notify=notify)
+        brief_runner = DailyLoopRunner(
+            {
+                Event.MORNING_BRIEF: lambda: brief_cycle.trigger("morning"),
+                Event.EVENING_BRIEF: lambda: brief_cycle.trigger("evening"),
+            },
+            clock=runtime.clock,
+            schedule=BEIJING_BRIEF_SCHEDULE,
+        )
+        logger.info(
+            "all-market brief schedule enabled",
+            extra={"timezone": "Asia/Shanghai", "times": ["09:00", "21:00"]},
+        )
+    else:
+        logger.warning("all-market brief schedule disabled: primary LLM unavailable")
+
     app = create_app(runtime)
     server = uvicorn.Server(
-        uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning")
+        uvicorn.Config(app, host=args.host, port=args.port, log_level="warning")
     )
     api_thread = threading.Thread(target=server.run, daemon=True, name="finance-api")
     api_thread.start()
@@ -744,6 +970,8 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                     logger.exception("startup research refresh failed", extra={"market": market})
                 finally:
                     runtime.research_running.discard(market)
+            if brief_cycle is not None:
+                brief_cycle.catch_up_if_due()
 
         threading.Thread(
             target=_startup_recovery,
@@ -795,6 +1023,8 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 hk_runner.run_pending()
             if kr_runner is not None:
                 kr_runner.run_pending()
+            if brief_runner is not None:
+                brief_runner.run_pending()
             for _ in range(_TICKS_PER_CYCLE):
                 _poll_extra()
                 _time.sleep(_TG_POLL_S)
@@ -844,7 +1074,55 @@ def _cmd_readiness(args: argparse.Namespace) -> None:
     print(report.summary())
 
 
+def _cmd_migrate_vector(args: argparse.Namespace) -> None:
+    """Rebuild the remote vector index from authoritative research documents."""
+    import json
+    import os
+
+    from swing_trader.knowledge import (
+        COLLECTION_NAME,
+        OPENAI_COLLECTION_NAME,
+        OPENAI_EMBEDDING_DIM,
+        DocumentStore,
+        HashingEmbedder,
+        KnowledgeIndex,
+        OpenAIEmbedder,
+    )
+    from swing_trader.vector_migration import migrate_document_store
+
+    target_url = args.target_url or os.environ.get("FINANCE_QDRANT_URL")
+    if not target_url:
+        raise SystemExit("--target-url or FINANCE_QDRANT_URL is required")
+    if args.embedding_provider == "openai":
+        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            raise SystemExit("OPENAI_API_KEY is required for --embedding-provider openai")
+        embedding_dim = args.embedding_dim or OPENAI_EMBEDDING_DIM
+        embedder = OpenAIEmbedder(
+            api_key,
+            model=args.embedding_model,
+            dimensions=embedding_dim,
+        )
+        collection = args.collection or OPENAI_COLLECTION_NAME
+    else:
+        embedding_dim = args.embedding_dim or 256
+        embedder = HashingEmbedder(dim=embedding_dim)
+        collection = args.collection or COLLECTION_NAME
+    documents = DocumentStore(f"sqlite:///{args.documents_db}")
+    target = KnowledgeIndex(
+        url=target_url,
+        embedder=embedder,
+        collection=collection,
+    )
+    report = migrate_document_store(documents, target, batch_size=args.batch_size)
+    print(json.dumps(report.to_dict(), sort_keys=True))
+    if not report.verified:
+        raise SystemExit(2)
+
+
 def main() -> None:
+    from swing_trader.knowledge import OPENAI_EMBEDDING_MODEL
+
     parser = argparse.ArgumentParser(prog="swing_trader")
     parser.add_argument("--log-level", default="INFO")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -856,6 +1134,7 @@ def main() -> None:
     p_sim.set_defaults(func=_cmd_simulate)
 
     p_serve = sub.add_parser("serve", help="run the paper loop + finance API")
+    p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=9319)
     p_serve.add_argument("--db", default=None)
     p_serve.add_argument("--starting-cash", type=float, default=2_000.0)
@@ -886,6 +1165,28 @@ def main() -> None:
     p_rd.add_argument("--db", default=None)
     p_rd.add_argument("--min-days", type=int, default=20)
     p_rd.set_defaults(func=_cmd_readiness)
+
+    p_mv = sub.add_parser(
+        "migrate-vector",
+        help="idempotently rebuild remote Qdrant from documents.db",
+    )
+    p_mv.add_argument("--documents-db", default="data/knowledge/documents.db")
+    p_mv.add_argument("--target-url", default=None)
+    p_mv.add_argument("--batch-size", type=int, default=128)
+    p_mv.add_argument(
+        "--embedding-provider",
+        choices=("hashing", "openai"),
+        default="hashing",
+    )
+    p_mv.add_argument("--embedding-model", default=OPENAI_EMBEDDING_MODEL)
+    p_mv.add_argument(
+        "--embedding-dim",
+        type=int,
+        default=None,
+        help="vector dimension (default: OpenAI 1536, hashing 256)",
+    )
+    p_mv.add_argument("--collection", default=None)
+    p_mv.set_defaults(func=_cmd_migrate_vector)
 
     args = parser.parse_args()
     setup_logging(level=args.log_level)

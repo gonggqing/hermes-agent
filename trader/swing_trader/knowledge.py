@@ -37,6 +37,7 @@ import hashlib
 import json
 import math
 import re
+import time
 import uuid
 from datetime import date, datetime, timezone
 from enum import Enum
@@ -57,10 +58,15 @@ __all__ = [
     "FactsArchive",
     "FinanceKnowledge",
     "HashingEmbedder",
+    "HASHING_EMBEDDER_VERSION",
     "KnowledgeIndex",
     "KnowledgeUnavailable",
     "LicenseStatus",
     "ResearchDocument",
+    "OpenAIEmbedder",
+    "OPENAI_COLLECTION_NAME",
+    "OPENAI_EMBEDDING_DIM",
+    "OPENAI_EMBEDDING_MODEL",
     "SNIPPET_CHARS",
     "content_hash",
     "normalize_text",
@@ -71,6 +77,20 @@ logger = get_logger(__name__)
 
 #: Name of the Qdrant collection (Loop.md §5.10).
 COLLECTION_NAME = "finance_knowledge"
+
+#: Production semantic-retrieval profile.  The collection name encodes both
+#: provider/model and dimension because Qdrant collections cannot mix vector
+#: dimensions and must not silently mix model spaces of the same dimension.
+#: The legacy ``finance_knowledge`` hashing collection remains untouched as a
+#: rollback path during the Phase-0 migration.
+OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
+OPENAI_EMBEDDING_DIM = 1536
+OPENAI_COLLECTION_NAME = "finance_knowledge_openai_te3s_1536"
+
+#: Version stamped into every vector payload.  Changing the hashing algorithm
+#: or dimension requires a new collection/backfill rather than silently mixing
+#: incompatible vectors in one collection.
+HASHING_EMBEDDER_VERSION = "hashing-blake2b-v1"
 
 #: Snippet length returned by facade search (source attribution, not full text).
 SNIPPET_CHARS = 300
@@ -422,6 +442,7 @@ class HashingEmbedder:
         if dim <= 0:
             raise ValueError("dim must be positive")
         self.dim = dim
+        self.model_id = HASHING_EMBEDDER_VERSION
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         return [self._embed_one(t) for t in texts]
@@ -438,6 +459,81 @@ class HashingEmbedder:
         if norm > 0.0:
             vec = [v / norm for v in vec]
         return vec
+
+
+class OpenAIEmbedder:
+    """OpenAI v3 embedding adapter with batched, order-stable responses."""
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        model: str = OPENAI_EMBEDDING_MODEL,
+        dimensions: int = OPENAI_EMBEDDING_DIM,
+        base_url: str = "https://api.openai.com/v1",
+        timeout: float = 60.0,
+        max_attempts: int = 3,
+    ) -> None:
+        if not api_key.strip():
+            raise ValueError("OpenAI embedding API key is required")
+        if dimensions < 1:
+            raise ValueError("dimensions must be positive")
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be positive")
+        self._api_key = api_key.strip()
+        self.model = model
+        self.dim = dimensions
+        self.model_id = f"openai:{model}:{dimensions}"
+        self._base_url = base_url.rstrip("/")
+        self._timeout = timeout
+        self._max_attempts = max_attempts
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        import requests
+
+        response = None
+        for attempt in range(self._max_attempts):
+            try:
+                response = requests.post(
+                    f"{self._base_url}/embeddings",
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "input": texts,
+                        "dimensions": self.dim,
+                        "encoding_format": "float",
+                    },
+                    timeout=self._timeout,
+                )
+                response.raise_for_status()
+                break
+            except Exception as exc:
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                retryable = status is None or status == 429 or status >= 500
+                if not retryable or attempt + 1 >= self._max_attempts:
+                    # Suppress chaining so credentials cannot leak through a
+                    # third-party exception representation.
+                    raise RuntimeError(
+                        f"OpenAI embedding request failed: {type(exc).__name__}"
+                    ) from None
+                time.sleep(0.5 * (2**attempt))
+        assert response is not None
+        try:
+            data = response.json().get("data") or []
+            ordered = sorted(data, key=lambda item: int(item["index"]))
+            vectors = [list(map(float, item["embedding"])) for item in ordered]
+        except Exception as exc:
+            raise RuntimeError(
+                f"OpenAI embedding response invalid: {type(exc).__name__}"
+            ) from None
+        if len(vectors) != len(texts) or any(len(vector) != self.dim for vector in vectors):
+            raise RuntimeError("OpenAI embedding response shape mismatch")
+        return vectors
 
 
 class KnowledgeIndex:
@@ -475,6 +571,7 @@ class KnowledgeIndex:
         self._models = models
         self._collection = collection
         self._embedder: EmbeddingProvider = embedder or HashingEmbedder()
+        self._collection_ready_dim: int | None = None
         if path is not None:
             self._where = f"embedded:{path}"
             self._client = QdrantClient(path=str(path))
@@ -497,7 +594,18 @@ class KnowledgeIndex:
         )
 
     def _ensure_collection(self, dim: int) -> None:
+        if self._collection_ready_dim == dim:
+            return
         if self._client.collection_exists(self._collection):
+            info = self._client.get_collection(self._collection)
+            configured = info.config.params.vectors
+            existing_dim = getattr(configured, "size", None)
+            if existing_dim is None or int(existing_dim) != dim:
+                raise ValueError(
+                    f"collection {self._collection!r} has dimension "
+                    f"{existing_dim!r}, expected {dim}; use a versioned collection"
+                )
+            self._collection_ready_dim = dim
             return
         self._client.create_collection(
             self._collection,
@@ -505,11 +613,25 @@ class KnowledgeIndex:
                 size=dim, distance=self._models.Distance.COSINE
             ),
         )
+        self._collection_ready_dim = dim
 
     @staticmethod
     def _point_id(doc_id: str) -> str:
         # Deterministic UUID per document id: re-indexing overwrites in place.
         return str(uuid.uuid5(uuid.NAMESPACE_URL, doc_id))
+
+    @property
+    def embedding_dim(self) -> int | None:
+        """Configured vector dimension when exposed by the provider."""
+        value = getattr(self._embedder, "dim", None)
+        return int(value) if value is not None else None
+
+    @property
+    def embedding_model(self) -> str:
+        """Stable provider/model identifier stamped into payload metadata."""
+        return str(
+            getattr(self._embedder, "model_id", self._embedder.__class__.__name__)
+        )
 
     # ------------------------------------------------------------ operations
 
@@ -520,17 +642,51 @@ class KnowledgeIndex:
         trading_date, publisher}; ``document_id`` is always enforced.
         Raises :class:`KnowledgeUnavailable` if the backend is unreachable.
         """
-        vector = self._embedder.embed([text])[0]
-        merged = {**(payload or {}), "document_id": doc_id}
+        self.index_many([(doc_id, text, payload or {})])
+
+    def index_many(
+        self,
+        records: list[tuple[str, str, dict[str, Any]]],
+    ) -> int:
+        """Embed and idempotently upsert a batch of document references.
+
+        Point IDs are deterministic, so replaying a migration updates points
+        in place instead of duplicating them.  Returns the number submitted.
+        """
+        if not records:
+            return 0
         try:
-            self._ensure_collection(len(vector))
+            vectors = self._embedder.embed([text for _, text, _ in records])
+            if len(vectors) != len(records):
+                raise ValueError("embedding provider returned the wrong vector count")
+            if not vectors or not vectors[0]:
+                raise ValueError("embedding provider returned an empty vector")
+            self._ensure_collection(len(vectors[0]))
             self._client.upsert(
                 self._collection,
                 points=[
                     self._models.PointStruct(
-                        id=self._point_id(doc_id), vector=vector, payload=merged
+                        id=self._point_id(doc_id),
+                        vector=vector,
+                        payload={**payload, "document_id": doc_id},
                     )
+                    for (doc_id, _, payload), vector in zip(records, vectors, strict=True)
                 ],
+            )
+        except Exception as exc:  # fail closed (Loop.md §5.10)
+            raise self._unavailable(exc) from exc
+        return len(records)
+
+    def count(self) -> int:
+        """Exact number of indexed points; zero before collection creation."""
+        try:
+            if not self._client.collection_exists(self._collection):
+                return 0
+            return int(
+                self._client.count(
+                    collection_name=self._collection,
+                    exact=True,
+                ).count
             )
         except Exception as exc:  # fail closed (Loop.md §5.10)
             raise self._unavailable(exc) from exc
@@ -541,8 +697,11 @@ class KnowledgeIndex:
         Returns [] when nothing has been indexed yet; raises
         :class:`KnowledgeUnavailable` if the backend is unreachable.
         """
-        vector = self._embedder.embed([query])[0]
         try:
+            vectors = self._embedder.embed([query])
+            if len(vectors) != 1 or not vectors[0]:
+                raise ValueError("embedding provider returned an invalid query vector")
+            vector = vectors[0]
             if not self._client.collection_exists(self._collection):
                 return []
             res = self._client.query_points(
@@ -632,6 +791,8 @@ class FinanceKnowledge:
                     "doc_type": stored.doc_type.value,
                     "trading_date": stored.trading_date_et.isoformat(),
                     "publisher": stored.publisher,
+                    "embedding_model": self._index.embedding_model,
+                    "embedding_dim": self._index.embedding_dim,
                 },
             )
         except KnowledgeUnavailable:

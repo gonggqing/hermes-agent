@@ -80,6 +80,16 @@ class TestPlaceOrder:
         active = b.get_orders(active_only=True)
         assert [o.id for o in active] == [result.order.id]
 
+    def test_runtime_execution_timestamp_overrides_daily_bar_start(self):
+        b = broker()
+        result = b.place_order(make_order())
+        executed_at = datetime(2026, 7, 13, 20, 0, tzinfo=timezone.utc)
+        fills = b.step(
+            {"NVDA": bar(open=99, low=98, close=101)},
+            execution_ts=executed_at,
+        )
+        assert result.accepted and fills[0].ts == executed_at
+
     def test_buy_rejected_when_reservation_exceeds_cash(self):
         b = broker(starting_cash=2000.0)
         result = b.place_order(make_order(qty=20, limit=100.0))  # 2001 > 2000

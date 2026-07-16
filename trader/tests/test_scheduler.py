@@ -22,6 +22,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from swing_trader.scheduler import (
+    BEIJING_BRIEF_SCHEDULE,
     ET,
     EVENT_TIMES_ET,
     NYSE_FULL_DAY_HOLIDAYS_2026,
@@ -104,6 +105,10 @@ class TestIsTradingDay:
         assert len(NYSE_FULL_DAY_HOLIDAYS_2026) == 10
         assert all(d.year == 2026 for d in NYSE_FULL_DAY_HOLIDAYS_2026)
 
+    def test_promised_briefs_run_on_every_beijing_calendar_day(self) -> None:
+        assert is_trading_day(date(2026, 7, 11), BEIJING_BRIEF_SCHEDULE)
+        assert is_trading_day(date(2026, 7, 12), BEIJING_BRIEF_SCHEDULE)
+
 
 # ---------------------------------------------------------------- phase_at
 
@@ -159,6 +164,18 @@ class TestPhaseAt:
 
 
 class TestNextEvent:
+    def test_beijing_brief_schedule_has_exact_09_and_21_slots(self) -> None:
+        before_morning = datetime(2026, 7, 16, 0, 59, tzinfo=UTC)
+        assert next_event(before_morning, BEIJING_BRIEF_SCHEDULE) == (
+            Event.MORNING_BRIEF,
+            datetime(2026, 7, 16, 1, 0, tzinfo=UTC),
+        )
+        after_morning = datetime(2026, 7, 16, 1, 0, tzinfo=UTC)
+        assert next_event(after_morning, BEIJING_BRIEF_SCHEDULE) == (
+            Event.EVENING_BRIEF,
+            datetime(2026, 7, 16, 13, 0, tzinfo=UTC),
+        )
+
     def test_mid_morning_july(self) -> None:
         event, instant = next_event(at_et(2026, 7, 8, 10, 0))
         assert event is Event.DECIDE_START

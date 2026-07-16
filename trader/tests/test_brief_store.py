@@ -77,6 +77,22 @@ def test_get_latest_returns_newest_snapshot_across_dates(tmp_path):
     assert st.get_latest("us") is None
 
 
+def test_same_evidence_timestamp_restores_last_enriched_snapshot(tmp_path):
+    """Structured and AI-enriched writes can share one evidence ``as_of``.
+
+    Restart recovery must use row creation order as the deterministic tie
+    breaker or it can randomly restore the earlier narrative-less payload.
+    """
+    st = _store(tmp_path)
+    evidence_time = "2026-07-14T09:11:00Z"
+    base = _kr_brief(as_of=evidence_time)
+    st.save("kr", {**base, "narrative": None})
+    st.save("kr", {**base, "narrative": {"headline": "primary synthesis"}})
+
+    latest = st.get_latest("kr")
+    assert latest["narrative"]["headline"] == "primary synthesis"
+
+
 def test_snapshot_table_isolated_from_ledger(tmp_path):
     """Own MetaData: the snapshot table must NOT be creatable by the ledger and
     vice versa (same DB-file could otherwise cross-pollute)."""
@@ -87,3 +103,13 @@ def test_snapshot_table_isolated_from_ledger(tmp_path):
 
 def test_unknown_snapshot_id_returns_none(tmp_path):
     assert _store(tmp_path).get("does-not-exist") is None
+
+
+def test_iter_snapshots_returns_full_payload_oldest_first(tmp_path):
+    store = _store(tmp_path)
+    first = store.save("kr", _kr_brief(as_of="2026-07-13T09:00:00Z"))
+    second = store.save("us", _kr_brief(as_of="2026-07-14T09:00:00Z"))
+    rows = store.iter_snapshots()
+    assert [row[0] for row in rows] == [first, second]
+    assert rows[0][1] == "kr" and rows[1][1] == "us"
+    assert rows[0][2]["trading_date"] == "2026-07-14"

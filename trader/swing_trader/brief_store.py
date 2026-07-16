@@ -105,7 +105,10 @@ class BriefStore:
             q = select(BriefSnapshotRow)
             if market:
                 q = q.where(BriefSnapshotRow.market == market.strip().lower())
-            q = q.order_by(BriefSnapshotRow.generated_at.desc()).limit(limit)
+            q = q.order_by(
+                BriefSnapshotRow.generated_at.desc(),
+                BriefSnapshotRow.created_at.desc(),
+            ).limit(limit)
             return [
                 {
                     "id": r.id, "market": r.market, "trading_date": r.trading_date,
@@ -128,7 +131,10 @@ class BriefStore:
                 select(BriefSnapshotRow)
                 .where(BriefSnapshotRow.market == market.strip().lower())
                 .where(BriefSnapshotRow.trading_date == str(trading_date))
-                .order_by(BriefSnapshotRow.generated_at.desc())
+                .order_by(
+                    BriefSnapshotRow.generated_at.desc(),
+                    BriefSnapshotRow.created_at.desc(),
+                )
                 .limit(1)
             )
             row = s.exec(q).first()
@@ -146,8 +152,28 @@ class BriefStore:
             q = (
                 select(BriefSnapshotRow)
                 .where(BriefSnapshotRow.market == market.strip().lower())
-                .order_by(BriefSnapshotRow.generated_at.desc())
+                .order_by(
+                    BriefSnapshotRow.generated_at.desc(),
+                    BriefSnapshotRow.created_at.desc(),
+                )
                 .limit(1)
             )
             row = s.exec(q).first()
             return json.loads(row.payload_json) if row else None
+
+    def iter_snapshots(self, limit: int = 10_000) -> list[tuple[str, str, dict]]:
+        """Oldest-first full snapshots for idempotent derived-store backfills."""
+        limit = max(1, min(int(limit), 100_000))
+        with Session(self._engine) as s:
+            rows = s.exec(
+                select(BriefSnapshotRow)
+                .order_by(
+                    BriefSnapshotRow.generated_at.asc(),
+                    BriefSnapshotRow.created_at.asc(),
+                )
+                .limit(limit)
+            ).all()
+            return [
+                (row.id, row.market, json.loads(row.payload_json))
+                for row in rows
+            ]

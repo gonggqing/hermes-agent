@@ -609,6 +609,7 @@ class DailyLoop:
         earnings_provider=None,  # Optional[EarningsProvider] (Phase 0.75)
         kill_switch=None,  # Optional[KillSwitch] — manual operator HALT (§3)
         discovery_scanner=None,  # Optional[MarketDiscoveryScanner] — research only
+        brief_writer=None,  # Optional[ResearchBriefWriter] — narrative only
     ) -> None:
         self.feed = feed
         self.broker = broker
@@ -660,6 +661,7 @@ class DailyLoop:
         self._health: Optional[HealthStatus] = None  # Phase 0.8 (dead-man's switch)
         self.kill_switch = kill_switch  # Phase 0.95 manual HALT (may be None)
         self.discovery_scanner = discovery_scanner
+        self.brief_writer = brief_writer
         self._discovery = None
         self._confirmation_recovery_lock = threading.Lock()
         self._execution_lock = threading.Lock()
@@ -823,16 +825,34 @@ class DailyLoop:
         callbacks arriving with no ConfirmationService find no registered id and
         are answered "unknown candidate" (never touch the None service)."""
         now = self.clock()
-        if self.telegram is not None:
-            self.telegram.poll(self._confirmation, now)
+        self._poll_telegram_safely(now)
         self._watch_confirmation_window(now)
+
+    def _poll_telegram_safely(self, now: datetime) -> None:
+        """Keep Telegram transport failures outside the trading state machine.
+
+        Long polling is a convenience surface, not an execution dependency.
+        A timeout/disconnect must leave the process alive so portal approvals,
+        cutoff execution, protection and market-close reconciliation continue.
+        The next three-second tick naturally retries without replaying an
+        applied callback (Telegram offset + ConfirmationService idempotency).
+        """
+
+        if self.telegram is None:
+            return
+        try:
+            self.telegram.poll(self._confirmation, now)
+        except Exception as exc:  # transport exceptions contain no token/URL
+            logger.warning(
+                "telegram poll unavailable; trading loop continues",
+                extra={"error_type": type(exc).__name__},
+            )
 
     def on_cutoff(self) -> None:
         now = self.clock()
         if self._confirmation is None:
             self._restore_current_confirmation(now)
-        if self.telegram is not None:
-            self.telegram.poll(self._confirmation, now)
+        self._poll_telegram_safely(now)
         expired = self._confirmation.expire(now) if self._confirmation else []
         approved_count = self._approved_for_date(now)
         report = self._execute_approved(now, trigger="cutoff")
@@ -919,10 +939,11 @@ class DailyLoop:
 
     def on_close(self, bars=None) -> None:
         """16:00 ET: feed today's daily bar so MOC/LOC + resting orders fill."""
+        now = self.clock()
         if bars is None:
             bars = self._fetch_close_bars()
         if bars:
-            self.broker.step(bars)
+            self.broker.step(bars, execution_ts=now)
         self.execution.sync_fills()
         self.broker.end_of_day()
         self._expire_unexecuted_through(
@@ -930,6 +951,7 @@ class DailyLoop:
         )
         status = self.account_monitor.poll()
         self.ledger.record_snapshot(status.snapshot)
+        self.ledger.record_market_marks(self.broker.get_positions(), self.mode, now)
         self._update_memory_outcomes()
 
     # ------------------------------------------ durable confirmation recovery
@@ -1462,15 +1484,33 @@ class DailyLoop:
                           if self.earnings_provider is not None else None),
                 discovery=self._discovery,
             )
+            if self.brief_writer is not None:
+                brief.narrative = self.brief_writer.write(
+                    brief,
+                    market_id="US",
+                    market_label="United States",
+                    language="zh-CN",
+                )
+            else:
+                # Intraday monitor refreshes update deterministic evidence but
+                # must not erase the last promised 09:00/21:00 primary-model
+                # brief.  The dedicated brief coordinator explicitly clears
+                # this field before generating the next edition.
+                previous = self.runtime.latest_brief
+                if (
+                    isinstance(previous, dict)
+                    and previous.get("narrative") is not None
+                ):
+                    from swing_trader.brief import ResearchNarrative
+
+                    brief.narrative = ResearchNarrative.model_validate(
+                        previous["narrative"]
+                    )
             dump = brief.model_dump(mode="json")
             self.runtime.latest_brief = dump
-            store = getattr(self.runtime, "brief_store", None)
-            if store is not None:
-                try:
-                    store.save("us", dump)
-                except Exception:  # archive failure must not break the loop
-                    logger.warning("brief snapshot archive failed",
-                                   extra={"market": "us"})
+            from swing_trader.prediction_ledger import persist_brief_artifacts
+
+            persist_brief_artifacts(self.runtime, "us", dump)
         except Exception:  # brief must never break the trading loop
             logger.exception("research brief build failed")
 
@@ -1483,7 +1523,8 @@ class DailyLoop:
 
         try:
             self._earnings = upcoming_earnings(
-                self.earnings_provider, self.symbols,
+                self.earnings_provider,
+                watchlist_mod.earnings_symbols(self.symbols),
                 now=self.clock(), within_days=14,
             )
         except Exception:  # earnings must never break the loop
