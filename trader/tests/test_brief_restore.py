@@ -36,7 +36,7 @@ def test_restore_hydrates_all_runtime_slots(tmp_path):
             },
         )
 
-    assert _restore_latest_briefs(runtime) == ["us", "cn", "hk", "kr"]
+    assert _restore_latest_briefs(runtime) == ["us", "hk", "cn", "kr"]
     assert runtime.latest_brief["marker"] == "us"
     assert runtime.latest_briefs["cn"]["marker"] == "cn"
     assert runtime.latest_brief_cn["marker"] == "cn"

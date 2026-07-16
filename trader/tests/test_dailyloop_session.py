@@ -44,7 +44,7 @@ class TestTelegramPollBeforeDecide:
         """A portfolio-draft card can be tapped at ANY time, so on_confirm_poll
         must poll Telegram even before the decide phase creates the candidate
         ConfirmationService. Regression: the old `_confirmation is None` guard
-        skipped the poll, so a tapped draft card spun forever until ~11:00 ET."""
+        skipped the poll, so a tapped draft card spun forever until ~10:00 ET."""
         loop, runtime, clock, days = loop_env
         calls = []
 
@@ -75,7 +75,7 @@ class TestTelegramPollBeforeDecide:
 class TestRunSessionNow:
     def test_publishes_into_now_anchored_window(self, loop_env):
         loop, runtime, clock, days = loop_env
-        # an OFF-schedule time (15:00 ET — well after the 12:30 cutoff)
+        # an OFF-schedule time (15:00 ET — well after the 11:30 cutoff)
         run_at = clock.set_et(days[0], 15, 0)
         summary = loop.run_session_now(now=run_at, window_minutes=60)
 

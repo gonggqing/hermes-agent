@@ -112,6 +112,11 @@ class RiskParams:
     max_adv_fraction: float = 0.005
     min_confidence: float = 0.0
     est_commission: float = 1.0
+    # Disabled at the bare engine level for backwards-compatible library use;
+    # the Finance service always replaces these from PortfolioControls.
+    max_invested_pct: float = 100.0
+    max_agent_managed_pct: float = 100.0
+    max_position_pct: float = 100.0
 
     @property
     def effective_per_trade_risk_pct(self) -> float:
@@ -314,34 +319,98 @@ class RiskEngine:
             qty = float(allowed)
             shrunk = True
 
-        # -- 10. Cash account: must afford notional + commission -------------------
-        if qty * entry + params.est_commission > account.cash:
-            new_qty = float(math.floor((account.cash - params.est_commission) / entry))
+        # -- 10. Currency sleeve cash: no implicit FX and no cross-currency spend --
+        spendable_cash = account.cash_by_currency.get(candidate.currency)
+        if spendable_cash is None:
+            return veto(
+                f"entry vetoed: no settled {candidate.currency} cash sleeve "
+                "(cross-currency spending requires a separately confirmed FX conversion)"
+            )
+        if qty * entry + params.est_commission > spendable_cash:
+            new_qty = float(math.floor((spendable_cash - params.est_commission) / entry))
             if new_qty <= 0:
                 return veto(
-                    f"entry vetoed: cash {account.cash:.2f} cannot cover a single "
+                    f"entry vetoed: {candidate.currency} cash {spendable_cash:.2f} cannot cover a single "
                     f"share at {entry:g} plus commission {params.est_commission:.2f}"
                 )
             reasons.append(
                 f"shrunk {qty:g} -> {new_qty:g} to fit available cash "
-                f"{account.cash:.2f} (incl. est. commission {params.est_commission:.2f})"
+                f"{spendable_cash:.2f} {candidate.currency} "
+                f"(incl. est. commission {params.est_commission:.2f})"
             )
             qty = new_qty
             shrunk = True
 
-        # -- 11. Role/pool exposure cap (Loop.md §11) --------------------------------
+        # -- 11. Portfolio, agent-sleeve and single-position allocation caps ------
+        fx = account.fx_to_base.get(candidate.currency)
+        if fx is None or fx <= 0:
+            return veto(
+                f"entry vetoed: no {candidate.currency}->{account.base_currency} FX mark "
+                "for portfolio allocation controls"
+            )
+
+        def base_value(pos: Position) -> float | None:
+            pos_fx = account.fx_to_base.get(pos.currency)
+            if pos_fx is None or pos_fx <= 0:
+                return None
+            value = pos.market_value
+            if value is None:
+                value = pos.avg_px * pos.qty
+            return value * pos_fx
+
+        converted = [base_value(pos) for pos in positions]
+        if any(value is None for value in converted):
+            return veto("entry vetoed: one or more position currencies lack an FX mark")
+        invested = sum(value or 0.0 for value in converted)
+        symbol_exposure = sum(
+            value or 0.0
+            for pos, value in zip(positions, converted)
+            if pos.symbol == candidate.symbol
+        )
+        new_notional = qty * entry * fx
+
+        allocation_cap_pct = min(params.max_invested_pct, params.max_agent_managed_pct)
+        allocation_cap = allocation_cap_pct / 100.0 * account.equity
+        if invested + new_notional > allocation_cap:
+            new_qty = float(math.floor((allocation_cap - invested) / (entry * fx)))
+            if new_qty <= 0:
+                return veto(
+                    f"entry vetoed: agent-managed invested exposure {invested:.2f} "
+                    f"has no headroom under {allocation_cap_pct:.1f}% of equity"
+                )
+            reasons.append(
+                f"shrunk {qty:g} -> {new_qty:g} to preserve the portfolio cash reserve "
+                f"and agent allocation ceiling ({allocation_cap_pct:.1f}% of equity)"
+            )
+            qty = new_qty
+            new_notional = qty * entry * fx
+            shrunk = True
+
+        position_cap = params.max_position_pct / 100.0 * account.equity
+        if symbol_exposure + new_notional > position_cap:
+            new_qty = float(math.floor((position_cap - symbol_exposure) / (entry * fx)))
+            if new_qty <= 0:
+                return veto(
+                    f"entry vetoed: {candidate.symbol} already has no headroom under "
+                    f"the {params.max_position_pct:.1f}% single-position cap"
+                )
+            reasons.append(
+                f"shrunk {qty:g} -> {new_qty:g} to fit the "
+                f"{params.max_position_pct:.1f}% single-position cap"
+            )
+            qty = new_qty
+            shrunk = True
+
+        # -- 12. Role/pool exposure cap (Loop.md §11) ------------------------------
         exposure = 0.0
-        for pos in positions:
+        for pos, converted_value in zip(positions, converted):
             if pos.pool is not candidate.pool:
                 continue
-            value = pos.market_value
-            if value is None:  # no market price yet -> fall back to cost basis
-                value = pos.avg_px * pos.qty
-            exposure += value
+            exposure += converted_value or 0.0
         role_cap_pct = float(params.role_caps.get(candidate.pool, 0.0))
         cap_dollars = role_cap_pct / 100.0 * account.equity
-        if exposure + qty * entry > cap_dollars:
-            new_qty = float(math.floor((cap_dollars - exposure) / entry))
+        if exposure + qty * entry * fx > cap_dollars:
+            new_qty = float(math.floor((cap_dollars - exposure) / (entry * fx)))
             if new_qty <= 0:
                 return veto(
                     f"entry vetoed: {candidate.pool.value} pool exposure "

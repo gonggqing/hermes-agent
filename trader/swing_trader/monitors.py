@@ -293,14 +293,19 @@ def _retag_positions(positions: Sequence[Position]) -> list[Position]:
     return retagged
 
 
-def _pool_exposure_pct(positions: Sequence[Position], equity: float) -> dict[Role, float]:
-    """Per-pool exposure as % of equity (cost basis when no market price)."""
+def _pool_exposure_pct(
+    positions: Sequence[Position],
+    equity: float,
+    fx_to_base: dict[str, float] | None = None,
+) -> dict[Role, float]:
+    """Per-pool exposure in the account base currency."""
     totals: dict[Role, float] = {}
     for pos in positions:
         value = pos.market_value
         if value is None:
             value = pos.avg_px * pos.qty
-        totals[pos.pool] = totals.get(pos.pool, 0.0) + value
+        fx = (fx_to_base or {}).get(pos.currency, 1.0 if fx_to_base is None else 0.0)
+        totals[pos.pool] = totals.get(pos.pool, 0.0) + value * fx
     if equity <= 0:
         return {role: 0.0 for role in totals}
     return {role: value / equity * 100.0 for role, value in totals.items()}
@@ -502,7 +507,7 @@ class PortfolioMonitor(_BaseMonitor):
         ts = self._clock()
         account = self._broker.get_account()
         positions = _retag_positions(self._broker.get_positions())
-        exposure = _pool_exposure_pct(positions, account.equity)
+        exposure = _pool_exposure_pct(positions, account.equity, account.fx_to_base)
 
         watch: dict[str, WatchState] = {}
         active_symbols = list(symbols) if symbols is not None else self._symbols
@@ -639,6 +644,10 @@ class AccountRiskMonitor(_BaseMonitor):
         self._broker = broker
         self._params = params if params is not None else RiskParams()
 
+    def update_params(self, params: RiskParams) -> None:
+        """Apply operator-owned risk controls without rebuilding the monitor."""
+        self._params = params
+
     def poll(self) -> RiskStatus:
         ts = self._clock()
         account = self._broker.get_account()
@@ -653,9 +662,14 @@ class AccountRiskMonitor(_BaseMonitor):
             )
 
         positions = _retag_positions(self._broker.get_positions())
-        exposure = _pool_exposure_pct(positions, account.equity)
+        exposure = _pool_exposure_pct(positions, account.equity, account.fx_to_base)
 
         warnings: list[str] = []
+        missing_fx = sorted(
+            {pos.currency for pos in positions if pos.currency not in account.fx_to_base}
+        )
+        if missing_fx:
+            warnings.append(f"missing FX marks for: {', '.join(missing_fx)}")
         for role, pct in exposure.items():
             cap = float(self._params.role_caps.get(role, 0.0))
             if pct > cap:

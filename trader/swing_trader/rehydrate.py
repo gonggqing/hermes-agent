@@ -74,18 +74,23 @@ def rehydrate_from_ledger(
         )
 
     warnings: list[str] = []
-    cash = broker.starting_cash
-    book: dict[str, tuple[float, float]] = {}  # symbol -> (qty, avg_px)
+    cash_by_currency = dict(broker.starting_cash_by_currency)
+    book: dict[tuple[str, str], tuple[float, float]] = {}  # (currency, symbol) -> lot
 
     for f in fills:
-        qty, avg = book.get(f.symbol, (0.0, 0.0))
+        key = (f.currency, f.symbol)
+        qty, avg = book.get(key, (0.0, 0.0))
         if f.side is Side.BUY:
-            cash -= f.qty * f.px + f.commission
+            cash_by_currency[f.currency] = (
+                cash_by_currency.get(f.currency, 0.0) - f.qty * f.px - f.commission
+            )
             new_qty = qty + f.qty
             avg = (qty * avg + f.qty * f.px) / new_qty if new_qty > 0 else 0.0
-            book[f.symbol] = (new_qty, avg)
+            book[key] = (new_qty, avg)
         else:
-            cash += f.qty * f.px - f.commission
+            cash_by_currency[f.currency] = (
+                cash_by_currency.get(f.currency, 0.0) + f.qty * f.px - f.commission
+            )
             new_qty = qty - f.qty
             if new_qty < -1e-9:
                 warnings.append(
@@ -93,12 +98,18 @@ def rehydrate_from_ledger(
                     f"(clamped to flat)"
                 )
                 new_qty = 0.0
-            book[f.symbol] = (new_qty, avg)
+            book[key] = (new_qty, avg)
 
     marks = ledger.get_latest_market_marks(mode)
     positions = [
-        Position(symbol=sym, qty=qty, avg_px=avg, mkt_px=marks.get(sym))
-        for sym, (qty, avg) in book.items()
+        Position(
+            symbol=sym,
+            currency=currency,
+            qty=qty,
+            avg_px=avg,
+            mkt_px=marks.get(sym),
+        )
+        for (currency, sym), (qty, avg) in book.items()
         if qty > 1e-9
     ]
 
@@ -113,24 +124,32 @@ def rehydrate_from_ledger(
             len(positions) == 1
             and positions[0].mkt_px is None
             and positions[0].qty > 0
+            and positions[0].currency == broker.base_currency
         ):
             inferred = (last.equity - last.cash) / positions[0].qty
             if inferred >= 0:
                 positions[0].mkt_px = inferred
         # Only comparable when no fills landed after that snapshot.
         later_fills = [f for f in fills if f.ts > last.ts]
-        if not later_fills and abs(last.cash - cash) > _SNAPSHOT_CASH_TOLERANCE:
+        replayed_base_cash = sum(
+            value * broker._fx_to_base.get(currency, 0.0)
+            for currency, value in cash_by_currency.items()
+        )
+        if not later_fills and abs(last.cash - replayed_base_cash) > _SNAPSHOT_CASH_TOLERANCE:
             warnings.append(
-                f"replayed cash {cash:.2f} != last snapshot cash "
+                f"replayed cash {replayed_base_cash:.2f} != last snapshot cash "
                 f"{last.cash:.2f} — was --starting-cash changed for this ledger?"
             )
 
-    restore_warnings = broker.restore_state(cash, positions, open_orders)
+    restore_warnings = broker.restore_state(cash_by_currency, positions, open_orders)
     warnings.extend(restore_warnings)
 
     report = RehydrationReport(
         performed=True,
-        cash=cash,
+        cash=sum(
+            value * broker._fx_to_base.get(currency, 0.0)
+            for currency, value in cash_by_currency.items()
+        ),
         n_positions=len(positions),
         n_open_orders=len(open_orders),
         n_fills_seeded=len(fills),

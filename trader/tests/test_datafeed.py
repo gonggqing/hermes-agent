@@ -274,6 +274,36 @@ def test_get_bars_uses_query2_chart_fallback_and_drops_null_rows() -> None:
     assert bars[0].volume == 500.0
 
 
+def test_query2_daily_bars_apply_adjusted_close_factor_to_ohlc() -> None:
+    ticker = FakeTicker(history_df=pd.DataFrame())
+
+    def chart(_symbol: str, _period: str, _interval: str) -> dict:
+        return {
+            "chart": {
+                "result": [{
+                    "timestamp": [1_783_814_400],
+                    "indicators": {
+                        "quote": [{
+                            "open": [100.0], "high": [110.0], "low": [90.0],
+                            "close": [100.0], "volume": [500],
+                        }],
+                        "adjclose": [{"adjclose": [50.0]}],
+                    },
+                }]
+            }
+        }
+
+    bars = YFinanceFeed(
+        ticker_factory=lambda _symbol: ticker,
+        chart_fetcher=chart,
+    ).get_bars("SPLIT", timeframe="1d", limit=5)
+
+    assert bars[0].open == 50.0
+    assert bars[0].high == 55.0
+    assert bars[0].low == 45.0
+    assert bars[0].close == 50.0
+
+
 def test_get_bars_naive_index_localized_utc() -> None:
     idx = pd.DatetimeIndex([datetime(2026, 7, 9), datetime(2026, 7, 10)])  # naive
     ticker = FakeTicker(history_df=ohlcv_df(idx))

@@ -14,7 +14,18 @@ import {
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 
-import { BREAKER_TONE, enumLabel, financeKey, fmtMoney, fmtPct, fmtPrice, fmtQty, fmtSignedMoney, fmtTs, pnlClass } from './lib'
+import {
+  BREAKER_TONE,
+  enumLabel,
+  financeKey,
+  fmtMoney,
+  fmtPct,
+  fmtPrice,
+  fmtQty,
+  fmtSignedMoney,
+  fmtTs,
+  pnlClass
+} from './lib'
 import { FinanceSectionLabel, FinanceTable, StatTile } from './primitives'
 
 function accountTiles(account: FinanceAccount) {
@@ -105,6 +116,13 @@ export function AccountSummary({
           value={enumLabel(t.finance.enums.breaker, snap.breaker_state)}
         />
       </div>
+      <p className="text-[0.68rem] text-muted-foreground">
+        {copy.cashByCurrency}:{' '}
+        {Object.entries(snap.cash_by_currency)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([currency, amount]) => `${currency} ${fmtMoney(amount)}`)
+          .join(' · ')}
+      </p>
       <EquitySparkline snapshots={snapshots} />
     </div>
   )
@@ -163,11 +181,12 @@ export function TradeStatsSection({ stats }: { stats: FinanceStats }) {
           label={copy.statAvgWinLoss}
           value={`${fmtSignedMoney(stats.avg_win)} / ${fmtSignedMoney(stats.avg_loss)}`}
         />
+        <StatTile label={copy.statPayoff} value={stats.payoff_ratio === null ? '—' : stats.payoff_ratio.toFixed(2)} />
         <StatTile
-          label={copy.statPayoff}
-          value={stats.payoff_ratio === null ? '—' : stats.payoff_ratio.toFixed(2)}
+          label={copy.statExpectancy}
+          tone={pnlClass(stats.expectancy)}
+          value={fmtSignedMoney(stats.expectancy)}
         />
-        <StatTile label={copy.statExpectancy} tone={pnlClass(stats.expectancy)} value={fmtSignedMoney(stats.expectancy)} />
         <StatTile label={copy.statTotalPnl} tone={pnlClass(stats.total_pnl)} value={fmtSignedMoney(stats.total_pnl)} />
         <StatTile
           label={copy.statAvgHold}
@@ -219,7 +238,13 @@ function EquitySparkline({ snapshots }: { snapshots: FinanceSnapshot[] }) {
         role="img"
         viewBox={`0 0 ${width} ${height}`}
       >
-        <polyline fill="none" points={points} stroke="currentColor" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+        <polyline
+          fill="none"
+          points={points}
+          stroke="currentColor"
+          strokeWidth="1.5"
+          vectorEffect="non-scaling-stroke"
+        />
       </svg>
       <div className="min-w-0 text-[0.65rem] leading-4 text-muted-foreground">
         <div className="flex items-center gap-1.5">

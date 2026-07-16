@@ -44,7 +44,7 @@ def recovery_env(tmp_path):
 
 
 def _candidate(feed, clock, day, *, status=CandidateStatus.RISK_APPROVED):
-    clock.set_et(day, 11, 0)
+    clock.set_et(day, 10, 0)
     last = feed.get_quote("NVDA").last
     return CandidateOrder(
         ts=clock(), symbol="NVDA", side=Side.BUY, qty=1,
@@ -58,10 +58,10 @@ def _seed_approved(ledger, feed, clock, day):
     candidate = _candidate(feed, clock, day)
     ledger.record_candidate(candidate, Mode.PAPER)
     service = ConfirmationService(ledger, mode=Mode.PAPER)
-    pushed = service.publish([candidate], clock.set_et(day, 11, 30, 1))[0]
+    pushed = service.publish([candidate], clock.set_et(day, 10, 30, 1))[0]
     result = service.act(
         pushed.id, "approve", "human", Surface.TELEGRAM, "approve-1",
-        clock.set_et(day, 11, 45),
+        clock.set_et(day, 10, 45),
     )
     assert result.ok
     return candidate.id, service
@@ -72,9 +72,9 @@ def test_restart_before_push_restores_risk_approved_for_scheduled_push(recovery_
     candidate = _candidate(feed, clock, day)
     ledger.record_candidate(candidate, Mode.PAPER)
 
-    summary = loop.recover_confirmation_state(clock.set_et(day, 11, 20))
-    loop.on_push()  # still before 11:30: refused, state remains risk-approved
-    clock.set_et(day, 11, 30, 1)
+    summary = loop.recover_confirmation_state(clock.set_et(day, 10, 20))
+    loop.on_push()  # still before 10:30: refused, state remains risk-approved
+    clock.set_et(day, 10, 30, 1)
     loop.on_push()
 
     assert summary["status"] == "recovered"
@@ -86,7 +86,7 @@ def test_restart_before_cutoff_restores_human_approval(recovery_env):
     loop, runtime, ledger, _, feed, clock, day = recovery_env
     candidate_id, _ = _seed_approved(ledger, feed, clock, day)
 
-    summary = loop.recover_confirmation_state(clock.set_et(day, 12, 10))
+    summary = loop.recover_confirmation_state(clock.set_et(day, 11, 10))
 
     assert summary["restored"] == 1
     assert runtime.confirmation.get(candidate_id)[0].status is CandidateStatus.APPROVED
@@ -96,7 +96,7 @@ def test_restart_before_cutoff_restores_human_approval(recovery_env):
 def test_restart_after_cutoff_rerisks_and_places_once(recovery_env):
     loop, _, ledger, broker, feed, clock, day = recovery_env
     candidate_id, _ = _seed_approved(ledger, feed, clock, day)
-    now = clock.set_et(day, 12, 45)
+    now = clock.set_et(day, 11, 45)
 
     first = loop.recover_confirmation_state(now)
     second = loop.recover_confirmation_state(now)
@@ -142,7 +142,7 @@ def test_pre_cutoff_warning_is_sent_once(recovery_env):
 
     telegram = TelegramStub()
     loop.telegram = telegram
-    clock.set_et(day, 12, 0)
+    clock.set_et(day, 11, 0)
 
     loop.on_confirm_poll()
     loop.on_confirm_poll()

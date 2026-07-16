@@ -1,7 +1,7 @@
 """Telegram confirmation gateway (Loop.md §5.6, §4).
 
 Renders concise candidate-order cards, collects approve / edit / reject
-responses, enforces the 11:30->12:30 ET confirmation window, and expires
+responses, enforces the 10:30->11:30 ET confirmation window, and expires
 stale candidates. APPROVED and EDITED both count as human-approved
 (Loop.md §4: user approves / edits / rejects within the window).
 
@@ -489,13 +489,13 @@ class ConfirmationGateway:
         self,
         transport: TelegramTransport,
         chat_id: str,
-        push_time_et: time = time(11, 30),
-        cutoff_et: time = time(12, 30),
+        push_time_et: time = time(10, 30),
+        cutoff_et: time = time(11, 30),
         market_tz: str = "America/New_York",
     ) -> None:
         if cutoff_et <= push_time_et:
             raise GatewayError(
-                "cutoff_et must be after push_time_et (Loop.md §4: 11:30 -> 12:30 ET)"
+                "cutoff_et must be after push_time_et (Loop.md §4: 10:30 -> 11:30 ET)"
             )
         self._transport = transport
         self._chat_id = chat_id
@@ -615,7 +615,7 @@ class ConfirmationGateway:
             )
             return None
         if not self.in_window(now_utc):
-            # Loop.md §4: after 12:30 ET the decision stands as EXPIRED —
+            # Loop.md §4: after 11:30 ET the decision stands as EXPIRED —
             # refuse every action so nothing is approved after cutoff.
             logger.warning(
                 "callback refused: window closed",

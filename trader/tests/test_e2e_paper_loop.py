@@ -109,12 +109,12 @@ def e2e(tmp_path_factory):
 
         clock.set_et(d, 9, 30)
         loop.on_monitor()
-        clock.set_et(d, 11, 0)
+        clock.set_et(d, 10, 0)
         loop.on_decide()
-        clock.set_et(d, 11, 30, 30)
+        clock.set_et(d, 10, 30, 30)
         loop.on_push()
 
-        clock.set_et(d, 11, 45)
+        clock.set_et(d, 10, 45)
         if i == 0:
             pending_seen_day0 = client.get("/v1/candidates/pending").json()
             rows = pending_seen_day0
@@ -141,7 +141,7 @@ def e2e(tmp_path_factory):
                 loop.on_confirm_poll()
         # all other days: nobody responds -> server-side expiry
 
-        clock.set_et(d, 12, 30, 30)
+        clock.set_et(d, 11, 30, 30)
         loop.on_cutoff()
 
         clock.set_et(d, 16, 0, 30)

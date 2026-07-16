@@ -4,9 +4,9 @@ Wires every module into the scheduled day:
 
   09:00 MORNING_REPORT  sync fills, snapshot, memory update, morning summary
   09:30 MONITOR_START   market / portfolio / news monitors poll
-  11:00 DECIDE_START    sub-agents → debate → decision core → RiskEngine
-  11:30 PUSH_CANDIDATES publish to the ConfirmationService (portal) + Telegram
-  12:30 CONFIRM_CUTOFF  expire stragglers; execute human-approved candidates
+  10:00 DECIDE_START    sub-agents → debate → decision core → RiskEngine
+  10:30 PUSH_CANDIDATES publish to the ConfirmationService (portal) + Telegram
+  11:30 CONFIRM_CUTOFF  expire stragglers; execute human-approved candidates
   16:00 MARKET_CLOSE    feed daily bars to the PaperBroker; sync fills; snapshot
 
 Authority chain (Loop.md §3): decision core PROPOSES → RiskEngine (pure code)
@@ -20,6 +20,8 @@ from __future__ import annotations
 import json
 import re
 import threading
+import uuid
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Any, Callable, Optional
@@ -74,9 +76,9 @@ from swing_trader import watchlist as watchlist_mod
 logger = get_logger(__name__)
 
 _ET = ZoneInfo("America/New_York")
-_PUSH_TIME = time(11, 30)
-_PRE_CUTOFF_REMINDER = time(12, 0)
-_CUTOFF_TIME = time(12, 30)
+_PUSH_TIME = time(10, 30)
+_PRE_CUTOFF_REMINDER = time(11, 0)
+_CUTOFF_TIME = time(11, 30)
 _MARKET_CLOSE_TIME = time(16, 0)
 _EXECUTION_RETRY_INTERVAL = timedelta(minutes=5)
 
@@ -610,6 +612,8 @@ class DailyLoop:
         kill_switch=None,  # Optional[KillSwitch] — manual operator HALT (§3)
         discovery_scanner=None,  # Optional[MarketDiscoveryScanner] — research only
         brief_writer=None,  # Optional[ResearchBriefWriter] — narrative only
+        order_reviewer=None,  # Optional[LLMCandidateReviewer] — advisory only
+        order_review_required: bool = False,
     ) -> None:
         self.feed = feed
         self.broker = broker
@@ -662,12 +666,33 @@ class DailyLoop:
         self.kill_switch = kill_switch  # Phase 0.95 manual HALT (may be None)
         self.discovery_scanner = discovery_scanner
         self.brief_writer = brief_writer
+        self.order_reviewer = order_reviewer
+        self.order_review_required = order_review_required
         self._discovery = None
         self._confirmation_recovery_lock = threading.Lock()
         self._execution_lock = threading.Lock()
         self._pre_cutoff_alerted: set[date] = set()
         self._last_execution_retry: Optional[datetime] = None
         self._restart_risk_validated: set[str] = set()
+        self._review_inflight: set[str] = set()
+        self._review_lock = threading.Lock()
+        self._review_alerted: set[str] = set()
+
+    def apply_portfolio_controls(self, controls) -> None:
+        """Refresh deterministic allocation gates after an operator save."""
+        updated = replace(
+            self.risk_params,
+            per_trade_risk_pct=controls.per_trade_risk_pct,
+            max_new_entries_per_day=controls.max_new_positions_per_day,
+            max_invested_pct=controls.invested_ceiling_pct,
+            max_agent_managed_pct=controls.agent_ceiling_pct,
+            max_position_pct=controls.max_position_pct,
+        )
+        self.risk_params = updated
+        self.risk_engine = RiskEngine(updated)
+        if isinstance(self.decision, RuleBasedDecisionCore):
+            self.decision.risk_params = updated
+        self.account_monitor.update_params(updated)
 
     # ---------------------------------------------------------------- events
 
@@ -916,7 +941,7 @@ class DailyLoop:
 
     def finalize_session_now(self, now: datetime | None = None) -> dict:
         """Manually finalize the current confirmation window (the off-schedule
-        equivalent of the 12:30 cutoff): place the human-APPROVED candidates and
+        equivalent of the 11:30 cutoff): place the human-APPROVED candidates and
         expire the rest. Execution is still gated on human approval per candidate
         (§3) — this only acts on what the human already confirmed."""
         stamp = now or self.clock()
@@ -1033,7 +1058,7 @@ class DailyLoop:
             report = ExecutionReport()
 
             # Build the confirmation service before the publish window too.
-            # A restart at 11:20 ET must leave the scheduled 11:30 callback a
+            # A restart at 10:20 ET must leave the scheduled 10:30 callback a
             # live service to publish into; publish() still enforces the window.
             if et_now.time() < _MARKET_CLOSE_TIME:
                 restored = self._restore_current_confirmation(now)
@@ -1041,7 +1066,7 @@ class DailyLoop:
             if et_now.time() < _CUTOFF_TIME:
                 self._risk_approved = risk_approved
                 if risk_approved and et_now.time() >= _PUSH_TIME:
-                    self.on_push()  # missed 11:30 event: publish inside window
+                    self.on_push()  # missed 10:30 event: publish inside window
             else:
                 for candidate in risk_approved:
                     self._expire_candidate(
@@ -1069,9 +1094,130 @@ class DailyLoop:
         finally:
             self._confirmation_recovery_lock.release()
 
+    def _post_approval_review_complete(self, candidate_id: str) -> bool:
+        return any(
+            event.action in {
+                "post_approval_review_keep",
+                "post_approval_review_revision",
+            }
+            for event in self.ledger.get_audit(
+                mode=self.mode, candidate_id=candidate_id
+            )
+        )
+
+    def _launch_post_approval_reviews(
+        self, candidates: list[CandidateOrder]
+    ) -> None:
+        """Start one non-blocking fresh-market review per first approval."""
+        for candidate in candidates:
+            if self._post_approval_review_complete(candidate.id):
+                continue
+            if self.order_reviewer is None:
+                if candidate.id not in self._review_alerted and self.telegram is not None:
+                    self._review_alerted.add(candidate.id)
+                    self.telegram.push_recovery_notice(
+                        f"⚠️ {candidate.symbol} 已获首次批准，但主模型复核不可用；"
+                        "尚未挂单，若截止前未恢复将自动过期。"
+                    )
+                continue
+            with self._review_lock:
+                if candidate.id in self._review_inflight:
+                    continue
+                self._review_inflight.add(candidate.id)
+            threading.Thread(
+                target=self._run_post_approval_review,
+                args=(candidate,),
+                name=f"candidate-review-{candidate.id[:8]}",
+                daemon=True,
+            ).start()
+
+    def _run_post_approval_review(self, candidate: CandidateOrder) -> None:
+        """Review one approval; a changed view always creates a new card/id."""
+        try:
+            now = self.clock()
+            try:
+                quote = self.feed.get_quote(candidate.symbol)
+                bars = self.feed.get_bars(candidate.symbol, "1d", limit=20)
+                news = self.feed.get_news(candidate.symbol, limit=8)
+            except (DataFeedError, ValueError) as exc:
+                if self.telegram is not None:
+                    self.telegram.push_recovery_notice(
+                        f"⚠️ {candidate.symbol} 复核行情不可用（{type(exc).__name__}）；"
+                        "尚未挂单，截止前未恢复将自动过期。"
+                    )
+                return
+            review = self.order_reviewer.review(
+                candidate,
+                quote,
+                bars,
+                news,
+                self._market.risk_on_off if self._market else "neutral",
+            )
+            if review is None:
+                if self.telegram is not None:
+                    self.telegram.push_recovery_notice(
+                        f"⚠️ {candidate.symbol} 主模型复核失败；尚未挂单，"
+                        "截止前未恢复将自动过期。"
+                    )
+                return
+            service = self._confirmation
+            if service is None:
+                return
+            if not review.needs_reconfirmation:
+                kept = service.record_post_approval_review(
+                    candidate.id, now, review.reason_zh
+                )
+                if kept is not None and self.telegram is not None:
+                    self.telegram.push_recovery_notice(
+                        f"🔎 {candidate.symbol} 已按最新行情完成二次复核："
+                        f"参数不变。{review.reason_zh}"
+                    )
+                return
+
+            payload = candidate.model_dump()
+            payload.update(review.edits)
+            payload.update({
+                "id": uuid.uuid4().hex,
+                "ts": now,
+                "ref_px": quote.last,
+                "status": CandidateStatus.RISK_APPROVED,
+                "rationale": f"{candidate.rationale}\n二次复核：{review.reason_zh}",
+            })
+            revised = CandidateOrder.model_validate(payload)
+            ok, reason = self._revalidate_edit(revised)
+            if not ok:
+                invalidated = service.invalidate_after_review(
+                    candidate.id, now, f"revised terms failed RiskEngine: {reason}"
+                )
+                if invalidated is not None and self.telegram is not None:
+                    self.telegram.push_recovery_notice(
+                        f"⛔ {candidate.symbol} 最新行情复核后的建议未通过硬风控；"
+                        "原批准已失效，没有挂单。"
+                    )
+                return
+            pushed = service.request_reconfirmation(
+                candidate.id, revised, now, review.reason_zh
+            )
+            if pushed is not None and self.telegram is not None:
+                self.telegram.push_recovery_notice(
+                    f"🔁 {candidate.symbol} 最新行情触发参数/观点修订；"
+                    "原批准已失效，请确认下面的新卡片。"
+                )
+                self.telegram.push_cards([pushed])
+        except Exception:
+            logger.exception(
+                "post-approval candidate review crashed",
+                extra={"candidate_id": candidate.id, "symbol": candidate.symbol},
+            )
+        finally:
+            with self._review_lock:
+                self._review_inflight.discard(candidate.id)
+
     def _watch_confirmation_window(self, now: datetime) -> None:
         et_now = now.astimezone(_ET)
         approved = self._approved_candidates(now)
+        if approved and self.order_review_required:
+            self._launch_post_approval_reviews(approved)
         if (
             approved
             and _PRE_CUTOFF_REMINDER <= et_now.time() < _CUTOFF_TIME
@@ -1081,9 +1227,9 @@ class DailyLoop:
             if self.telegram is not None:
                 symbols = ", ".join(candidate.symbol for candidate in approved)
                 self.telegram.push_recovery_notice(
-                    f"⏰ 距 12:30 ET 提交截止不足 30 分钟：已批准 "
+                    f"⏰ 距 11:30 ET 提交截止不足 30 分钟：已批准 "
                     f"{len(approved)} 笔（{symbols}），当前尚未挂单；系统将在 "
-                    "12:30 自动复核并提交。"
+                    "11:30 自动复核并提交。"
                 )
 
         if approved and _CUTOFF_TIME <= et_now.time() < _MARKET_CLOSE_TIME:
@@ -1117,6 +1263,20 @@ class DailyLoop:
         if not candidates:
             self._last_execution_retry = now
             return report
+
+        if self.order_review_required:
+            for candidate in list(candidates):
+                if not self._post_approval_review_complete(candidate.id):
+                    self._expire_candidate(
+                        candidate,
+                        now,
+                        "post-approval LLM/fresh-market review incomplete before cutoff",
+                        action="expire_post_approval_review_missing",
+                    )
+            candidates = self._approved_candidates(now)
+            if not candidates:
+                self._last_execution_retry = now
+                return report
 
         if rerisk:
             pending_risk = [

@@ -1346,6 +1346,7 @@ export interface Translations {
       empty: string
       equity: string
       cash: string
+      cashByCurrency: string
       upnl: string
       dayPnl: string
       drawdown: string
@@ -1414,6 +1415,7 @@ export interface Translations {
       reportKind: (kind: string) => string
     }
     research: {
+      briefTitle: string
       tradingDay: (date: string) => string
       modePaper: string
       modeLive: string
@@ -1421,24 +1423,8 @@ export interface Translations {
       briefError: string
       staleTitle: string
       narrativeTitle: string
-      narrativeSubtitle: string
-      narrativeMarketLabel: string
-      narrativeFocusLabel: string
-      narrativeOpportunityLabel: string
-      narrativeRiskLabel: string
-      narrativeMarketRiskOn: string
-      narrativeMarketNeutral: string
-      narrativeMarketRiskOff: string
-      narrativeMarketUnknown: string
-      narrativeMarketFacts: (vix: string, breadth: string) => string
-      narrativeThemeFocus: (theme: string, distance: string, leaders: string) => string
-      narrativeMoverFocus: (symbol: string, distance: string) => string
-      narrativeFocusUnknown: string
-      narrativeOpportunity: (symbol: string, score: string, reasons: string) => string
-      narrativeOpportunityNone: string
-      narrativeRiskClear: string
-      narrativeRiskSummary: (freshness: number, risk: number, unknown: number) => string
-      narrativeAction: string
+      narrativeUnavailable: string
+      narrativeWatchNext: string
       freshMarket: string
       freshNews: string
       freshPortfolio: string
@@ -1463,7 +1449,6 @@ export interface Translations {
       discoveryDescription: string
       discoveryEmpty: string
       discoveryScore: (score: string) => string
-      discoveryScoreMeaning: string
       discoveryReasons: string
       discoveryNoReasons: string
       discoveryReasonTrend: (value: string) => string
@@ -1475,7 +1460,6 @@ export interface Translations {
       themeMeta: (count: number, avg: string) => string
       themeLeaders: (symbols: string) => string
       newsTitle: string
-      newsDescription: string
       newsEmpty: string
       sentiment: (value: string) => string
       signalsTitle: string
@@ -1512,7 +1496,6 @@ export interface Translations {
       marketJapan: string
       comingSoon: string
       phaseBadge: string
-      regionNote: string
       // Manual "re-run this market's research session now" button.
       runResearch: string
       runningResearch: string
@@ -1520,6 +1503,40 @@ export interface Translations {
       runResearchFailed: string
     }
     // Read-only cross-asset watch modules (Gold/Oil/Rates/Crypto, Loop.md §3).
+    prediction: {
+      groupLabel: string
+      navLabel: string
+      title: string
+      description: string
+      allMarkets: string
+      activeForecasts: string
+      evaluation: string
+      backtests: string
+      backtestEmpty: string
+      statActive: string
+      statEvaluated: string
+      statDue: string
+      statAccuracy: string
+      sampleHint: string
+      immature: string
+      mature: string
+      byMarket: string
+      byHorizon: string
+      recent: string
+      empty: string
+      colMarket: string
+      colEntity: string
+      colDirection: string
+      colConfidence: string
+      colHorizon: string
+      colSample: string
+      colAccuracy: string
+      colReturn: string
+      colPath: string
+      colStatus: string
+      pending: string
+      generatedAt: string
+    }
     watch: {
       readOnlyNote: string
       delayNote: string
@@ -1601,6 +1618,7 @@ export interface Translations {
       groupOverview: string
       groupPositions: string
       account: string
+      controls: string
       orders: string
       stats: string
       market: string
@@ -1613,6 +1631,25 @@ export interface Translations {
       positionUpnl: string
       positionPool: string
       positionsEmpty: string
+      controlsTitle: string
+      controlsDescription: string
+      investedTarget: string
+      investedTolerance: string
+      agentBudget: string
+      agentTolerance: string
+      maxPosition: string
+      perTradeRisk: string
+      maxNewPositions: string
+      baseCurrency: string
+      cashReserve: string
+      agentCeiling: string
+      controlsNote: string
+      currencyNote: string
+      saveControls: string
+      savingControls: string
+      controlsSaved: string
+      controlsLoadError: string
+      controlsSaveError: string
     }
     // Real multi-account holdings (Phase 0.9): the user's US/HK/CN accounts,
     // separate from the paper book above. READ / DRAFT surface only.

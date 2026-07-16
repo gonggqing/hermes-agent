@@ -47,7 +47,12 @@ import { useI18n } from "@/i18n";
 import { ApprovalQueue, SessionControls } from "@/pages/finance/ApprovalQueue";
 import { HistorySection } from "@/pages/finance/HistorySection";
 import { PortfolioManager } from "@/pages/finance/PortfolioManager";
+import { PortfolioControls } from "@/pages/finance/PortfolioControls";
 import { ResearchBrief } from "@/pages/finance/ResearchBrief";
+import {
+  PredictionReview,
+  StrategyBacktests,
+} from "@/pages/finance/PredictionReview";
 import { WatchModule } from "@/pages/finance/WatchModule";
 import { ResearchWatchlistDetail } from "@/pages/finance/ResearchWatchlistDetail";
 import {
@@ -59,6 +64,7 @@ import {
 import {
   ACTIVE_MARKETS,
   PLACEHOLDER_MARKETS,
+  RESEARCH_TOOL_DESKS,
   WATCH_MODULE_KEYS,
   isActiveMarketDesk,
   isWatchDesk,
@@ -91,11 +97,18 @@ const TABS: FinanceTab[] = ["research", "queue", "portfolio", "holdings"];
 const DESKS: FinanceDesk[] = [
   ...ACTIVE_MARKETS,
   ...PLACEHOLDER_MARKETS,
+  ...RESEARCH_TOOL_DESKS,
   ...WATCH_MODULE_KEYS,
 ];
 
 /** Portfolio sidebar entries that are not per-position rows. */
-type PortfolioView = "account" | "orders" | "history" | "market" | "reports";
+type PortfolioView =
+  | "account"
+  | "controls"
+  | "orders"
+  | "history"
+  | "market"
+  | "reports";
 
 /** Account numbers shared by the live view and the ledger-fallback snapshot. */
 interface AccountNumbers {
@@ -105,6 +118,8 @@ interface AccountNumbers {
   day_pnl: number;
   drawdown_pct: number;
   breaker_state: string;
+  base_currency: string;
+  cash_by_currency: Record<string, number>;
 }
 
 // ── Account / positions / orders / market / reports sections ──────────
@@ -191,38 +206,49 @@ function AccountSection({
                 : ft.account.empty}
             </p>
           ) : (
-            <Stats
-              items={[
-                { label: ft.account.equity, value: fmtMoney(numbers.equity) },
-                { label: ft.account.cash, value: fmtMoney(numbers.cash) },
-                {
-                  label: ft.account.upnl,
-                  value: {
-                    key: "upnl",
-                    node: (
-                      <span className={pnlClass(numbers.upnl)}>
-                        {fmtSigned(numbers.upnl)}
-                      </span>
-                    ),
+            <div className="space-y-3">
+              <Stats
+                items={[
+                  { label: ft.account.equity, value: fmtMoney(numbers.equity) },
+                  { label: ft.account.cash, value: fmtMoney(numbers.cash) },
+                  {
+                    label: ft.account.upnl,
+                    value: {
+                      key: "upnl",
+                      node: (
+                        <span className={pnlClass(numbers.upnl)}>
+                          {fmtSigned(numbers.upnl)}
+                        </span>
+                      ),
+                    },
                   },
-                },
-                {
-                  label: ft.account.dayPnl,
-                  value: {
-                    key: "day_pnl",
-                    node: (
-                      <span className={pnlClass(numbers.day_pnl)}>
-                        {fmtSigned(numbers.day_pnl)}
-                      </span>
-                    ),
+                  {
+                    label: ft.account.dayPnl,
+                    value: {
+                      key: "day_pnl",
+                      node: (
+                        <span className={pnlClass(numbers.day_pnl)}>
+                          {fmtSigned(numbers.day_pnl)}
+                        </span>
+                      ),
+                    },
                   },
-                },
-                {
-                  label: ft.account.drawdown,
-                  value: fmtPct(numbers.drawdown_pct),
-                },
-              ]}
-            />
+                  {
+                    label: ft.account.drawdown,
+                    value: fmtPct(numbers.drawdown_pct),
+                  },
+                ]}
+              />
+              <p className="font-mondwest normal-case text-xs text-muted-foreground">
+                {ft.account.cashByCurrency}:{" "}
+                {Object.entries(numbers.cash_by_currency)
+                  .sort(([left], [right]) => left.localeCompare(right))
+                  .map(
+                    ([currency, amount]) => `${currency} ${fmtMoney(amount)}`,
+                  )
+                  .join(" · ")}
+              </p>
+            </div>
           )}
         </CardContent>
       </Card>
@@ -293,6 +319,9 @@ function PositionsCard({ view }: { view: FinanceAccountView | null }) {
                   >
                     <td className="py-2 pr-4">
                       <span className="font-mono-ui text-xs">{p.symbol}</span>
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        {p.currency}
+                      </span>
                     </td>
                     <td className="text-right py-2 px-4">{fmtQty(p.qty)}</td>
                     <td className="text-right py-2 px-4">
@@ -606,7 +635,8 @@ function ResearchDetail({
   onCustomChange,
   onCustomDelete,
   briefs,
-  ft,
+  onRunResearch,
+  researchRunning,
 }: {
   desk: FinanceDesk;
   customGroup: FinanceResearchWatchlist | null;
@@ -618,7 +648,8 @@ function ResearchDetail({
     hk: FinanceResearchBriefData | null;
     kr: FinanceResearchBriefData | null;
   };
-  ft: FinanceTranslations;
+  onRunResearch?: () => void;
+  researchRunning?: boolean;
 }) {
   if (customGroup) {
     return (
@@ -635,24 +666,41 @@ function ResearchDetail({
     // + analysis state (no reset effect needed).
     return <WatchModule key={desk} moduleKey={desk} />;
   }
+  if (desk === "predictions") {
+    return <PredictionReview />;
+  }
+  if (desk === "backtests") {
+    return <StrategyBacktests />;
+  }
   if (desk === "us") {
-    return <ResearchBrief brief={briefs.us} market="us" />;
+    return (
+      <ResearchBrief
+        brief={briefs.us}
+        market="us"
+        onRunResearch={onRunResearch}
+        researchRunning={researchRunning}
+      />
+    );
   }
   if (desk === "korea") {
     // KR is its own single-region semiconductor brief (no CN-style partition).
-    return <ResearchBrief brief={briefs.kr} market="kr" />;
+    return (
+      <ResearchBrief
+        brief={briefs.kr}
+        market="kr"
+        onRunResearch={onRunResearch}
+        researchRunning={researchRunning}
+      />
+    );
   }
   const regionalBrief = desk === "hk" ? briefs.hk : briefs.cn;
   return (
-    <div className="flex flex-col gap-3">
-      <p className="border border-border/60 bg-secondary/20 px-3 py-2 font-mondwest normal-case text-xs text-muted-foreground">
-        {ft.layout.perRegionNote}
-      </p>
-      <ResearchBrief
-        brief={regionalBrief}
-        market={desk === "hk" ? "hk" : "cn"}
-      />
-    </div>
+    <ResearchBrief
+      brief={regionalBrief}
+      market={desk === "hk" ? "hk" : "cn"}
+      onRunResearch={onRunResearch}
+      researchRunning={researchRunning}
+    />
   );
 }
 
@@ -717,12 +765,9 @@ function ResearchView({
     onCustomGroupChange(null);
   };
 
-  // The manual "run research now" button only applies to markets with their
-  // own research session (China/HK → CN, Korea → KR); US research is driven by
-  // the trading loop and watch modules are cross-asset, so no button there.
-  const canRun =
-    !selectedCustomGroup &&
-    (desk === "china" || desk === "hk" || desk === "korea");
+  // Every active market has a registered read-only research session, including
+  // US. Watch/custom/review desks do not expose the refresh action.
+  const canRun = !selectedCustomGroup && isActiveMarketDesk(desk);
   const sidebar = (
     <>
       <SidebarGroup label={ft.layout.marketsGroup}>
@@ -745,6 +790,20 @@ function ResearchView({
             {marketName(m, ft)}
           </SidebarButton>
         ))}
+      </SidebarGroup>
+      <SidebarGroup label={ft.prediction.groupLabel}>
+        <SidebarButton
+          active={!customGroupId && desk === "predictions"}
+          onClick={() => onDeskChange("predictions")}
+        >
+          {ft.prediction.navLabel}
+        </SidebarButton>
+        <SidebarButton
+          active={!customGroupId && desk === "backtests"}
+          onClick={() => onDeskChange("backtests")}
+        >
+          {ft.prediction.backtests}
+        </SidebarButton>
       </SidebarGroup>
       <SidebarGroup label={ft.layout.watchGroup}>
         {WATCH_MODULE_KEYS.map((k) => (
@@ -808,27 +867,14 @@ function ResearchView({
   return (
     <MasterDetail sidebar={sidebar}>
       <div className="flex flex-col gap-3">
-        {canRun && (
-          <div className="flex justify-end">
-            <Button
-              type="button"
-              size="sm"
-              disabled={researchRunning}
-              onClick={onRunResearch}
-            >
-              {researchRunning
-                ? ft.layout.runningResearch
-                : ft.layout.runResearch}
-            </Button>
-          </div>
-        )}
         <ResearchDetail
           desk={desk}
           customGroup={selectedCustomGroup}
           onCustomChange={updateCustomGroup}
           onCustomDelete={deleteCustomGroup}
           briefs={briefs}
-          ft={ft}
+          onRunResearch={canRun ? onRunResearch : undefined}
+          researchRunning={researchRunning}
         />
       </div>
     </MasterDetail>
@@ -947,6 +993,7 @@ function PortfolioView({
   const positions = liveView?.positions ?? [];
   const accountRows: { view: PortfolioView; label: string }[] = [
     { view: "account", label: ft.layout.rowAccount },
+    { view: "controls", label: ft.layout.rowControls },
     { view: "orders", label: ft.layout.rowOrders },
     { view: "history", label: ft.layout.rowHistory },
     { view: "market", label: ft.layout.rowMarket },
@@ -1000,6 +1047,9 @@ function PortfolioView({
     switch (selected as PortfolioView) {
       case "orders":
         detail = <OrdersCard view={liveView} />;
+        break;
+      case "controls":
+        detail = <PortfolioControls />;
         break;
       case "history":
         detail = (
@@ -1077,7 +1127,8 @@ export default function FinancePage() {
     DESKS.includes(deskParam as FinanceDesk) &&
     // Disabled placeholders are never a valid selection.
     (isActiveMarketDesk(deskParam as FinanceDesk) ||
-      isWatchDesk(deskParam as FinanceDesk))
+      isWatchDesk(deskParam as FinanceDesk) ||
+      RESEARCH_TOOL_DESKS.includes(deskParam as FinanceDesk))
       ? (deskParam as FinanceDesk)
       : "us";
 
@@ -1204,13 +1255,11 @@ export default function FinancePage() {
     load();
   }, [load]);
 
-  // Manual "run research now" for the current desk: force the backend to
-  // RE-RUN the market's research session (fresh data), then refetch. Only
-  // meaningful for markets with their own session (CN via china/hk, KR).
+  // Manual "run research now" for the current market desk. Every active
+  // market, including US, has a registered read-only research callback.
   const [researchRunning, setResearchRunning] = useState(false);
   const runResearch = useCallback(async () => {
-    if (briefMarket !== "cn" && briefMarket !== "hk" && briefMarket !== "kr")
-      return;
+    if (briefMarket === null) return;
     setResearchRunning(true);
     try {
       // Fires a BACKGROUND refresh (a full run does slow yfinance calls, ~1

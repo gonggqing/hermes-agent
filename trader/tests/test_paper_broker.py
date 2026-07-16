@@ -53,6 +53,11 @@ def make_order(**kw) -> Order:
     return Order(**base)
 
 
+def test_canonical_symbol_rejects_cross_currency_execution_lot():
+    with pytest.raises(ValueError, match="must execute in HKD"):
+        make_order(symbol="0700.HK", currency="USD")
+
+
 def broker(**kw) -> PaperBroker:
     return PaperBroker(**kw)
 
@@ -103,6 +108,29 @@ class TestPlaceOrder:
         second = b.place_order(make_order(qty=5, limit=100.0))  # +501 -> 2002 > 2000
         assert not second.accepted
         assert "insufficient cash" in second.reason
+
+    def test_currency_sleeves_reserve_and_settle_independently(self):
+        b = broker(
+            starting_cash_by_currency={"USD": 1000.0, "HKD": 16000.0},
+            fx_to_base={"HKD": 1 / 7.8},
+        )
+        order = make_order(symbol="0700.HK", qty=100, limit=100.0)
+        placed = b.place_order(order)
+        assert placed.accepted and placed.order.currency == "HKD"
+        fills = b.step(
+            {"0700.HK": bar(symbol="0700.HK", open=100, low=99, high=101, close=100)}
+        )
+        assert fills[0].currency == "HKD"
+        account = b.get_account()
+        assert account.cash_by_currency == {"USD": 1000.0, "HKD": 5999.0}
+        assert account.base_currency == "USD"
+        assert b.get_positions()[0].currency == "HKD"
+
+    def test_currency_sleeve_never_spends_another_currency(self):
+        b = broker(starting_cash_by_currency={"USD": 100_000.0, "HKD": 0.0})
+        result = b.place_order(make_order(symbol="0700.HK", qty=100, limit=10.0))
+        assert not result.accepted
+        assert "HKD" in result.reason
 
     def test_cancel_releases_reservation(self):
         b = broker(starting_cash=2000.0)

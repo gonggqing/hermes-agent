@@ -23,7 +23,8 @@ insufficient settled funds locally before ever reaching IBKR.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional, Protocol, runtime_checkable
+from datetime import datetime, timezone
+from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
 from swing_trader.interfaces import BrokerInterface, PlaceResult
 from swing_trader.log import get_logger
@@ -69,6 +70,8 @@ class IbOrderSpec:
     oca_group: Optional[str] = None
     transmit: bool = True
     parent_ref: Optional[str] = None
+    currency: str = "USD"
+    exchange: str = "SMART"
 
 
 @dataclass
@@ -80,6 +83,8 @@ class IbExec:
     qty: float
     px: float
     commission: float = 0.0
+    currency: str = "USD"
+    ts: Optional[datetime] = None
 
 
 @dataclass
@@ -99,6 +104,8 @@ class IbTradeState:
     lmt: Optional[float] = None
     aux: Optional[float] = None
     broker_ref: Optional[str] = None
+    currency: str = "USD"
+    exchange: str = "SMART"
 
 
 @dataclass
@@ -106,6 +113,7 @@ class IbPosition:
     symbol: str
     qty: float
     avg_cost: float  # per-share, incl. commission (IBKR convention)
+    currency: str = "USD"
 
 
 @runtime_checkable
@@ -117,7 +125,7 @@ class IBClient(Protocol):
     def trades(self) -> list[IbTradeState]: ...
     def fills(self) -> list[IbExec]: ...
     def positions(self) -> list[IbPosition]: ...
-    def account(self) -> dict: ...  # tag -> value (str)
+    def account(self) -> dict[str, Any]: ...  # base tags + per-currency maps
 
 
 # --------------------------------------------------------- status mapping
@@ -224,6 +232,20 @@ class IBKRBroker(BrokerInterface):
         cash = self._num(acct, "SettledCash", "TotalCashValue", "AvailableFunds") or 0.0
         upnl = self._num(acct, "UnrealizedPnL") or 0.0
         day_pnl = self._num(acct, "RealizedPnL") or 0.0
+        base_currency = str(acct.get("_base_currency") or "USD").upper()
+        cash_by_currency = {
+            str(key).upper(): float(value)
+            for key, value in (acct.get("_cash_by_currency") or {base_currency: cash}).items()
+        }
+        equity_by_currency = {
+            str(key).upper(): float(value)
+            for key, value in (acct.get("_equity_by_currency") or {base_currency: equity}).items()
+        }
+        fx_to_base = {
+            str(key).upper(): float(value)
+            for key, value in (acct.get("_fx_to_base") or {base_currency: 1.0}).items()
+        }
+        fx_to_base[base_currency] = 1.0
         if self._day_open_equity is None:
             self._day_open_equity = equity
         dd = 0.0
@@ -232,14 +254,19 @@ class IBKRBroker(BrokerInterface):
         # Breaker is OURS (AccountRiskMonitor trips it), not IBKR's — report NORMAL.
         return AccountSnapshot(mode=self.mode, equity=equity, cash=cash, upnl=upnl,
                                day_pnl=day_pnl, drawdown_pct=dd,
-                               breaker_state=BreakerState.NORMAL)
+                               breaker_state=BreakerState.NORMAL,
+                               base_currency=base_currency,
+                               cash_by_currency=cash_by_currency,
+                               equity_by_currency=equity_by_currency,
+                               fx_to_base=fx_to_base)
 
     def get_positions(self) -> list[Position]:
         out = []
         for p in self._ib().positions():
             if abs(p.qty) < 1e-9:
                 continue
-            out.append(Position(symbol=p.symbol, qty=p.qty, avg_px=max(0.0, p.avg_cost),
+            out.append(Position(symbol=p.symbol, currency=p.currency,
+                                qty=p.qty, avg_px=max(0.0, p.avg_cost),
                                 pool=self._role_for(p.symbol)))
         return out
 
@@ -250,9 +277,10 @@ class IBKRBroker(BrokerInterface):
         if order.side is not Side.BUY or ref_px is None:
             return True, ""
         need = order.qty * ref_px  # commission is small; settled-cash is the gate
-        cash = self.get_account().cash
+        cash = self.get_account().cash_by_currency.get(order.currency, 0.0)
         if need > cash + 1e-6:
-            return False, (f"insufficient settled cash: need ~{need:.2f} > settled {cash:.2f} "
+            return False, (f"insufficient settled cash ({order.currency}): "
+                           f"need ~{need:.2f} > settled {cash:.2f} "
                            "(T+1 cash account cannot spend unsettled proceeds)")
         return True, ""
 
@@ -260,7 +288,13 @@ class IBKRBroker(BrokerInterface):
         action = order.side.value  # BUY | SELL
         tif = order.tif.value
         ot = order.order_type
-        base = dict(symbol=order.symbol, tif=tif)
+        is_hk = order.symbol.upper().endswith(".HK")
+        base = dict(
+            symbol=order.symbol,
+            tif=tif,
+            currency=order.currency,
+            exchange="SEHK" if is_hk else "SMART",
+        )
         if ot is OrderType.BRACKET:
             oca = f"oca-{order.id}"
             specs = [IbOrderSpec(order_ref=order.id, action=action, qty=order.qty,
@@ -284,6 +318,7 @@ class IBKRBroker(BrokerInterface):
     def _child_order(self, parent: Order, spec: IbOrderSpec, broker_ref: str) -> Order:
         return Order(
             id=spec.order_ref, mode=self.mode, symbol=parent.symbol,
+            currency=spec.currency,
             side=Side(spec.action), qty=spec.qty,
             order_type=OrderType.STP if spec.order_type == "STP" else OrderType.LMT,
             limit=spec.lmt, stop=spec.aux, tif=TimeInForce(spec.tif),
@@ -380,6 +415,7 @@ class IBKRBroker(BrokerInterface):
               "LOC": OrderType.LOC}.get(st.order_type, OrderType.LMT)
         return Order(
             id=st.order_ref, mode=self.mode, symbol=st.symbol, side=Side(st.action),
+            currency=st.currency,
             qty=st.qty, order_type=ot, limit=st.lmt, stop=st.aux,
             tif=TimeInForce.GTC, status=_map_status(st.status, st.filled),
             filled_qty=st.filled, avg_fill_px=st.avg_fill_px,
@@ -392,8 +428,10 @@ class IBKRBroker(BrokerInterface):
         out: list[Fill] = []
         for e in self._ib().fills():
             out.append(Fill(id=e.exec_id, order_id=e.order_ref, symbol=e.symbol,
+                            currency=e.currency,
                             side=Side(e.side), qty=e.qty, px=e.px,
-                            commission=e.commission, mode=self.mode))
+                            commission=e.commission, mode=self.mode,
+                            ts=e.ts or datetime.now(timezone.utc)))
         out.sort(key=lambda f: f.ts)
         return out
 
@@ -412,6 +450,7 @@ class _IbAsyncClient:
         self._ib = None  # ib_async.IB
         self._mod = None  # ib_async module (Stock/LimitOrder/StopOrder/…)
         self._ref_to_trade: dict[str, object] = {}
+        self._contracts: dict[tuple[str, str, str], object] = {}
 
     def connect(self) -> None:  # pragma: no cover - needs a live gateway
         import ib_async  # lazy — keeps construct/import network-free
@@ -423,9 +462,39 @@ class _IbAsyncClient:
     def is_connected(self) -> bool:  # pragma: no cover
         return self._ib is not None and self._ib.isConnected()
 
-    def _contract(self, symbol: str):  # pragma: no cover
-        base = symbol.split(".")[0]
-        return self._mod.Stock(base, "SMART", "USD")
+    @staticmethod
+    def _canonical_symbol(contract) -> str:  # pragma: no cover
+        symbol = str(getattr(contract, "symbol", "")).upper()
+        currency = str(getattr(contract, "currency", "")).upper()
+        exchange = str(
+            getattr(contract, "primaryExchange", "") or getattr(contract, "exchange", "")
+        ).upper()
+        if currency == "HKD" or exchange in {"SEHK", "HKFE"}:
+            try:
+                return f"{int(symbol):04d}.HK"
+            except ValueError:
+                return f"{symbol}.HK"
+        return symbol
+
+    def _contract(self, spec: IbOrderSpec):  # pragma: no cover
+        key = (spec.symbol, spec.exchange, spec.currency)
+        cached = self._contracts.get(key)
+        if cached is not None:
+            return cached
+        base = spec.symbol.split(".")[0]
+        if spec.exchange == "SEHK":
+            try:
+                base = str(int(base))
+            except ValueError:
+                pass
+        contract = self._mod.Stock(base, spec.exchange, spec.currency)
+        qualified = self._ib.qualifyContracts(contract)
+        if not qualified or not getattr(qualified[0], "conId", 0):
+            raise RuntimeError(
+                f"IBKR could not qualify {spec.symbol} on {spec.exchange} in {spec.currency}"
+            )
+        self._contracts[key] = qualified[0]
+        return qualified[0]
 
     def place(self, spec: IbOrderSpec) -> str:  # pragma: no cover
         m = self._mod
@@ -441,7 +510,7 @@ class _IbAsyncClient:
         else:  # MOC / LOC
             o = m.Order(action=spec.action, totalQuantity=spec.qty,
                         orderType=spec.order_type, lmtPrice=spec.lmt or 0.0, **common)
-        trade = self._ib.placeOrder(self._contract(spec.symbol), o)
+        trade = self._ib.placeOrder(self._contract(spec), o)
         self._ref_to_trade[spec.order_ref] = trade
         return str(trade.order.orderId)
 
@@ -462,19 +531,25 @@ class _IbAsyncClient:
             out.append(IbTradeState(
                 order_ref=o.orderRef, status=os.status, filled=os.filled,
                 remaining=os.remaining, avg_fill_px=os.avgFillPrice or None,
-                symbol=getattr(c, "symbol", None), action=o.action,
+                symbol=self._canonical_symbol(c), action=o.action,
                 qty=o.totalQuantity, order_type=o.orderType,
                 lmt=o.lmtPrice or None, aux=o.auxPrice or None,
-                broker_ref=str(o.orderId)))
+                broker_ref=str(o.orderId),
+                currency=getattr(c, "currency", "USD") or "USD",
+                exchange=getattr(c, "primaryExchange", "") or getattr(c, "exchange", "SMART")))
         return out
 
     def fills(self) -> list[IbExec]:  # pragma: no cover
         out = []
         for f in self._ib.fills():
-            e, c = f.execution, f.commissionReport
-            out.append(IbExec(exec_id=e.execId, order_ref=e.orderRef, symbol=e.contract.symbol,
+            e, report, contract = f.execution, f.commissionReport, f.contract
+            out.append(IbExec(exec_id=e.execId, order_ref=e.orderRef,
+                              symbol=self._canonical_symbol(contract),
                               side="BUY" if e.side == "BOT" else "SELL", qty=e.shares,
-                              px=e.price, commission=getattr(c, "commission", 0.0) or 0.0))
+                              px=e.price,
+                              commission=getattr(report, "commission", 0.0) or 0.0,
+                              currency=getattr(contract, "currency", "USD") or "USD",
+                              ts=getattr(f, "time", None)))
         return out
 
     def positions(self) -> list[IbPosition]:  # pragma: no cover
@@ -482,9 +557,42 @@ class _IbAsyncClient:
         for p in self._ib.positions():
             if p.contract.secType != "STK":
                 continue
-            out.append(IbPosition(symbol=p.contract.symbol, qty=p.position, avg_cost=p.avgCost))
+            out.append(IbPosition(symbol=self._canonical_symbol(p.contract),
+                                  qty=p.position, avg_cost=p.avgCost,
+                                  currency=getattr(p.contract, "currency", "USD") or "USD"))
         return out
 
-    def account(self) -> dict:  # pragma: no cover
-        return {av.tag: av.value for av in self._ib.accountValues()
-                if av.currency in ("", "USD", "BASE")}
+    def account(self) -> dict[str, Any]:  # pragma: no cover
+        values = list(self._ib.accountValues())
+        base_currency = next(
+            (str(av.value).upper() for av in values if av.tag == "BaseCurrency"),
+            "USD",
+        )
+        base_tags = {
+            av.tag: av.value
+            for av in values
+            if av.currency in ("", "BASE", base_currency)
+        }
+        cash_by_currency = {
+            str(av.currency).upper(): float(av.value)
+            for av in values
+            if av.tag == "SettledCash" and av.currency not in ("", "BASE")
+        }
+        equity_by_currency = {
+            str(av.currency).upper(): float(av.value)
+            for av in values
+            if av.tag == "NetLiquidationByCurrency" and av.currency not in ("", "BASE")
+        }
+        fx_to_base = {
+            str(av.currency).upper(): float(av.value)
+            for av in values
+            if av.tag == "ExchangeRate" and av.currency not in ("", "BASE")
+        }
+        fx_to_base[base_currency] = 1.0
+        return {
+            **base_tags,
+            "_base_currency": base_currency,
+            "_cash_by_currency": cash_by_currency,
+            "_equity_by_currency": equity_by_currency,
+            "_fx_to_base": fx_to_base,
+        }

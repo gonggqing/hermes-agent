@@ -1342,6 +1342,14 @@ export const api = {
     fetchJSON<FinanceAccountResponse>(
       `/api/finance/v1/account${financeQuery({ mode })}`,
     ),
+  financePortfolioControls: () =>
+    fetchJSON<FinancePortfolioControls>("/api/finance/v1/portfolio/controls"),
+  financeUpdatePortfolioControls: (body: FinancePortfolioControlsUpdate) =>
+    fetchJSON<FinancePortfolioControls>("/api/finance/v1/portfolio/controls", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   financeOrders: (activeOnly = false, mode?: FinanceMode) =>
     fetchJSON<FinanceOrder[]>(
       `/api/finance/v1/orders${financeQuery({ active_only: activeOnly || undefined, mode })}`,
@@ -1447,13 +1455,17 @@ export const api = {
     fetchJSON<FinanceResearchBrief>(
       `/api/finance/v1/research/brief${market === "us" ? "" : `?market=${market}`}`,
     ),
+  financePredictionSummary: (market?: FinanceResearchMarket) =>
+    fetchJSON<FinancePredictionSummary>(
+      `/api/finance/v1/predictions/summary${financeQuery({ market })}`,
+    ),
   /**
    * Manually re-run a market's RESEARCH session NOW (the "refresh research"
    * button), refreshing that desk's brief with fresh data instead of just
    * re-reading the cached one. Read-only (no orders) so it is ungated. 404s
    * when that research market's session is disabled.
    */
-  financeRunResearch: (market: Exclude<FinanceResearchMarket, "us">) =>
+  financeRunResearch: (market: FinanceResearchMarket) =>
     fetchJSON<FinanceRunResearchResult>(
       `/api/finance/v1/research/run?market=${market}`,
       { method: "POST" },
@@ -3122,10 +3134,107 @@ export interface PluginProvidersPutRequest {
 
 export type FinanceMode = "paper" | "live";
 
+export interface FinancePortfolioControlsUpdate {
+  invested_target_pct: number;
+  invested_tolerance_pct: number;
+  agent_budget_pct: number;
+  agent_budget_tolerance_pct: number;
+  max_position_pct: number;
+  per_trade_risk_pct: number;
+  max_new_positions_per_day: number;
+  base_currency: string;
+}
+
+export interface FinancePortfolioControls extends FinancePortfolioControlsUpdate {
+  invested_ceiling_pct: number;
+  agent_ceiling_pct: number;
+  cash_reserve_floor_pct: number;
+  updated_at: string;
+}
+
 /** Research desk for the Investment Research brief: the default US desk or
  * the China/HK (Asia/Shanghai) morning desk. The CN brief is research-only
  * (risk null, no pending candidates). */
 export type FinanceResearchMarket = "us" | "cn" | "hk" | "kr";
+
+export interface FinancePredictionMetrics {
+  evaluated_checkpoints: number;
+  directional_samples: number;
+  directional_hits: number;
+  directional_accuracy: number | null;
+  excess_samples: number;
+  excess_accuracy: number | null;
+  mean_brier: number | null;
+  mean_log_loss: number | null;
+  mean_return_pct: number | null;
+  mean_excess_return_pct: number | null;
+  sample_mature: boolean;
+}
+
+export interface FinancePredictionForecast {
+  series_id: string;
+  market: string;
+  entity_type: string;
+  entity_key: string;
+  display_name: string;
+  claim_type: string;
+  producer: string;
+  status: string;
+  as_of: string;
+  direction: string;
+  confidence: number | null;
+  thesis: string;
+  invalidation: string;
+  horizons: number[];
+  pending_checkpoints: number;
+}
+
+export interface FinancePredictionEvaluation {
+  evaluation_id: string;
+  series_id: string;
+  market: string;
+  entity_type: string;
+  entity_key: string;
+  display_name: string;
+  claim_type: string;
+  producer: string;
+  horizon_sessions: number;
+  due_trading_date: string | null;
+  direction: string;
+  confidence: number | null;
+  state: string;
+  absolute_direction_hit: boolean | null;
+  excess_direction_hit: boolean | null;
+  return_pct: number | null;
+  excess_return_pct: number | null;
+  mfe_pct: number | null;
+  mae_pct: number | null;
+  evaluator_version: string;
+  evaluated_at: string;
+}
+
+export interface FinancePredictionSummary {
+  generated_at: string;
+  filters: {
+    market: string | null;
+    producer: string | null;
+    horizon_sessions: number | null;
+    due_as_of: string;
+  };
+  overview: FinancePredictionMetrics & {
+    series: number;
+    active_series: number;
+    revisions: number;
+    checkpoints: number;
+    pending_checkpoints: number;
+    due_checkpoints: number;
+  };
+  by_market: Array<{ key: string } & FinancePredictionMetrics>;
+  by_producer: Array<{ key: string } & FinancePredictionMetrics>;
+  by_horizon: Array<{ key: string } & FinancePredictionMetrics>;
+  active_forecasts: FinancePredictionForecast[];
+  recent_evaluations: FinancePredictionEvaluation[];
+}
 
 /** Result of POST /v1/research/run — a BACKGROUND kickoff (returns immediately;
  *  the brief updates via the poll when the run finishes). */
@@ -3147,6 +3256,7 @@ export interface FinanceHealth {
 
 export interface FinancePosition {
   symbol: string;
+  currency: string;
   qty: number;
   avg_px: number;
   mkt_px: number | null;
@@ -3156,6 +3266,7 @@ export interface FinancePosition {
 
 export interface FinanceOpenOrder {
   symbol: string;
+  currency: string;
   side: "BUY" | "SELL";
   qty: number;
   order_type: string;
@@ -3186,6 +3297,10 @@ export interface FinanceSnapshot {
   day_pnl: number;
   drawdown_pct: number;
   breaker_state: FinanceBreakerState;
+  base_currency: string;
+  cash_by_currency: Record<string, number>;
+  equity_by_currency: Record<string, number>;
+  fx_to_base: Record<string, number>;
 }
 
 /** Full account view when the daily loop is attached to the service. */
@@ -3198,6 +3313,10 @@ export interface FinanceAccountView {
   day_pnl: number;
   drawdown_pct: number;
   breaker_state: FinanceBreakerState;
+  base_currency: string;
+  cash_by_currency: Record<string, number>;
+  equity_by_currency: Record<string, number>;
+  fx_to_base: Record<string, number>;
   positions: FinancePosition[];
   open_orders: FinanceOpenOrder[];
   stats: FinanceStats;
@@ -3218,6 +3337,7 @@ export interface FinanceOrder {
   ts: string;
   mode: FinanceMode;
   symbol: string;
+  currency: string;
   side: "BUY" | "SELL";
   qty: number;
   order_type: string;
@@ -3238,6 +3358,7 @@ export interface FinanceFill {
   ts: string;
   order_id: string;
   symbol: string;
+  currency: string;
   side: "BUY" | "SELL";
   qty: number;
   px: number;
@@ -3531,6 +3652,17 @@ export interface FinanceProvenanceLink {
   url: string;
 }
 
+export interface FinanceResearchNarrative {
+  generated_at: string;
+  market: string;
+  language: string;
+  model: string;
+  headline: string;
+  summary: string;
+  sections: { title: string; analysis: string }[];
+  watch_next: string[];
+}
+
 /** The daily Investment Research brief (`ResearchBrief`). Always answered
  * by the service — a degraded brief has freshness warnings + null sections. */
 export interface FinanceResearchBrief {
@@ -3554,6 +3686,8 @@ export interface FinanceResearchBrief {
   };
   /** Optional for briefs archived before Phase 0.95 introduced discovery. */
   discovery?: FinanceDiscoveryPool | null;
+  /** Model-written synthesis; absent on old archives or failed model runs. */
+  narrative?: FinanceResearchNarrative | null;
   cross_market_synthesis?: FinanceResearchSynthesis;
   uncertainty: string[];
   provenance: FinanceProvenanceLink[];

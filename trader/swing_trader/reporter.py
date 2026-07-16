@@ -12,7 +12,7 @@ view models plus plain-text (Telegram-ready, no HTML) renderings:
   fills, positions, equity/breaker, cumulative stats, yesterday-candidate
   outcomes, and a one-line safety footer showing the mode.
 - :func:`push_window_preamble` — 2-3 market-context lines prefixed to the
-  11:30 ET candidate cards (Loop.md §4, §5.6).
+  10:30 ET candidate cards (Loop.md §4, §5.6).
 - :func:`clamp` — length guard under Telegram's 4096-char message cap.
 
 No secrets ever appear in any output (Loop.md §3): the reporter only reads
@@ -77,6 +77,7 @@ class PositionView(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
 
     symbol: str
+    currency: str
     qty: float
     avg_px: float
     mkt_px: Optional[float] = None
@@ -90,6 +91,7 @@ class OpenOrderView(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
 
     symbol: str
+    currency: str
     side: Side
     qty: float
     order_type: OrderType
@@ -128,6 +130,10 @@ class AccountView(BaseModel):
     day_pnl: float
     drawdown_pct: float
     breaker_state: BreakerState
+    base_currency: str
+    cash_by_currency: dict[str, float]
+    equity_by_currency: dict[str, float]
+    fx_to_base: dict[str, float]
     positions: list[PositionView]
     open_orders: list[OpenOrderView]
     stats: StatsView
@@ -218,6 +224,7 @@ def _to_stats_view(stats: TradeStats) -> StatsView:
 def _to_position_view(pos: Position) -> PositionView:
     return PositionView(
         symbol=pos.symbol,
+        currency=pos.currency,
         qty=pos.qty,
         avg_px=pos.avg_px,
         mkt_px=pos.mkt_px,
@@ -229,6 +236,7 @@ def _to_position_view(pos: Position) -> PositionView:
 def _to_order_view(order: Order) -> OpenOrderView:
     return OpenOrderView(
         symbol=order.symbol,
+        currency=order.currency,
         side=order.side,
         qty=order.qty,
         order_type=order.order_type,
@@ -263,6 +271,10 @@ def build_account_view(
         day_pnl=snap.day_pnl,
         drawdown_pct=snap.drawdown_pct,
         breaker_state=snap.breaker_state,
+        base_currency=snap.base_currency,
+        cash_by_currency=snap.cash_by_currency,
+        equity_by_currency=snap.equity_by_currency,
+        fx_to_base=snap.fx_to_base,
         positions=positions,
         open_orders=open_orders,
         stats=stats,
@@ -385,7 +397,7 @@ def morning_summary(
 
 
 def push_window_preamble(market: dict) -> str:
-    """2-3 context lines prefixed to the 11:30 ET candidate push (Loop.md §4).
+    """2-3 context lines prefixed to the 10:30 ET candidate push (Loop.md §4).
 
     ``market`` is a plain dict (e.g. from the MarketMonitor snapshot) with
     optional keys ``risk_on_off``, ``vix``, ``breadth``; missing values
@@ -396,7 +408,7 @@ def push_window_preamble(market: dict) -> str:
     breadth = _fmt_value(market.get("breadth"))
     return "\n".join(
         [
-            "11:30 ET push — candidates below, confirm by 12:30 ET",
+            "10:30 ET push — candidates below, confirm by 11:30 ET",
             f"Market: {risk} | VIX {vix} | breadth {breadth}",
         ]
     )

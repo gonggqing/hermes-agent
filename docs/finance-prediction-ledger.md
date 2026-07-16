@@ -29,7 +29,7 @@ symbol/market/theme series.
    expected condition and producer version. Morning Long and evening Short are
    separate revisions; neither overwrites history.
 4. `forecast_checkpoints` — 1/3/5/10/20/60-session evaluation dates calculated
-   from the relevant US/CN/HK/KR market calendar, plus pending/evaluated state.
+   from the relevant US/HK/CN/KR market calendar, plus pending/evaluated state.
 5. `forecast_evidence_links` — claim-to-source/debate/signal/discovery links,
    including source ID, stance, role, weight and producer version.
 6. `forecast_outcomes` — deterministic adjusted market observations at
@@ -46,9 +46,11 @@ symbol/market/theme series.
 The implemented ledger lives in `prediction_evaluation.db`, isolated from the
 trading ledger and Qdrant. Brief persistence writes prose and structured
 forecasts independently, startup idempotently backfills historical briefs, and
-read-only API routes expose series history and due checkpoints. The remaining
-operational step is the market-close worker that fetches adjusted prices and
-calls the versioned evaluator automatically.
+read-only API routes expose series history, due checkpoints and aggregates. A
+non-blocking close worker now follows each market calendar, fetches adjusted
+entity/benchmark paths, records return/MFE/MAE and versioned scores, retries
+transient data gaps without counting them as misses, and catches up after a
+restart. Weekly/monthly/quarterly narrative review publication remains open.
 
 Run-level and revision-level idempotency are separate. `forecast_runs.run_key`
 prevents the same archived evidence packet from being imported again on every
@@ -64,6 +66,35 @@ research-state observations retained for provenance.
 Keep predictions separate from actions: a Long view can produce no order, and
 an approved order can fail execution. Candidate/order/fill IDs may link to a
 claim, but execution quality is scored independently.
+
+## Product presentation
+
+Expose this system inside Finance → Investment Research as a secondary
+`Prediction Review` workspace. The research brief remains the default reading
+surface; a compact health summary below it links to the full workspace. Do not
+put prediction accuracy in Portfolio, Orders, or the global Hermes dashboard.
+
+The full workspace has four deliberately separate views:
+
+1. **Live forecasts** — active market/symbol/theme/event series, current
+   direction and confidence, revision timeline, evidence, invalidation and due
+   checkpoints.
+2. **Evaluation** — completed sample size, checkpoint coverage, directional and
+   benchmark-relative results, confidence calibration, MFE/MAE and failure
+   reasons, filterable by market, producer and horizon.
+3. **Research review** — weekly/monthly/quarterly summaries and sourced
+   postmortems. Show confidence intervals and suppress comparative conclusions
+   below the documented sample gates.
+4. **Strategy backtests** — walk-forward/OOS Quant experiments, benchmark,
+   costs, turnover and drawdown. Never mix these results with live research
+   accuracy or actual portfolio P&L.
+
+The Web/Desktop Prediction Review now shows active forecasts, pending/due
+health, market/horizon aggregates and recent path outcomes from that API. It
+must not manufacture an aggregate “win rate” from unevaluated or overlapping
+claims. Web and Desktop use the same API contract, translations and
+Hermes-native components; charts use accessible colours, explicit denominators
+and tabular numerals.
 
 ## Horizon policy
 

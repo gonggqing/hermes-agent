@@ -99,8 +99,8 @@ class TestWindow:
 
     def test_defaults_match_loop_md(self):
         s = make()
-        assert s.push_time_et == time(11, 30)
-        assert s.confirm_cutoff_et == time(12, 30)
+        assert s.push_time_et == time(10, 30)
+        assert s.confirm_cutoff_et == time(11, 30)
         assert s.market_tz == "America/New_York"
         assert s.user_tz == "Asia/Shanghai"
 

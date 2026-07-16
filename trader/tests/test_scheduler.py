@@ -5,8 +5,8 @@ zoneinfo, and the runner gets an injected FakeClock — no wall clock, no
 threads, no sleeps, no network (Loop.md §3).
 
 DST coverage: the same ET wall times are asserted in BOTH regimes —
-July 2026 (EDT, UTC-4: 11:30 ET == 15:30 UTC) and January 2026
-(EST, UTC-5: 11:30 ET == 16:30 UTC).
+July 2026 (EDT, UTC-4: 10:30 ET == 14:30 UTC) and January 2026
+(EST, UTC-5: 10:30 ET == 15:30 UTC).
 
 2026 calendar facts used below (verified against a wall calendar):
 - Wed Jul 8 / Wed Jan 14: ordinary trading days.
@@ -73,10 +73,10 @@ class Recorder:
 
 class TestDstRegimes:
     def test_july_is_edt_utc_minus_4(self) -> None:
-        assert at_et(2026, 7, 8, 11, 30) == datetime(2026, 7, 8, 15, 30, tzinfo=UTC)
+        assert at_et(2026, 7, 8, 10, 30) == datetime(2026, 7, 8, 14, 30, tzinfo=UTC)
 
     def test_january_is_est_utc_minus_5(self) -> None:
-        assert at_et(2026, 1, 14, 11, 30) == datetime(2026, 1, 14, 16, 30, tzinfo=UTC)
+        assert at_et(2026, 1, 14, 10, 30) == datetime(2026, 1, 14, 15, 30, tzinfo=UTC)
 
 
 # ------------------------------------------------------------ trading days
@@ -118,12 +118,12 @@ PHASE_BOUNDARIES: list[tuple[tuple[int, int, int], LoopPhase]] = [
     ((9, 0, 0), LoopPhase.OFF_HOURS),
     ((9, 29, 59), LoopPhase.OFF_HOURS),
     ((9, 30, 0), LoopPhase.MONITORING),
-    ((10, 59, 59), LoopPhase.MONITORING),
-    ((11, 0, 0), LoopPhase.DECIDING),
-    ((11, 29, 59), LoopPhase.DECIDING),
-    ((11, 30, 0), LoopPhase.CONFIRM_WINDOW),
-    ((12, 29, 59), LoopPhase.CONFIRM_WINDOW),
-    ((12, 30, 0), LoopPhase.SET_AND_FORGET),
+    ((9, 59, 59), LoopPhase.MONITORING),
+    ((10, 0, 0), LoopPhase.DECIDING),
+    ((10, 29, 59), LoopPhase.DECIDING),
+    ((10, 30, 0), LoopPhase.CONFIRM_WINDOW),
+    ((11, 29, 59), LoopPhase.CONFIRM_WINDOW),
+    ((11, 30, 0), LoopPhase.SET_AND_FORGET),
     ((15, 59, 59), LoopPhase.SET_AND_FORGET),
     ((16, 0, 0), LoopPhase.AFTER_CLOSE),
     ((23, 59, 59), LoopPhase.AFTER_CLOSE),
@@ -144,9 +144,9 @@ class TestPhaseAt:
         assert phase_at(at_et(2026, 1, 14, *hms)) is expected
 
     def test_same_utc_instant_maps_differently_across_dst(self) -> None:
-        # 15:30 UTC is 11:30 ET in July (EDT) but 10:30 ET in January (EST).
-        assert phase_at(datetime(2026, 7, 8, 15, 30, tzinfo=UTC)) is LoopPhase.CONFIRM_WINDOW
-        assert phase_at(datetime(2026, 1, 14, 15, 30, tzinfo=UTC)) is LoopPhase.MONITORING
+        # 14:30 UTC is 10:30 ET in July (EDT) but 09:30 ET in January (EST).
+        assert phase_at(datetime(2026, 7, 8, 14, 30, tzinfo=UTC)) is LoopPhase.CONFIRM_WINDOW
+        assert phase_at(datetime(2026, 1, 14, 14, 30, tzinfo=UTC)) is LoopPhase.MONITORING
 
     def test_weekend_is_off_hours_all_day(self) -> None:
         assert phase_at(at_et(2026, 7, 11, 12, 0)) is LoopPhase.OFF_HOURS  # Saturday
@@ -177,24 +177,24 @@ class TestNextEvent:
         )
 
     def test_mid_morning_july(self) -> None:
-        event, instant = next_event(at_et(2026, 7, 8, 10, 0))
+        event, instant = next_event(at_et(2026, 7, 8, 9, 45))
         assert event is Event.DECIDE_START
-        assert instant == datetime(2026, 7, 8, 15, 0, tzinfo=UTC)  # 11:00 EDT
+        assert instant == datetime(2026, 7, 8, 14, 0, tzinfo=UTC)  # 10:00 EDT
 
     def test_mid_morning_january_est_offset(self) -> None:
-        event, instant = next_event(at_et(2026, 1, 14, 10, 0))
+        event, instant = next_event(at_et(2026, 1, 14, 9, 45))
         assert event is Event.DECIDE_START
-        assert instant == datetime(2026, 1, 14, 16, 0, tzinfo=UTC)  # 11:00 EST
+        assert instant == datetime(2026, 1, 14, 15, 0, tzinfo=UTC)  # 10:00 EST
 
     def test_exactly_at_event_returns_the_following_one(self) -> None:
-        event, instant = next_event(at_et(2026, 7, 8, 11, 0, 0))
+        event, instant = next_event(at_et(2026, 7, 8, 10, 0, 0))
         assert event is Event.PUSH_CANDIDATES
-        assert instant == at_et(2026, 7, 8, 11, 30)
+        assert instant == at_et(2026, 7, 8, 10, 30)
 
     def test_one_second_before_event(self) -> None:
-        event, instant = next_event(at_et(2026, 7, 8, 11, 29, 59))
+        event, instant = next_event(at_et(2026, 7, 8, 10, 29, 59))
         assert event is Event.PUSH_CANDIDATES
-        assert instant == datetime(2026, 7, 8, 15, 30, tzinfo=UTC)  # 11:30 EDT
+        assert instant == datetime(2026, 7, 8, 14, 30, tzinfo=UTC)  # 10:30 EDT
 
     def test_before_morning_report_same_day(self) -> None:
         event, instant = next_event(at_et(2026, 7, 8, 5, 0))
@@ -284,7 +284,7 @@ class TestDailyLoopRunner:
         clock.now = at_et(2026, 7, 8, 9, 45)
         assert [e for e, _ in runner.run_pending()] == [Event.MONITOR_START]
         assert runner.run_pending() == []  # same instant again
-        clock.now = at_et(2026, 7, 8, 10, 59)  # still MONITORING, nothing new due
+        clock.now = at_et(2026, 7, 8, 9, 59)  # still MONITORING, nothing new due
         assert runner.run_pending() == []
         assert rec.calls == [Event.MONITOR_START]
 
@@ -292,7 +292,7 @@ class TestDailyLoopRunner:
         clock = FakeClock(at_et(2026, 7, 8, 8, 0))
         rec = Recorder()
         runner = DailyLoopRunner(rec.callbacks, clock)
-        clock.now = at_et(2026, 7, 8, 12, 0)  # idle all morning
+        clock.now = at_et(2026, 7, 8, 11, 0)  # idle all morning
         fired = runner.run_pending()
         assert [e for e, _ in fired] == [
             Event.MORNING_REPORT,
@@ -313,11 +313,11 @@ class TestDailyLoopRunner:
         assert fired[1][1] == at_et(2026, 7, 8, 9, 30)
 
     def test_events_before_construction_never_fire(self) -> None:
-        clock = FakeClock(at_et(2026, 7, 8, 12, 0))  # built mid-day
+        clock = FakeClock(at_et(2026, 7, 8, 11, 0))  # built during confirmation
         rec = Recorder()
         runner = DailyLoopRunner(rec.callbacks, clock)
         assert runner.run_pending() == []
-        clock.now = at_et(2026, 7, 8, 12, 45)
+        clock.now = at_et(2026, 7, 8, 11, 45)
         fired = runner.run_pending()
         assert [e for e, _ in fired] == [Event.CONFIRM_CUTOFF]  # morning skipped
         assert rec.calls == [Event.CONFIRM_CUTOFF]
@@ -357,7 +357,7 @@ class TestDailyLoopRunner:
         clock = FakeClock(at_et(2026, 7, 2, 14, 0))
         rec = Recorder()
         runner = DailyLoopRunner(rec.callbacks, clock)
-        clock.now = at_et(2026, 7, 6, 12, 0)
+        clock.now = at_et(2026, 7, 6, 11, 0)
         fired = runner.run_pending()
         assert [(e, i.astimezone(ET).date()) for e, i in fired] == [
             (Event.MARKET_CLOSE, date(2026, 7, 2)),
@@ -368,10 +368,10 @@ class TestDailyLoopRunner:
         ]
 
     def test_est_regime_runner_january(self) -> None:
-        clock = FakeClock(datetime(2026, 1, 14, 16, 29, 59, tzinfo=UTC))  # 11:29:59 ET
+        clock = FakeClock(datetime(2026, 1, 14, 15, 29, 59, tzinfo=UTC))  # 10:29:59 ET
         rec = Recorder()
         runner = DailyLoopRunner(rec.callbacks, clock)
-        clock.now = datetime(2026, 1, 14, 16, 30, 0, tzinfo=UTC)  # 11:30:00 EST
+        clock.now = datetime(2026, 1, 14, 15, 30, 0, tzinfo=UTC)  # 10:30:00 EST
         fired = runner.run_pending()
         assert [e for e, _ in fired] == [Event.PUSH_CANDIDATES]
 
@@ -398,7 +398,7 @@ class TestDailyLoopRunner:
         runner = DailyLoopRunner(
             {Event.MORNING_REPORT: boom, Event.MONITOR_START: ok}, clock
         )
-        clock.now = at_et(2026, 7, 8, 10, 0)
+        clock.now = at_et(2026, 7, 8, 9, 59)
         fired = runner.run_pending()
         assert [e for e, _ in fired] == [Event.MORNING_REPORT, Event.MONITOR_START]
         assert calls == ["boom", "ok"]

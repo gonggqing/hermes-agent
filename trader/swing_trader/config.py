@@ -68,8 +68,8 @@ class Settings(BaseSettings):
     daily_drawdown_breaker_pct: float = DAILY_DRAWDOWN_BREAKER_PCT
 
     # --- Daily window, times in ET (Loop.md §4) ---
-    push_time_et: time = time(11, 30)
-    confirm_cutoff_et: time = time(12, 30)
+    push_time_et: time = time(10, 30)
+    confirm_cutoff_et: time = time(11, 30)
     market_tz: str = "America/New_York"
     user_tz: str = "Asia/Shanghai"
 
@@ -139,7 +139,7 @@ class Settings(BaseSettings):
     def _window_ordering(self) -> "Settings":
         if self.confirm_cutoff_et <= self.push_time_et:
             raise ValueError(
-                "confirm_cutoff_et must be after push_time_et (Loop.md §4: 11:30 -> 12:30 ET)"
+                "confirm_cutoff_et must be after push_time_et (Loop.md §4: 10:30 -> 11:30 ET)"
             )
         return self
 

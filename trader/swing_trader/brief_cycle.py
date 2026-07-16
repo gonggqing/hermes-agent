@@ -6,7 +6,7 @@ of Hermes agent cron (model drift or an unavailable chat session must never
 silently skip a promised brief).
 
 At 09:00 and 21:00 Asia/Shanghai the coordinator runs the same pipeline for
-US/CN/HK/KR: refresh deterministic evidence, ask the configured PRIMARY model
+US/HK/CN/KR: refresh deterministic evidence, ask the configured PRIMARY model
 for the final synthesis, persist the result, then notify.  The whole cycle
 runs on one background thread so data/model latency cannot block Telegram
 approval polling or the US order state machine.
@@ -28,11 +28,11 @@ logger = get_logger(__name__)
 __all__ = ["BriefCycleCoordinator", "latest_due_brief_slot"]
 
 BEIJING = ZoneInfo("Asia/Shanghai")
-_MARKETS = ("us", "cn", "hk", "kr")
+_MARKETS = ("us", "hk", "cn", "kr")
 _LABELS = {
     "us": "美国",
-    "cn": "中国 A 股",
     "hk": "香港",
+    "cn": "中国 A 股",
     "kr": "韩国半导体",
 }
 _EDITION_LABELS = {

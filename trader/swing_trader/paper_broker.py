@@ -61,6 +61,9 @@ class PaperBroker(BrokerInterface):
     def __init__(
         self,
         starting_cash: float = 2000.0,
+        starting_cash_by_currency: Optional[dict[str, float]] = None,
+        base_currency: str = "USD",
+        fx_to_base: Optional[dict[str, float]] = None,
         commission_per_order: float = 1.0,
         slippage_bps: float = 5.0,
         liquidity_fraction: float = 1.0,
@@ -74,13 +77,33 @@ class PaperBroker(BrokerInterface):
         if not 0 < liquidity_fraction <= 1:
             raise ValueError("liquidity_fraction must be in (0, 1]")
 
-        self.starting_cash = starting_cash
+        base_currency = base_currency.upper()
+        balances = {
+            key.upper(): float(value)
+            for key, value in (starting_cash_by_currency or {base_currency: starting_cash}).items()
+        }
+        if not balances or any(value < 0 for value in balances.values()):
+            raise ValueError("starting_cash_by_currency must contain non-negative balances")
+        self.base_currency = base_currency
+        self.starting_cash_by_currency = dict(balances)
+        self.starting_cash = balances.get(base_currency, starting_cash)
+        self._fx_to_base = {
+            "USD": 1.0,
+            "HKD": 1.0 / 7.8,
+            "CNY": 1.0 / 7.2,
+            "KRW": 1.0 / 1380.0,
+            **{key.upper(): float(value) for key, value in (fx_to_base or {}).items()},
+        }
+        self._fx_to_base[base_currency] = 1.0
         self.commission_per_order = commission_per_order
         self.slippage_bps = slippage_bps
         self.liquidity_fraction = liquidity_fraction
 
-        self._cash: float = starting_cash
-        self._day_open_equity: float = starting_cash
+        self._cash_by_currency: dict[str, float] = dict(balances)
+        self._day_open_equity: float = sum(
+            value * self._fx_to_base.get(currency, 0.0)
+            for currency, value in balances.items()
+        )
         self._positions: dict[str, Position] = {}
         self._orders: dict[str, Order] = {}
         self._fills: list[Fill] = []
@@ -97,16 +120,45 @@ class PaperBroker(BrokerInterface):
     def _slip(self) -> float:
         return self.slippage_bps / 10_000.0
 
+    @property
+    def _cash(self) -> float:
+        """Backward-compatible base-currency cash view."""
+        return self._cash_by_currency.get(self.base_currency, 0.0)
+
+    @_cash.setter
+    def _cash(self, value: float) -> None:
+        self._cash_by_currency[self.base_currency] = value
+
+    def set_fx_rate(self, currency: str, base_per_unit: float) -> None:
+        if base_per_unit <= 0:
+            raise ValueError("FX rate must be positive")
+        self._fx_to_base[currency.upper()] = float(base_per_unit)
+
     def _mark_for(self, pos: Position) -> float:
         return pos.mkt_px if pos.mkt_px is not None else pos.avg_px
 
+    def _equity_by_currency(self) -> dict[str, float]:
+        values = dict(self._cash_by_currency)
+        for pos in self._positions.values():
+            values[pos.currency] = values.get(pos.currency, 0.0) + pos.qty * self._mark_for(pos)
+        return values
+
     def _equity(self) -> float:
-        return self._cash + sum(
-            pos.qty * self._mark_for(pos) for pos in self._positions.values()
+        values = self._equity_by_currency()
+        return sum(
+            value * self._fx_to_base.get(currency, 0.0)
+            for currency, value in values.items()
         )
 
-    def _total_reserved(self) -> float:
-        return sum(self._reserved.values())
+    def _total_reserved(self, currency: Optional[str] = None) -> float:
+        if currency is None:
+            return sum(self._reserved.values())
+        return sum(
+            value
+            for order_id, value in self._reserved.items()
+            if self._orders.get(order_id, None) is not None
+            and self._orders[order_id].currency == currency
+        )
 
     def _reserved_sell_qty(self, symbol: str) -> float:
         """Position qty already committed to resting SELL orders.
@@ -201,10 +253,12 @@ class PaperBroker(BrokerInterface):
             if ref_px is None:
                 return reject(f"no reference price for {stored.symbol} MOC order")
             reservation = stored.qty * ref_px + self.commission_per_order
-            if self._total_reserved() + reservation > self._cash + _EPS:
+            currency_cash = self._cash_by_currency.get(stored.currency, 0.0)
+            reserved = self._total_reserved(stored.currency)
+            if reserved + reservation > currency_cash + _EPS:
                 return reject(
-                    f"insufficient cash: need {reservation:.2f} reserved, "
-                    f"already reserved {self._total_reserved():.2f}, cash {self._cash:.2f}"
+                    f"insufficient cash ({stored.currency}): need {reservation:.2f} reserved, "
+                    f"already reserved {reserved:.2f}, cash {currency_cash:.2f}"
                 )
             self._buy_ref_px[stored.id] = ref_px
             self._reserved[stored.id] = reservation
@@ -382,6 +436,7 @@ class PaperBroker(BrokerInterface):
             ts=execution_ts or bar.ts,
             order_id=order.id,
             symbol=order.symbol,
+            currency=order.currency,
             side=order.side,
             qty=qty,
             px=px,
@@ -403,11 +458,14 @@ class PaperBroker(BrokerInterface):
 
         # cash & positions
         if order.side is Side.BUY:
-            self._cash -= qty * px + commission
+            self._cash_by_currency[order.currency] = (
+                self._cash_by_currency.get(order.currency, 0.0) - qty * px - commission
+            )
             pos = self._positions.get(order.symbol)
             if pos is None:
                 self._positions[order.symbol] = Position(
-                    symbol=order.symbol, qty=qty, avg_px=px, mkt_px=px
+                    symbol=order.symbol, currency=order.currency,
+                    qty=qty, avg_px=px, mkt_px=px
                 )
             else:  # weighted average entry price
                 total = pos.qty + qty
@@ -415,7 +473,9 @@ class PaperBroker(BrokerInterface):
                 pos.qty = total
             self._update_buy_reservation(order)
         else:
-            self._cash += qty * px - commission
+            self._cash_by_currency[order.currency] = (
+                self._cash_by_currency.get(order.currency, 0.0) + qty * px - commission
+            )
             pos = self._positions[order.symbol]
             pos.qty -= qty
             if pos.qty <= _EPS:
@@ -458,7 +518,7 @@ class PaperBroker(BrokerInterface):
 
     def restore_state(
         self,
-        cash: float,
+        cash: float | dict[str, float],
         positions: list[Position],
         orders: list[Order],
         day_open_equity: Optional[float] = None,
@@ -475,7 +535,11 @@ class PaperBroker(BrokerInterface):
         if self._orders or self._positions or self._fills:
             raise RuntimeError("restore_state requires a fresh PaperBroker")
         warnings: list[str] = []
-        self._cash = cash
+        self._cash_by_currency = (
+            {self.base_currency: float(cash)}
+            if isinstance(cash, (int, float))
+            else {key.upper(): float(value) for key, value in cash.items()}
+        )
         for pos in positions:
             if pos.qty <= 0:
                 continue
@@ -519,7 +583,9 @@ class PaperBroker(BrokerInterface):
         logger.info(
             "broker state restored",
             extra={
-                "cash": round(self._cash, 2),
+                "cash_by_currency": {
+                    key: round(value, 2) for key, value in self._cash_by_currency.items()
+                },
                 "n_positions": len(self._positions),
                 "n_orders": len(self._orders),
                 "n_warnings": len(warnings),
@@ -546,7 +612,10 @@ class PaperBroker(BrokerInterface):
     def get_account(self) -> AccountSnapshot:
         equity = self._equity()
         upnl = sum(
-            (self._mark_for(pos) - pos.avg_px) * pos.qty for pos in self._positions.values()
+            (self._mark_for(pos) - pos.avg_px)
+            * pos.qty
+            * self._fx_to_base.get(pos.currency, 0.0)
+            for pos in self._positions.values()
         )
         day_pnl = equity - self._day_open_equity
         if self._day_open_equity > _EPS:
@@ -556,11 +625,18 @@ class PaperBroker(BrokerInterface):
         return AccountSnapshot(
             mode=Mode.PAPER,
             equity=equity,
-            cash=self._cash,
+            cash=sum(
+                value * self._fx_to_base.get(currency, 0.0)
+                for currency, value in self._cash_by_currency.items()
+            ),
             upnl=upnl,
             day_pnl=day_pnl,
             drawdown_pct=drawdown_pct,
             breaker_state=BreakerState.NORMAL,  # breaker decided by the RiskEngine
+            base_currency=self.base_currency,
+            cash_by_currency=dict(self._cash_by_currency),
+            equity_by_currency=self._equity_by_currency(),
+            fx_to_base=dict(self._fx_to_base),
         )
 
     def get_positions(self) -> list[Position]:

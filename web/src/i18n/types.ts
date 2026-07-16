@@ -51,24 +51,8 @@ export interface FinanceTranslations {
     staleWarningsTitle: string;
     summary: {
       title: string;
-      subtitle: string;
-      marketLabel: string;
-      focusLabel: string;
-      opportunityLabel: string;
-      riskLabel: string;
-      marketRiskOn: string;
-      marketNeutral: string;
-      marketRiskOff: string;
-      marketUnknown: string;
-      marketFacts: string;
-      themeFocus: string;
-      moverFocus: string;
-      focusUnknown: string;
-      opportunity: string;
-      opportunityNone: string;
-      riskClear: string;
-      riskSummary: string;
-      action: string;
+      unavailable: string;
+      watchNext: string;
     };
     risk: {
       title: string;
@@ -117,7 +101,6 @@ export interface FinanceTranslations {
       description: string;
       empty: string;
       score: string;
-      scoreMeaning: string;
       reasons: string;
       noReasons: string;
       reasonTrend: string;
@@ -131,7 +114,6 @@ export interface FinanceTranslations {
     };
     news: {
       title: string;
-      description: string;
       empty: string;
       sentiment: string;
     };
@@ -269,6 +251,7 @@ export interface FinanceTranslations {
     emptyWithStats: string;
     equity: string;
     cash: string;
+    cashByCurrency: string;
     upnl: string;
     dayPnl: string;
     drawdown: string;
@@ -327,7 +310,6 @@ export interface FinanceTranslations {
     marketKorea: string;
     marketJapan: string;
     comingSoon: string; // disabled placeholder badge, e.g. "Phase 0.9"
-    perRegionNote: string; // CN/HK independent session note
     selectDesk: string; // aria-label for the narrow-screen desk select
     // Manual "re-run this market's research session now" button.
     runResearch: string; // "Run research now"
@@ -348,6 +330,7 @@ export interface FinanceTranslations {
     portfolioAccountGroup: string;
     portfolioPositionsGroup: string;
     rowAccount: string;
+    rowControls: string;
     rowOrders: string;
     rowHistory: string;
     rowMarket: string;
@@ -355,7 +338,62 @@ export interface FinanceTranslations {
     positionsEmpty: string;
     selectPositionHint: string; // right-pane hint when nothing selected
   };
+  portfolioControls: {
+    title: string;
+    description: string;
+    investedTarget: string;
+    investedTolerance: string;
+    agentBudget: string;
+    agentTolerance: string;
+    maxPosition: string;
+    perTradeRisk: string;
+    maxNewPositions: string;
+    baseCurrency: string;
+    cashReserve: string;
+    agentCeiling: string;
+    subsetNote: string;
+    currencyNote: string;
+    save: string;
+    saving: string;
+    saved: string;
+    loadError: string;
+    saveError: string;
+  };
   // Read-only cross-asset watch modules (Gold/Oil/Rates/Crypto).
+  prediction: {
+    groupLabel: string;
+    navLabel: string;
+    title: string;
+    description: string;
+    allMarkets: string;
+    activeForecasts: string;
+    evaluation: string;
+    backtests: string;
+    backtestEmpty: string;
+    statActive: string;
+    statEvaluated: string;
+    statDue: string;
+    statAccuracy: string;
+    sampleHint: string;
+    immature: string;
+    mature: string;
+    byMarket: string;
+    byHorizon: string;
+    recent: string;
+    empty: string;
+    colMarket: string;
+    colEntity: string;
+    colDirection: string;
+    colConfidence: string;
+    colHorizon: string;
+    colSample: string;
+    colAccuracy: string;
+    colReturn: string;
+    colPath: string;
+    colStatus: string;
+    pending: string;
+    generatedAt: string;
+  };
   watch: {
     gold: string;
     oil: string;

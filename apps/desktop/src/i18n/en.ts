@@ -1619,6 +1619,7 @@ export const en: Translations = {
       empty: 'No account data yet — the ledger has no snapshots for this mode.',
       equity: 'Equity',
       cash: 'Cash',
+      cashByCurrency: 'Cash by currency',
       upnl: 'Unrealized PnL',
       dayPnl: 'Day PnL',
       drawdown: 'Drawdown',
@@ -1693,38 +1694,17 @@ export const en: Translations = {
       reportKind: kind => `${kind} report`
     },
     research: {
+      briefTitle: 'Investment Research Brief',
       tradingDay: date => `Trading day ${date}`,
       modePaper: 'PAPER',
       modeLive: 'LIVE',
       briefAsOf: ts => `brief as of ${ts}`,
       briefError: 'Could not load the research brief.',
       staleTitle: 'Data freshness warnings',
-      narrativeTitle: "Researcher's brief",
-      narrativeSubtitle:
-        "A plain-language reading of today's evidence — what matters, why it matters, and what still needs checking.",
-      narrativeMarketLabel: 'Market view',
-      narrativeFocusLabel: 'What is leading',
-      narrativeOpportunityLabel: 'What deserves research',
-      narrativeRiskLabel: 'Risk and next step',
-      narrativeMarketRiskOn: 'Risk appetite is supportive, but this is not a blanket buy signal.',
-      narrativeMarketNeutral: 'The market is mixed; prefer selective positions over broad exposure.',
-      narrativeMarketRiskOff: 'Risk appetite is weak; capital preservation and tighter entry discipline come first.',
-      narrativeMarketUnknown: 'There is not enough current market data to make a reliable regime call.',
-      narrativeMarketFacts: (vix, breadth) =>
-        `VIX ${vix}; ${breadth}% of the observed universe is above its 50-day average.`,
-      narrativeThemeFocus: (theme, distance, leaders) =>
-        `${theme} is the strongest observed theme (${distance} vs its 50-day average); current leaders: ${leaders}.`,
-      narrativeMoverFocus: (symbol, distance) =>
-        `${symbol} is the clearest observed mover (${distance} vs its 20-day average).`,
-      narrativeFocusUnknown: 'No sufficiently complete theme or mover snapshot is available yet.',
-      narrativeOpportunity: (symbol, score, reasons) =>
-        `${symbol} ranks first in the discovery pool at ${score}. Main reasons: ${reasons}.`,
-      narrativeOpportunityNone: "No new symbol passed today's evidence, trend and liquidity checks.",
-      narrativeRiskClear: 'No additional monitor warning is present in this snapshot.',
-      narrativeRiskSummary: (freshness, risk, unknown) =>
-        `This snapshot has ${freshness} freshness warning(s), ${risk} portfolio warning(s), and ${unknown} research gap(s) to verify.`,
-      narrativeAction:
-        'Treat discovery scores as research priority, not expected return. Verify the evidence and valuation before any order decision.',
+      narrativeTitle: 'Brief',
+      narrativeUnavailable:
+        'The analytical brief was not generated. Refresh research after the model connection is available; the measurements below remain usable.',
+      narrativeWatchNext: 'What to watch next',
       freshMarket: 'market',
       freshNews: 'news',
       freshPortfolio: 'portfolio',
@@ -1732,14 +1712,14 @@ export const en: Translations = {
       freshAge: minutes => `${minutes} min old`,
       riskTitle: 'Risk',
       riskDescription:
-        'Shows whether the portfolio can absorb new risk. Breaker, drawdown, cash and warnings take priority over an attractive idea.',
+        "Shows capital, cash, drawdown and exposure so the portfolio's current capacity for risk can be assessed.",
       riskEmpty: 'No risk data — neither the risk monitor nor a ledger snapshot is available yet.',
       poolExposure: 'Pool exposure',
       regimeDescription:
-        'Combines volatility, breadth and major-index trend to show whether the backdrop is supportive, mixed or defensive.',
+        "Summarizes volatility, market breadth and major-index trends to describe the market's current risk appetite.",
       moversTitle: 'Watchlist movers',
       moversDescription:
-        'Ranks unusual trend extension versus 20- and 50-day averages. A large deviation is an attention signal, not proof of value.',
+        'Surfaces instruments with the largest moves relative to their medium-term trend so unusual price behavior can be investigated.',
       moversTop: 'Top (vs SMA20)',
       moversBottom: 'Bottom (vs SMA20)',
       moversEmpty: 'No movers yet — the portfolio monitor has not produced a watch snapshot.',
@@ -1747,15 +1727,13 @@ export const en: Translations = {
       vsSma50: delta => `${delta} vs SMA50`,
       themesTitle: 'Themes',
       themesDescription:
-        'Groups related instruments to show where strength or weakness is broad enough to be a theme rather than a single-stock move.',
+        'Groups related instruments by industry and supply chain to show whether strength or weakness is becoming a shared direction.',
       themesEmpty: 'No theme data yet.',
       discoveryTitle: 'New opportunities discovered',
       discoveryDescription:
-        'Research-only candidates that passed source, identity, trend and liquidity checks. They have not passed portfolio risk or human approval.',
+        'Collects newly discovered instruments and ranks follow-up research priority using evidence depth, trend, liquidity and theme relevance.',
       discoveryEmpty: 'No validated symbols entered today’s discovery pool.',
       discoveryScore: score => `research score ${score}`,
-      discoveryScoreMeaning:
-        'The score ranks research priority from retained evidence and screening factors; it is not a return forecast or buy rating.',
       discoveryReasons: 'Why it ranked',
       discoveryNoReasons: 'No granular scoring reasons were retained for this candidate.',
       discoveryReasonTrend: value => `20-day price trend ${value}`,
@@ -1767,13 +1745,11 @@ export const en: Translations = {
       themeMeta: (count, avg) => `${count} symbols · avg ${avg} vs SMA50`,
       themeLeaders: symbols => `leaders: ${symbols}`,
       newsTitle: 'News digest',
-      newsDescription:
-        'Highlights the most material cited headlines. Sentiment is a routing aid; read the source before changing a thesis.',
       newsEmpty: 'No news items in the latest snapshot.',
       sentiment: value => `sentiment ${value}`,
       signalsTitle: 'Signals today',
       signalsDescription:
-        "Summarizes the agents' direction, confidence and thesis. A signal remains research until risk and approval gates are complete.",
+        'Summarizes model direction, confidence and core reasoning so agreement and conflict across evidence can be compared.',
       signalsEmpty: 'No signals for this trading day.',
       signalConfidence: pct => `confidence ${pct}`,
       signalAsOfBar: date => `data as of ${date}`,
@@ -1783,7 +1759,7 @@ export const en: Translations = {
       openQueue: 'Open action queue',
       uncertaintyTitle: 'Uncertainty & unknowns',
       uncertaintyDescription:
-        'Lists missing, stale or unresolved evidence that can weaken the brief. These are decision constraints, not footnotes.',
+        'Lists gaps in data, events and research evidence to show which parts of the current conclusion most need verification.',
       provenanceTitle: 'Sources',
       searchTitle: 'Research search',
       searchPlaceholder: 'Search collected research (news, filings, notes)…',
@@ -1807,12 +1783,46 @@ export const en: Translations = {
       marketJapan: 'Japan',
       comingSoon: 'Coming soon',
       phaseBadge: 'Phase 0.9',
-      regionNote:
-        'Mainland China and Hong Kong run independent sessions, calendars, regimes and freshness checks. Cross-market links appear only in the explicit synthesis.',
       runResearch: 'Run research now',
       runningResearch: 'Running…',
       runResearchDone: 'Research refreshed',
       runResearchFailed: 'Could not run research'
+    },
+    prediction: {
+      groupLabel: 'Research review',
+      navLabel: 'Prediction review',
+      title: 'Prediction review',
+      description:
+        'Tracks what the research system believed, how that view changed, and what happened at each declared market-session horizon.',
+      allMarkets: 'All markets',
+      activeForecasts: 'Active forecasts',
+      evaluation: 'Evaluation',
+      backtests: 'Strategy backtests',
+      backtestEmpty:
+        'Quant walk-forward and out-of-sample results will appear here in Phase 0.98. They remain separate from live research accuracy and portfolio P&L.',
+      statActive: 'Active series',
+      statEvaluated: 'Evaluated checkpoints',
+      statDue: 'Due for evaluation',
+      statAccuracy: 'Directional accuracy',
+      sampleHint: 'completed directional checkpoints',
+      immature: 'Early sample — descriptive only; do not compare models yet.',
+      mature: 'Minimum descriptive sample reached; confidence intervals still apply.',
+      byMarket: 'By market',
+      byHorizon: 'By horizon',
+      recent: 'Recent outcomes',
+      empty: 'No forecast observations are available yet.',
+      colMarket: 'Market',
+      colEntity: 'Entity',
+      colDirection: 'View',
+      colConfidence: 'Confidence',
+      colHorizon: 'Horizon',
+      colSample: 'Sample',
+      colAccuracy: 'Accuracy',
+      colReturn: 'Return',
+      colPath: 'MFE / MAE',
+      colStatus: 'Status',
+      pending: 'pending',
+      generatedAt: 'Calculated'
     },
     watch: {
       readOnlyNote: 'Watch-only — read-only market data. No orders or approvals here (Loop.md §3).',
@@ -1930,6 +1940,7 @@ export const en: Translations = {
       groupOverview: 'Overview',
       groupPositions: 'Positions',
       account: 'Account',
+      controls: 'Allocation controls',
       orders: 'Open orders',
       stats: 'Trade stats',
       market: 'Market',
@@ -1941,7 +1952,28 @@ export const en: Translations = {
       positionMktPx: 'Market price',
       positionUpnl: 'Unrealized PnL',
       positionPool: 'Pool',
-      positionsEmpty: 'No open positions.'
+      positionsEmpty: 'No open positions.',
+      controlsTitle: 'Allocation controls',
+      controlsDescription:
+        'These limits are enforced by deterministic risk checks and cannot be loosened by the model.',
+      investedTarget: 'Portfolio invested target',
+      investedTolerance: 'Portfolio tolerance',
+      agentBudget: 'Agent capital window',
+      agentTolerance: 'Agent tolerance',
+      maxPosition: 'Single-position cap',
+      perTradeRisk: 'Risk budget per trade',
+      maxNewPositions: 'Maximum new positions per day',
+      baseCurrency: 'Reporting currency',
+      cashReserve: 'Minimum cash reserve',
+      agentCeiling: 'Maximum Agent allocation',
+      controlsNote: 'The Agent capital window is a subset of the invested target, not an additional allocation.',
+      currencyNote:
+        'Cash and reservations remain currency-specific; portfolio ratios use FX marks. No currency is converted without confirmation.',
+      saveControls: 'Save settings',
+      savingControls: 'Saving…',
+      controlsSaved: 'Allocation controls updated.',
+      controlsLoadError: 'Could not load allocation controls.',
+      controlsSaveError: 'Could not save allocation controls.'
     },
     holdings: {
       subnavAria: 'Portfolio book',

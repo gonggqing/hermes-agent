@@ -18,7 +18,7 @@ Authority model (Loop.md §3):
   provided ``revalidate`` hook (RiskEngine), before it can count as
   human-approved. ExecutionEngine re-validates once more before broker
   submission (Loop.md §5.6/§5.7).
-- The 11:30→12:30 ET window is enforced SERVER-SIDE with zoneinfo (DST
+- The 10:30→11:30 ET window is enforced SERVER-SIDE with zoneinfo (DST
   correct); after cutoff every action is refused and pending candidates
   expire. Surfaces render state; they hold none.
 """
@@ -104,8 +104,8 @@ class ConfirmationService:
         self,
         ledger: Ledger,
         mode: Mode = Mode.PAPER,
-        push_time_et: time = time(11, 30),
-        cutoff_et: time = time(12, 30),
+        push_time_et: time = time(10, 30),
+        cutoff_et: time = time(11, 30),
         market_tz: str = "America/New_York",
         revalidate: Optional[Callable[[CandidateOrder], tuple[bool, str]]] = None,
     ) -> None:
@@ -139,7 +139,7 @@ class ConfirmationService:
     ) -> list[CandidateOrder]:
         """Register RISK_APPROVED candidates for human confirmation.
 
-        Refuses outside the 11:30→12:30 ET window (Loop.md §4). Publishing
+        Refuses outside the 10:30→11:30 ET window (Loop.md §4). Publishing
         is a SYSTEM action (the loop), not an approval.
         """
         if not self.in_window(now_utc):
@@ -210,6 +210,103 @@ class ConfirmationService:
     def finalized(self) -> FinalizedDecisions:
         return self._final
 
+    def record_post_approval_review(
+        self, candidate_id: str, now_utc: datetime, detail: str
+    ) -> CandidateOrder | None:
+        """Persist an unchanged post-approval review without granting authority."""
+        entry = self._entries.get(candidate_id)
+        if entry is None or entry.candidate.status not in {
+            CandidateStatus.APPROVED,
+            CandidateStatus.EDITED,
+        }:
+            return None
+        self._audit(
+            now_utc, candidate_id, "post_approval_review_keep", SYSTEM_ACTOR,
+            Surface.SYSTEM, version=entry.version, prev=entry.candidate.status,
+            new=entry.candidate.status, detail=detail,
+        )
+        return entry.candidate
+
+    def request_reconfirmation(
+        self,
+        candidate_id: str,
+        revised: CandidateOrder,
+        now_utc: datetime,
+        detail: str,
+    ) -> CandidateOrder | None:
+        """Supersede an approval with a new card that requires a second human act.
+
+        A new candidate id makes every button on the old card terminal, so a
+        stale Telegram callback cannot accidentally approve revised terms.
+        """
+        entry = self._entries.get(candidate_id)
+        if entry is None or entry.candidate.status not in {
+            CandidateStatus.APPROVED,
+            CandidateStatus.EDITED,
+        }:
+            return None
+        if revised.id == candidate_id or revised.symbol != entry.candidate.symbol:
+            raise ValueError("review revision requires a new id for the same symbol")
+        if revised.side is not entry.candidate.side:
+            raise ValueError("review revision cannot change side")
+
+        old = entry.candidate
+        superseded = old.model_copy(update={
+            "status": CandidateStatus.EXPIRED,
+            "risk_note": f"superseded by post-approval review: {revised.id}",
+        })
+        entry.candidate = superseded
+        self._ledger.update_candidate(
+            old.id, CandidateStatus.EXPIRED, risk_note=superseded.risk_note
+        )
+        self._audit(
+            now_utc, old.id, "post_approval_review_supersede", SYSTEM_ACTOR,
+            Surface.SYSTEM, version=entry.version, prev=old.status,
+            new=CandidateStatus.EXPIRED, detail=detail,
+        )
+        self._final.approved = [c for c in self._final.approved if c.id != old.id]
+        self._final.edited = [c for c in self._final.edited if c.id != old.id]
+        self._final.expired.append(superseded)
+
+        pushed = revised.model_copy(update={"status": CandidateStatus.PUSHED})
+        self._ledger.record_candidate(pushed, self._mode)
+        self._entries[pushed.id] = _Entry(candidate=pushed, version=1)
+        self._audit(
+            now_utc, pushed.id, "post_approval_review_revision", SYSTEM_ACTOR,
+            Surface.SYSTEM, version=1, prev=CandidateStatus.RISK_APPROVED,
+            new=CandidateStatus.PUSHED, detail=f"supersedes {old.id}: {detail}",
+        )
+        return pushed
+
+    def invalidate_after_review(
+        self, candidate_id: str, now_utc: datetime, detail: str
+    ) -> CandidateOrder | None:
+        """Fail closed when fresh deterministic checks reject an LLM revision."""
+        entry = self._entries.get(candidate_id)
+        if entry is None or entry.candidate.status not in {
+            CandidateStatus.APPROVED,
+            CandidateStatus.EDITED,
+        }:
+            return None
+        old = entry.candidate
+        expired = old.model_copy(update={
+            "status": CandidateStatus.EXPIRED,
+            "risk_note": f"post-approval review failed: {detail}",
+        })
+        entry.candidate = expired
+        self._ledger.update_candidate(
+            old.id, CandidateStatus.EXPIRED, risk_note=expired.risk_note
+        )
+        self._audit(
+            now_utc, old.id, "post_approval_review_reject", SYSTEM_ACTOR,
+            Surface.SYSTEM, version=entry.version, prev=old.status,
+            new=CandidateStatus.EXPIRED, detail=detail,
+        )
+        self._final.approved = [c for c in self._final.approved if c.id != old.id]
+        self._final.edited = [c for c in self._final.edited if c.id != old.id]
+        self._final.expired.append(expired)
+        return expired
+
     # ------------------------------------------------------------- actions
 
     def act(
@@ -272,7 +369,7 @@ class ConfirmationService:
             return self._refuse(
                 now_utc, candidate_id, action, actor, surface, idempotency_key,
                 ResultCode.WINDOW_CLOSED,
-                "confirmation window is closed (11:30-12:30 ET)",
+                "confirmation window is closed (10:30-11:30 ET)",
                 version=entry.version,
             )
         if expected_version is not None and expected_version != entry.version:

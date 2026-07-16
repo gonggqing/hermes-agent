@@ -1223,6 +1223,24 @@ export function runDebugShare(): Promise<DebugShareResponse> {
 
 export type FinanceMode = 'live' | 'paper'
 
+export interface FinancePortfolioControlsUpdate {
+  invested_target_pct: number
+  invested_tolerance_pct: number
+  agent_budget_pct: number
+  agent_budget_tolerance_pct: number
+  max_position_pct: number
+  per_trade_risk_pct: number
+  max_new_positions_per_day: number
+  base_currency: string
+}
+
+export interface FinancePortfolioControls extends FinancePortfolioControlsUpdate {
+  invested_ceiling_pct: number
+  agent_ceiling_pct: number
+  cash_reserve_floor_pct: number
+  updated_at: string
+}
+
 export type FinanceBreakerState = 'NORMAL' | 'TRIPPED' | 'UNKNOWN'
 
 export type FinanceCandidateStatus =
@@ -1250,6 +1268,7 @@ export interface FinanceHealth {
 
 export interface FinancePosition {
   symbol: string
+  currency: string
   qty: number
   avg_px: number
   mkt_px: null | number
@@ -1259,6 +1278,7 @@ export interface FinancePosition {
 
 export interface FinanceOpenOrder {
   symbol: string
+  currency: string
   side: FinanceSide
   qty: number
   order_type: FinanceOrderType
@@ -1289,6 +1309,10 @@ export interface FinanceSnapshot {
   day_pnl: number
   drawdown_pct: number
   breaker_state: FinanceBreakerState
+  base_currency: string
+  cash_by_currency: Record<string, number>
+  equity_by_currency: Record<string, number>
+  fx_to_base: Record<string, number>
 }
 
 // Loop attached: the full live AccountView. Loop idle (or the non-active
@@ -1302,6 +1326,10 @@ export interface FinanceAccountLive {
   day_pnl: number
   drawdown_pct: number
   breaker_state: FinanceBreakerState
+  base_currency: string
+  cash_by_currency: Record<string, number>
+  equity_by_currency: Record<string, number>
+  fx_to_base: Record<string, number>
   positions: FinancePosition[]
   open_orders: FinanceOpenOrder[]
   stats: FinanceStats
@@ -1322,6 +1350,7 @@ export interface FinanceOrderRow {
   ts: string
   mode: FinanceMode
   symbol: string
+  currency: string
   side: FinanceSide
   qty: number
   order_type: FinanceOrderType
@@ -1339,6 +1368,7 @@ export interface FinanceFill {
   id: string
   order_id: string
   symbol: string
+  currency: string
   side: FinanceSide
   qty: number
   px: number
@@ -1579,6 +1609,17 @@ export interface FinanceProvenanceLink {
   url: string
 }
 
+export interface FinanceResearchNarrative {
+  generated_at: string
+  market: string
+  language: string
+  model: string
+  headline: string
+  summary: string
+  sections: { title: string; analysis: string }[]
+  watch_next: string[]
+}
+
 export interface FinanceDiscoveryEvidence {
   source: string
   url: string
@@ -1641,6 +1682,8 @@ export interface FinanceResearchBrief {
   candidates_today: { counts: Record<string, number>; pending: FinanceBriefPendingCandidate[] }
   /** Optional for briefs archived before Phase 0.95 introduced discovery. */
   discovery?: FinanceDiscoveryPool | null
+  /** Model-written synthesis; absent on old archives or failed model runs. */
+  narrative?: FinanceResearchNarrative | null
   cross_market_synthesis?: FinanceResearchSynthesis
   uncertainty: string[]
   provenance: FinanceProvenanceLink[]
@@ -1753,6 +1796,20 @@ export function getFinanceHealth(): Promise<FinanceHealth> {
 
 export function getFinanceAccount(mode?: FinanceMode): Promise<FinanceAccount> {
   return window.hermesDesktop.api<FinanceAccount>({ path: `/api/finance/v1/account${financeQuery({ mode })}` })
+}
+
+export function getFinancePortfolioControls(): Promise<FinancePortfolioControls> {
+  return window.hermesDesktop.api<FinancePortfolioControls>({ path: '/api/finance/v1/portfolio/controls' })
+}
+
+export function updateFinancePortfolioControls(
+  body: FinancePortfolioControlsUpdate
+): Promise<FinancePortfolioControls> {
+  return window.hermesDesktop.api<FinancePortfolioControls>({
+    path: '/api/finance/v1/portfolio/controls',
+    method: 'PUT',
+    body
+  })
 }
 
 export function getFinanceOrders(opts: { activeOnly?: boolean; mode?: FinanceMode } = {}): Promise<FinanceOrderRow[]> {
@@ -1942,11 +1999,89 @@ export function postFinanceSessionFinalize(payload: { actor: string }): Promise<
   })
 }
 
-// One extra market beyond the default US brief: the China/HK MORNING research
-// brief (?market=cn). Same ResearchBrief shape, but research-only — risk is
-// null and candidates_today.pending is empty (that session never proposes
-// orders). Omit for the US brief (no query param).
-export type FinanceResearchMarket = 'cn' | 'hk' | 'kr'
+// Research market accepted by both the persisted brief and manual refresh
+// endpoints. Non-US desks are research-only; US shares the trading loop's
+// research session but can still be refreshed explicitly.
+export type FinanceResearchMarket = 'us' | 'cn' | 'hk' | 'kr'
+
+export interface FinancePredictionMetrics {
+  directional_accuracy: null | number
+  directional_hits: number
+  directional_samples: number
+  evaluated_checkpoints: number
+  excess_accuracy: null | number
+  excess_samples: number
+  mean_brier: null | number
+  mean_excess_return_pct: null | number
+  mean_log_loss: null | number
+  mean_return_pct: null | number
+  sample_mature: boolean
+}
+
+export interface FinancePredictionForecast {
+  as_of: string
+  claim_type: string
+  confidence: null | number
+  direction: string
+  entity_key: string
+  entity_type: string
+  display_name: string
+  horizons: number[]
+  invalidation: string
+  market: string
+  pending_checkpoints: number
+  producer: string
+  series_id: string
+  status: string
+  thesis: string
+}
+
+export interface FinancePredictionEvaluation {
+  absolute_direction_hit: boolean | null
+  claim_type: string
+  confidence: null | number
+  direction: string
+  due_trading_date: null | string
+  display_name: string
+  entity_key: string
+  entity_type: string
+  evaluated_at: string
+  evaluation_id: string
+  evaluator_version: string
+  excess_direction_hit: boolean | null
+  excess_return_pct: null | number
+  horizon_sessions: number
+  mae_pct: null | number
+  market: string
+  mfe_pct: null | number
+  producer: string
+  return_pct: null | number
+  series_id: string
+  state: string
+}
+
+export interface FinancePredictionSummary {
+  active_forecasts: FinancePredictionForecast[]
+  by_horizon: Array<FinancePredictionMetrics & { key: string }>
+  by_market: Array<FinancePredictionMetrics & { key: string }>
+  by_producer: Array<FinancePredictionMetrics & { key: string }>
+  filters: {
+    due_as_of: string
+    horizon_sessions: null | number
+    market: null | string
+    producer: null | string
+  }
+  generated_at: string
+  overview: FinancePredictionMetrics & {
+    active_series: number
+    checkpoints: number
+    due_checkpoints: number
+    pending_checkpoints: number
+    revisions: number
+    series: number
+  }
+  recent_evaluations: FinancePredictionEvaluation[]
+}
 
 // Result of POST /v1/research/run (ResearchSession.run_now summary).
 export interface FinanceRunResearchResult {
@@ -1976,6 +2111,12 @@ export function postFinanceResearchRun(market: FinanceResearchMarket): Promise<F
 export function getFinanceResearchBrief(market?: FinanceResearchMarket): Promise<FinanceResearchBrief> {
   return window.hermesDesktop.api<FinanceResearchBrief>({
     path: `/api/finance/v1/research/brief${financeQuery({ market })}`
+  })
+}
+
+export function getFinancePredictionSummary(market?: 'cn' | 'hk' | 'kr' | 'us'): Promise<FinancePredictionSummary> {
+  return window.hermesDesktop.api<FinancePredictionSummary>({
+    path: `/api/finance/v1/predictions/summary${financeQuery({ market })}`
   })
 }
 

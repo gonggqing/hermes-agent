@@ -19,6 +19,7 @@ from sqlalchemy import MetaData, event
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 from swing_trader.brief import ForecastClaim, ResearchBrief
+from swing_trader.instrument_names import name_for
 from swing_trader.log import get_logger
 
 logger = get_logger(__name__)
@@ -728,6 +729,300 @@ class PredictionLedger:
             )
             return list(session.exec(statement).all())
 
+    def aggregate_statistics(
+        self,
+        *,
+        market: str | None = None,
+        producer: str | None = None,
+        horizon_sessions: int | None = None,
+        due_as_of: date | str | None = None,
+        recent_limit: int = 40,
+    ) -> dict[str, Any]:
+        """Aggregate checkpoint results without conflating them with trades.
+
+        The checkpoint is the evaluation unit. If several evaluator versions
+        exist for one checkpoint, headline metrics use the latest while the
+        immutable older rows remain in series history. Every rate includes its
+        denominator and a maturity flag so a tiny sample cannot masquerade as
+        a stable track record.
+        """
+        market_key = market.strip().upper() if market else None
+        due_date = (
+            due_as_of
+            if isinstance(due_as_of, date)
+            else date.fromisoformat(due_as_of)
+            if due_as_of
+            else datetime.now(timezone.utc).date()
+        )
+        with Session(self._engine) as session:
+            series_rows = list(session.exec(select(ForecastSeriesRow)).all())
+            if market_key:
+                series_rows = [row for row in series_rows if row.market == market_key]
+            if producer:
+                series_rows = [row for row in series_rows if row.producer == producer]
+            series_by_id = {row.id: row for row in series_rows}
+
+            revisions = [
+                row
+                for row in session.exec(select(ForecastRevisionRow)).all()
+                if row.series_id in series_by_id
+            ]
+            revision_by_id = {row.id: row for row in revisions}
+            checkpoints = [
+                row
+                for row in session.exec(select(ForecastCheckpointRow)).all()
+                if row.revision_id in revision_by_id
+                and (horizon_sessions is None or row.horizon_sessions == horizon_sessions)
+            ]
+            checkpoint_by_id = {row.id: row for row in checkpoints}
+            outcomes = [
+                row
+                for row in session.exec(select(OutcomeObservationRow)).all()
+                if row.checkpoint_id in checkpoint_by_id
+            ]
+            outcome_by_id = {row.id: row for row in outcomes}
+            evaluations = [
+                row
+                for row in session.exec(select(ForecastEvaluationRow)).all()
+                if row.checkpoint_id in checkpoint_by_id and row.outcome_id in outcome_by_id
+            ]
+            latest_by_checkpoint: dict[str, ForecastEvaluationRow] = {}
+            for row in evaluations:
+                current = latest_by_checkpoint.get(row.checkpoint_id)
+                if current is None or row.evaluated_at > current.evaluated_at:
+                    latest_by_checkpoint[row.checkpoint_id] = row
+
+            records = []
+            for evaluation in latest_by_checkpoint.values():
+                checkpoint = checkpoint_by_id[evaluation.checkpoint_id]
+                revision = revision_by_id[checkpoint.revision_id]
+                series = series_by_id[revision.series_id]
+                outcome = outcome_by_id[evaluation.outcome_id]
+                records.append((evaluation, checkpoint, revision, series, outcome))
+
+            def metrics(rows) -> dict[str, Any]:
+                absolute = [row[0].absolute_direction_hit for row in rows]
+                absolute = [value for value in absolute if value is not None]
+                excess = [row[0].excess_direction_hit for row in rows]
+                excess = [value for value in excess if value is not None]
+                brier = [row[0].brier_score for row in rows if row[0].brier_score is not None]
+                losses = [row[0].log_loss for row in rows if row[0].log_loss is not None]
+                returns = [row[4].return_pct for row in rows if row[4].return_pct is not None]
+                excess_returns = [
+                    row[4].excess_return_pct
+                    for row in rows
+                    if row[4].excess_return_pct is not None
+                ]
+                sample = len(absolute)
+                return {
+                    "evaluated_checkpoints": len(rows),
+                    "directional_samples": sample,
+                    "directional_hits": sum(bool(value) for value in absolute),
+                    "directional_accuracy": (
+                        sum(bool(value) for value in absolute) / sample if sample else None
+                    ),
+                    "excess_samples": len(excess),
+                    "excess_accuracy": (
+                        sum(bool(value) for value in excess) / len(excess)
+                        if excess else None
+                    ),
+                    "mean_brier": sum(brier) / len(brier) if brier else None,
+                    "mean_log_loss": sum(losses) / len(losses) if losses else None,
+                    "mean_return_pct": sum(returns) / len(returns) if returns else None,
+                    "mean_excess_return_pct": (
+                        sum(excess_returns) / len(excess_returns)
+                        if excess_returns else None
+                    ),
+                    "sample_mature": sample >= 20,
+                }
+
+            def grouped(kind: str) -> list[dict[str, Any]]:
+                buckets: dict[str, list[Any]] = {}
+                for record in records:
+                    if kind == "market":
+                        key = record[3].market
+                    elif kind == "producer":
+                        key = record[3].producer
+                    else:
+                        key = str(record[1].horizon_sessions)
+                    buckets.setdefault(key, []).append(record)
+                return [
+                    {"key": key, **metrics(bucket)}
+                    for key, bucket in sorted(buckets.items())
+                ]
+
+            pending = [row for row in checkpoints if row.status == "pending"]
+            due = [
+                row
+                for row in pending
+                if row.due_trading_date
+                and date.fromisoformat(row.due_trading_date) <= due_date
+            ]
+
+            market_names = {
+                "US": "美国市场",
+                "HK": "香港市场",
+                "CN": "中国市场",
+                "KR": "韩国市场",
+            }
+
+            def display_name(series: ForecastSeriesRow) -> str:
+                if series.entity_type == "market":
+                    return market_names.get(series.market, series.market)
+                if series.entity_type in {"instrument", "event"}:
+                    return name_for(series.entity_key)
+                return ""
+
+            def balanced_latest(rows, *, limit: int, market_of, dedup_key):
+                """Newest-first de-duplication with fair all-market slots.
+
+                A burst from one close worker must not evict the other markets
+                from the dashboard. Historical records stay immutable; this
+                helper only shapes the read model returned to the UI.
+                """
+                unique = []
+                seen = set()
+                for row in rows:
+                    key = dedup_key(row)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    unique.append(row)
+                if market_key:
+                    return unique[:limit]
+
+                buckets: dict[str, list[Any]] = {
+                    key: [] for key in ("US", "HK", "CN", "KR")
+                }
+                for row in unique:
+                    buckets.setdefault(market_of(row), []).append(row)
+                market_order = ["US", "HK", "CN", "KR"] + sorted(
+                    key for key in buckets if key not in {"US", "HK", "CN", "KR"}
+                )
+                balanced = []
+                while len(balanced) < limit and any(
+                    buckets.get(key) for key in market_order
+                ):
+                    for key in market_order:
+                        bucket = buckets.get(key, [])
+                        if bucket and len(balanced) < limit:
+                            balanced.append(bucket.pop(0))
+                return balanced
+
+            active_rows = balanced_latest(
+                sorted(series_rows, key=lambda row: row.last_updated_at, reverse=True),
+                limit=24,
+                market_of=lambda row: row.market,
+                dedup_key=lambda row: (
+                    row.market,
+                    row.entity_type,
+                    row.entity_key,
+                    row.claim_type,
+                ),
+            )
+            active_forecasts = []
+            for series in active_rows:
+                latest = (
+                    revision_by_id.get(series.latest_revision_id)
+                    if series.latest_revision_id
+                    else None
+                )
+                if latest is None:
+                    continue
+                latest_checkpoints = [
+                    row for row in checkpoints if row.revision_id == latest.id
+                ]
+                active_forecasts.append(
+                    {
+                        "series_id": series.id,
+                        "market": series.market,
+                        "entity_type": series.entity_type,
+                        "entity_key": series.entity_key,
+                        "display_name": display_name(series),
+                        "claim_type": series.claim_type,
+                        "producer": series.producer,
+                        "status": series.status,
+                        "as_of": latest.as_of,
+                        "direction": latest.direction,
+                        "confidence": latest.confidence,
+                        "thesis": latest.thesis,
+                        "invalidation": latest.invalidation,
+                        "horizons": sorted(
+                            row.horizon_sessions for row in latest_checkpoints
+                        ),
+                        "pending_checkpoints": sum(
+                            row.status == "pending" for row in latest_checkpoints
+                        ),
+                    }
+                )
+
+            recent = []
+            ordered_records = balanced_latest(
+                sorted(records, key=lambda row: row[0].evaluated_at, reverse=True),
+                limit=max(1, min(recent_limit, 200)),
+                market_of=lambda row: row[3].market,
+                dedup_key=lambda row: (
+                    row[3].market,
+                    row[3].entity_type,
+                    row[3].entity_key,
+                    row[3].claim_type,
+                    row[1].horizon_sessions,
+                    row[1].due_trading_date,
+                    row[2].direction,
+                    row[0].state,
+                ),
+            )
+            for evaluation, checkpoint, revision, series, outcome in ordered_records:
+                recent.append(
+                    {
+                        "evaluation_id": evaluation.id,
+                        "series_id": series.id,
+                        "market": series.market,
+                        "entity_type": series.entity_type,
+                        "entity_key": series.entity_key,
+                        "display_name": display_name(series),
+                        "claim_type": series.claim_type,
+                        "producer": series.producer,
+                        "horizon_sessions": checkpoint.horizon_sessions,
+                        "due_trading_date": checkpoint.due_trading_date,
+                        "direction": revision.direction,
+                        "confidence": revision.confidence,
+                        "state": evaluation.state,
+                        "absolute_direction_hit": evaluation.absolute_direction_hit,
+                        "excess_direction_hit": evaluation.excess_direction_hit,
+                        "return_pct": outcome.return_pct,
+                        "excess_return_pct": outcome.excess_return_pct,
+                        "mfe_pct": outcome.mfe_pct,
+                        "mae_pct": outcome.mae_pct,
+                        "evaluator_version": evaluation.evaluator_version,
+                        "evaluated_at": evaluation.evaluated_at,
+                    }
+                )
+
+            return {
+                "generated_at": _utc_iso(),
+                "filters": {
+                    "market": market_key,
+                    "producer": producer,
+                    "horizon_sessions": horizon_sessions,
+                    "due_as_of": due_date.isoformat(),
+                },
+                "overview": {
+                    "series": len(series_rows),
+                    "active_series": sum(row.status == "active" for row in series_rows),
+                    "revisions": len(revisions),
+                    "checkpoints": len(checkpoints),
+                    "pending_checkpoints": len(pending),
+                    "due_checkpoints": len(due),
+                    **metrics(records),
+                },
+                "by_market": grouped("market"),
+                "by_producer": grouped("producer"),
+                "by_horizon": grouped("horizon"),
+                "active_forecasts": active_forecasts,
+                "recent_evaluations": recent,
+            }
+
     def get_series_history(self, series_id: str) -> dict[str, Any] | None:
         with Session(self._engine) as session:
             series = session.get(ForecastSeriesRow, series_id)
@@ -815,13 +1110,19 @@ class PredictionLedger:
                 if revision is None:
                     continue
                 series = session.get(ForecastSeriesRow, revision.series_id)
-                if series is None or (market and series.market != market.upper()):
+                run = session.get(ForecastRunRow, revision.run_id)
+                if (
+                    series is None
+                    or run is None
+                    or (market and series.market != market.upper())
+                ):
                     continue
                 result.append(
                     {
                         "checkpoint": checkpoint.model_dump(),
                         "revision": revision.model_dump(),
                         "series": series.model_dump(),
+                        "run": run.model_dump(),
                     }
                 )
             return result

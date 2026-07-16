@@ -101,6 +101,9 @@ class FinanceRuntime:
     # Durable per-market brief history and restart source for volatile slots.
     brief_store: Any = None  # swing_trader.brief_store.BriefStore | None
     prediction_ledger: Any = None  # independent longitudinal forecast ledger
+    prediction_evaluator: Any = None  # non-blocking market-close evaluator
+    portfolio_controls: Any = None  # durable PortfolioControlStore
+    apply_portfolio_controls: Any = None  # loop callback after an operator update
     # User-set display-name overrides (finance-bot DM "改名"). Highest precedence.
     name_overrides: Any = None  # swing_trader.name_override.NameOverrideStore | None
     # Phase 0.95 (go-live gate): manual operator kill-switch (halts NEW entries).
@@ -134,6 +137,17 @@ class ResearchWatchlistMemberRequest(BaseModel):
     exchange: Optional[str] = Field(default=None, max_length=32)
     currency: Optional[str] = Field(default=None, max_length=12)
     security_type: Optional[str] = Field(default=None, max_length=24)
+
+
+class PortfolioControlsUpdate(BaseModel):
+    invested_target_pct: float = Field(ge=0.0, le=95.0)
+    invested_tolerance_pct: float = Field(ge=0.0, le=20.0)
+    agent_budget_pct: float = Field(ge=0.0, le=95.0)
+    agent_budget_tolerance_pct: float = Field(ge=0.0, le=20.0)
+    max_position_pct: float = Field(gt=0.0, le=30.0)
+    per_trade_risk_pct: float = Field(gt=0.0, le=1.6)
+    max_new_positions_per_day: int = Field(ge=1, le=10)
+    base_currency: str = Field(min_length=3, max_length=3)
 
 
 _RESULT_HTTP: dict[ResultCode, int] = {
@@ -321,6 +335,25 @@ def create_app(runtime: FinanceRuntime):
             "last_day": r.last_day,
             "summary": r.summary(),
         }
+
+    @app.get(f"/{API_VERSION}/portfolio/controls")
+    def portfolio_controls() -> dict:
+        """Operator-owned allocation/risk settings used by the order gate."""
+        if runtime.portfolio_controls is None:
+            raise HTTPException(503, "portfolio controls not configured")
+        return runtime.portfolio_controls.get().public_dict()
+
+    @app.put(f"/{API_VERSION}/portfolio/controls")
+    def update_portfolio_controls(body: PortfolioControlsUpdate) -> dict:
+        if runtime.portfolio_controls is None:
+            raise HTTPException(503, "portfolio controls not configured")
+        try:
+            updated = runtime.portfolio_controls.update(body.model_dump())
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if runtime.apply_portfolio_controls is not None:
+            runtime.apply_portfolio_controls(updated)
+        return updated.public_dict()
 
     @app.get(f"/{API_VERSION}/account")
     def account(mode: Optional[str] = Query(default=None)) -> dict:
@@ -729,6 +762,30 @@ def create_app(runtime: FinanceRuntime):
                 raise HTTPException(404, f"no {market!r} brief archived for {date!r}")
             return {"brief": payload}
         return {"snapshots": runtime.brief_store.list_snapshots(market, limit)}
+
+    @app.get(f"/{API_VERSION}/predictions/summary")
+    def prediction_summary(
+        market: Optional[str] = Query(default=None),
+        producer: Optional[str] = Query(default=None),
+        horizon_sessions: Optional[int] = Query(default=None, ge=1, le=252),
+        due_as_of: Optional[str] = Query(default=None, min_length=10, max_length=10),
+        recent_limit: int = Query(default=40, ge=1, le=200),
+    ) -> dict:
+        """Aggregated forecast health/calibration; never trading performance."""
+        if runtime.prediction_ledger is None:
+            raise HTTPException(503, "prediction ledger not configured")
+        if market and market.upper() not in {"US", "HK", "CN", "KR"}:
+            raise HTTPException(422, f"unknown prediction market {market!r}")
+        try:
+            return runtime.prediction_ledger.aggregate_statistics(
+                market=market,
+                producer=producer,
+                horizon_sessions=horizon_sessions,
+                due_as_of=due_as_of,
+                recent_limit=recent_limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @app.get(f"/{API_VERSION}/predictions/series")
     def prediction_series(

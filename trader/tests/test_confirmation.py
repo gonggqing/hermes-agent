@@ -18,10 +18,10 @@ from swing_trader.schemas import (
     Side,
 )
 
-IN_WINDOW = datetime(2026, 7, 13, 15, 45, tzinfo=timezone.utc)  # 11:45 EDT
-BEFORE_WINDOW = datetime(2026, 7, 13, 15, 0, tzinfo=timezone.utc)  # 11:00 EDT
-AFTER_CUTOFF = datetime(2026, 7, 13, 16, 31, tzinfo=timezone.utc)  # 12:31 EDT
-IN_WINDOW_EST = datetime(2026, 1, 12, 16, 45, tzinfo=timezone.utc)  # 11:45 EST
+IN_WINDOW = datetime(2026, 7, 13, 14, 45, tzinfo=timezone.utc)  # 10:45 EDT
+BEFORE_WINDOW = datetime(2026, 7, 13, 14, 0, tzinfo=timezone.utc)  # 10:00 EDT
+AFTER_CUTOFF = datetime(2026, 7, 13, 15, 31, tzinfo=timezone.utc)  # 11:31 EDT
+IN_WINDOW_EST = datetime(2026, 1, 12, 15, 45, tzinfo=timezone.utc)  # 10:45 EST
 
 
 def candidate(**kw) -> CandidateOrder:
@@ -266,3 +266,32 @@ def test_naive_datetime_rejected(env):
     ledger, service = env
     with pytest.raises(ValueError, match="timezone-aware"):
         service.in_window(datetime(2026, 7, 13, 15, 45))
+
+
+def test_post_approval_revision_expires_old_id_and_requires_second_human_act(env):
+    ledger, service = env
+    old = publish_one(ledger, service)
+    approved = service.act(
+        old.id, "approve", "human", Surface.TELEGRAM, "first", IN_WINDOW
+    ).candidate
+    assert approved is not None
+    revised = approved.model_copy(update={
+        "id": "reviewed-new-id",
+        "limit": 100.5,
+        "ref_px": 101.0,
+        "status": CandidateStatus.RISK_APPROVED,
+    })
+    pushed = service.request_reconfirmation(
+        old.id, revised, IN_WINDOW, "fresh quote changed"
+    )
+    assert pushed is not None and pushed.status is CandidateStatus.PUSHED
+    assert service.act(
+        old.id, "approve", "human", Surface.TELEGRAM, "stale", IN_WINDOW
+    ).ok is False
+    second = service.act(
+        pushed.id, "approve", "human", Surface.TELEGRAM, "second", IN_WINDOW
+    )
+    assert second.ok and second.candidate.status is CandidateStatus.APPROVED
+    stored = {c.id: c for c in ledger.get_candidates(mode=Mode.PAPER)}
+    assert stored[old.id].status is CandidateStatus.EXPIRED
+    assert stored[pushed.id].status is CandidateStatus.APPROVED

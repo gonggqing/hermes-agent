@@ -37,19 +37,19 @@ from swing_trader.telegram_gateway import (
 UTC = timezone.utc
 
 # ---------------------------------------------------------------- UTC instants
-# July regime: America/New_York is EDT (UTC-4) -> 11:30 ET == 15:30 UTC.
-JULY_PUSH = datetime(2026, 7, 10, 15, 30, 0, tzinfo=UTC)  # exactly 11:30:00 EDT
-JULY_BEFORE = datetime(2026, 7, 10, 15, 29, 59, tzinfo=UTC)  # 11:29:59 EDT
-JULY_MID = datetime(2026, 7, 10, 16, 0, 0, tzinfo=UTC)  # 12:00:00 EDT
-JULY_LAST_IN = datetime(2026, 7, 10, 16, 29, 59, tzinfo=UTC)  # 12:29:59 EDT
-JULY_CUTOFF = datetime(2026, 7, 10, 16, 30, 0, tzinfo=UTC)  # exactly 12:30:00 EDT
-JULY_AFTER = datetime(2026, 7, 10, 17, 0, 0, tzinfo=UTC)  # 13:00:00 EDT
+# July regime: America/New_York is EDT (UTC-4) -> 10:30 ET == 14:30 UTC.
+JULY_PUSH = datetime(2026, 7, 10, 14, 30, 0, tzinfo=UTC)  # exactly 10:30:00 EDT
+JULY_BEFORE = datetime(2026, 7, 10, 14, 29, 59, tzinfo=UTC)  # 10:29:59 EDT
+JULY_MID = datetime(2026, 7, 10, 15, 0, 0, tzinfo=UTC)  # 11:00:00 EDT
+JULY_LAST_IN = datetime(2026, 7, 10, 15, 29, 59, tzinfo=UTC)  # 11:29:59 EDT
+JULY_CUTOFF = datetime(2026, 7, 10, 15, 30, 0, tzinfo=UTC)  # exactly 11:30:00 EDT
+JULY_AFTER = datetime(2026, 7, 10, 16, 0, 0, tzinfo=UTC)  # 12:00:00 EDT
 
-# January regime: America/New_York is EST (UTC-5) -> 11:30 ET == 16:30 UTC.
-JAN_PUSH = datetime(2026, 1, 9, 16, 30, 0, tzinfo=UTC)  # exactly 11:30:00 EST
-JAN_BEFORE = datetime(2026, 1, 9, 16, 29, 59, tzinfo=UTC)  # 11:29:59 EST
-JAN_LAST_IN = datetime(2026, 1, 9, 17, 29, 59, tzinfo=UTC)  # 12:29:59 EST
-JAN_CUTOFF = datetime(2026, 1, 9, 17, 30, 0, tzinfo=UTC)  # exactly 12:30:00 EST
+# January regime: America/New_York is EST (UTC-5) -> 10:30 ET == 15:30 UTC.
+JAN_PUSH = datetime(2026, 1, 9, 15, 30, 0, tzinfo=UTC)  # exactly 10:30:00 EST
+JAN_BEFORE = datetime(2026, 1, 9, 15, 29, 59, tzinfo=UTC)  # 10:29:59 EST
+JAN_LAST_IN = datetime(2026, 1, 9, 16, 29, 59, tzinfo=UTC)  # 11:29:59 EST
+JAN_CUTOFF = datetime(2026, 1, 9, 16, 30, 0, tzinfo=UTC)  # exactly 11:30:00 EST
 
 TOKEN = "1234567:SUPERSECRETBOTTOKEN"
 
@@ -143,8 +143,8 @@ def make_gateway(
     gw = ConfirmationGateway(
         transport=transport,
         chat_id="42",
-        push_time_et=time(11, 30),
-        cutoff_et=time(12, 30),
+        push_time_et=time(10, 30),
+        cutoff_et=time(11, 30),
         market_tz="America/New_York",
     )
     return gw, transport
@@ -335,17 +335,17 @@ class TestCard:
 class TestWindow:
     def test_boundaries_july_edt(self) -> None:
         gw, _ = make_gateway()
-        assert gw.in_window(JULY_PUSH) is True  # exactly 11:30:00 -> in
+        assert gw.in_window(JULY_PUSH) is True  # exactly 10:30:00 -> in
         assert gw.in_window(JULY_BEFORE) is False  # 11:29:59 -> out
         assert gw.in_window(JULY_LAST_IN) is True  # 12:29:59 -> in
-        assert gw.in_window(JULY_CUTOFF) is False  # exactly 12:30:00 -> out
+        assert gw.in_window(JULY_CUTOFF) is False  # exactly 11:30:00 -> out
 
     def test_boundaries_january_est(self) -> None:
         gw, _ = make_gateway()
-        assert gw.in_window(JAN_PUSH) is True  # exactly 11:30:00 -> in
+        assert gw.in_window(JAN_PUSH) is True  # exactly 10:30:00 -> in
         assert gw.in_window(JAN_BEFORE) is False  # 11:29:59 -> out
         assert gw.in_window(JAN_LAST_IN) is True  # 12:29:59 -> in
-        assert gw.in_window(JAN_CUTOFF) is False  # exactly 12:30:00 -> out
+        assert gw.in_window(JAN_CUTOFF) is False  # exactly 11:30:00 -> out
 
     def test_naive_datetime_rejected(self) -> None:
         gw, _ = make_gateway()
@@ -439,7 +439,7 @@ class TestApproveReject:
         gw, transport = make_gateway()
         pushed, key = push_one(gw, transport)
         transport.updates_queue.append([callback_update(1, key, "ok")])
-        finalized = gw.poll_responses(JULY_CUTOFF)  # exactly 12:30 -> closed
+        finalized = gw.poll_responses(JULY_CUTOFF)  # exactly 11:30 -> closed
         assert finalized == []
         assert key in gw.pending  # still pending; will expire
         assert gw.finalized().approved == []
@@ -610,7 +610,7 @@ class TestExpiry:
         gw, transport = make_gateway()
         c1, c2 = make_candidate(), make_candidate(symbol="MU")
         gw.push([c1, c2], JULY_PUSH)
-        expired = gw.expire_stale(JULY_CUTOFF)  # exactly 12:30 ET -> expired
+        expired = gw.expire_stale(JULY_CUTOFF)  # exactly 11:30 ET -> expired
         assert len(expired) == 2
         assert all(c.status is CandidateStatus.EXPIRED for c in expired)
         assert gw.pending == {}

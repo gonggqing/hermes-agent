@@ -1,4 +1,4 @@
-"""Unified Beijing-time US/CN/HK/KR brief delivery (no network)."""
+"""Unified Beijing-time US/HK/CN/KR brief delivery (no network)."""
 
 from datetime import datetime, timezone
 
@@ -75,8 +75,8 @@ def test_evening_cycle_uses_same_pipeline_for_all_markets(tmp_path):
     sent: list[str] = []
     result = BriefCycleCoordinator(runtime, writer, notify=sent.append).run_cycle("evening")
 
-    assert result["completed"] == ["us", "cn", "hk", "kr"]
-    assert writer.calls == ["us", "cn", "hk", "kr"]
+    assert result["completed"] == ["us", "hk", "cn", "kr"]
+    assert writer.calls == ["us", "hk", "cn", "kr"]
     assert len(sent) == 4
     for market in ("us", "cn", "hk", "kr"):
         payload = runtime.latest_brief if market == "us" else runtime.latest_briefs[market]

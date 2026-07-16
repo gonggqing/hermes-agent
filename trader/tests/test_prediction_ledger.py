@@ -28,10 +28,13 @@ def _brief(
     at: datetime = NOW,
     direction: str = "long",
     evidence_hash: str = "evidence-1",
+    market: str = "US",
+    entity_type: str = "instrument",
+    entity_key: str = "VST",
 ) -> ResearchBrief:
     claim = ForecastClaim(
-        entity_type="instrument",
-        entity_key="VST",
+        entity_type=entity_type,
+        entity_key=entity_key,
         claim_type="swing_direction",
         direction=direction,
         confidence=0.72,
@@ -50,8 +53,8 @@ def _brief(
         freshness=FreshnessInfo(),
         signals_today=[
             SignalView(
-                signal_id="sig-vst",
-                symbol="VST",
+                signal_id=f"sig-{entity_key.lower()}",
+                symbol=entity_key,
                 direction=direction,
                 confidence=0.68,
                 source_agent="debate",
@@ -62,7 +65,7 @@ def _brief(
         ],
         narrative=ResearchNarrative(
             generated_at=at,
-            market="US",
+            market=market,
             language="zh-CN",
             model="primary-test",
             prompt_version="brief-v3",
@@ -74,6 +77,70 @@ def _brief(
             claims=[claim],
         ),
     )
+
+
+def test_all_market_summary_is_balanced_deduplicated_and_named(tmp_path):
+    ledger = PredictionLedger(f"sqlite:///{tmp_path / 'predictions.db'}")
+    instruments = {
+        "US": "VST",
+        "HK": "0700.HK",
+        "CN": "688981.SS",
+        "KR": "000990.KS",
+    }
+    for offset, (market, symbol) in enumerate(instruments.items()):
+        ledger.record_brief(
+            market,
+            _brief(
+                at=NOW + timedelta(minutes=offset),
+                market=market,
+                entity_key=symbol,
+                evidence_hash=f"packet-{market}",
+            ),
+        )
+
+    active = ledger.aggregate_statistics(recent_limit=8)["active_forecasts"]
+    assert {row["market"] for row in active} == {"US", "HK", "CN", "KR"}
+    semantic_keys = {
+        (row["market"], row["entity_type"], row["entity_key"], row["claim_type"])
+        for row in active
+    }
+    assert len(active) == len(semantic_keys)
+    names = {row["entity_key"]: row["display_name"] for row in active}
+    assert names["0700.HK"] == "腾讯控股"
+    assert names["688981.SS"] == "中芯国际"
+    assert names["000990.KS"] == "DB HiTek"
+
+    for series in ledger.list_series():
+        history = ledger.get_series_history(series.id)
+        checkpoint = next(
+            row for row in history["checkpoints"] if row["horizon_sessions"] == 1
+        )
+        ledger.evaluate_checkpoint(
+            checkpoint["id"],
+            observed_at="2026-07-20T20:00:00+00:00",
+            source="adjusted-close:test",
+            entity_value=170.0,
+            benchmark_return_pct=0.5,
+            mfe_pct=3.0,
+            mae_pct=-1.0,
+        )
+
+    recent = ledger.aggregate_statistics(recent_limit=8)["recent_evaluations"]
+    assert {row["market"] for row in recent} == {"US", "HK", "CN", "KR"}
+    recent_keys = {
+        (
+            row["market"],
+            row["entity_type"],
+            row["entity_key"],
+            row["claim_type"],
+            row["horizon_sessions"],
+            row["due_trading_date"],
+            row["direction"],
+            row["state"],
+        )
+        for row in recent
+    }
+    assert len(recent) == len(recent_keys)
 
 
 def test_cross_day_revision_series_preserves_history(tmp_path):

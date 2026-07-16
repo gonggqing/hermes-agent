@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
+from sqlalchemy import inspect, text
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 from swing_trader.log import get_logger
@@ -136,6 +137,7 @@ class CandidateRow(SQLModel, table=True):
     ts: str
     mode: str = Field(index=True)
     symbol: str = Field(index=True)
+    currency: str = "USD"
     side: str
     qty: float
     order_type: str
@@ -161,6 +163,7 @@ class OrderRow(SQLModel, table=True):
     ts: str
     mode: str = Field(index=True)
     symbol: str = Field(index=True)
+    currency: str = "USD"
     side: str
     qty: float
     order_type: str
@@ -184,6 +187,7 @@ class FillRow(SQLModel, table=True):
     mode: str = Field(index=True)
     order_id: str = Field(index=True)
     symbol: str = Field(index=True)
+    currency: str = "USD"
     side: str
     qty: float
     px: float
@@ -226,6 +230,10 @@ class SnapshotRow(SQLModel, table=True):
     day_pnl: float = 0.0
     drawdown_pct: float = 0.0
     breaker_state: str = BreakerState.NORMAL.value
+    base_currency: str = "USD"
+    cash_by_currency: str = "{}"
+    equity_by_currency: str = "{}"
+    fx_to_base: str = "{}"
 
 
 class MarketMarkRow(SQLModel, table=True):
@@ -311,6 +319,7 @@ def _candidate_to_row(c: CandidateOrder, mode: Mode | str) -> CandidateRow:
         ts=_to_iso(c.ts),
         mode=_mode_value(mode),
         symbol=c.symbol,
+        currency=c.currency,
         side=c.side.value,
         qty=c.qty,
         order_type=c.order_type.value,
@@ -335,6 +344,7 @@ def _candidate_from_row(row: CandidateRow) -> CandidateOrder:
         id=row.id,
         ts=_from_iso(row.ts),
         symbol=row.symbol,
+        currency=row.currency,
         side=Side(row.side),
         qty=row.qty,
         order_type=OrderType(row.order_type),
@@ -360,6 +370,7 @@ def _order_to_row(order: Order) -> OrderRow:
         ts=_to_iso(order.ts),
         mode=order.mode.value,
         symbol=order.symbol,
+        currency=order.currency,
         side=order.side.value,
         qty=order.qty,
         order_type=order.order_type.value,
@@ -382,6 +393,7 @@ def _order_from_row(row: OrderRow) -> Order:
         ts=_from_iso(row.ts),
         mode=Mode(row.mode),
         symbol=row.symbol,
+        currency=row.currency,
         side=Side(row.side),
         qty=row.qty,
         order_type=OrderType(row.order_type),
@@ -405,6 +417,7 @@ def _fill_to_row(fill: Fill) -> FillRow:
         mode=fill.mode.value,
         order_id=fill.order_id,
         symbol=fill.symbol,
+        currency=fill.currency,
         side=fill.side.value,
         qty=fill.qty,
         px=fill.px,
@@ -419,6 +432,7 @@ def _fill_from_row(row: FillRow) -> Fill:
         mode=Mode(row.mode),
         order_id=row.order_id,
         symbol=row.symbol,
+        currency=row.currency,
         side=Side(row.side),
         qty=row.qty,
         px=row.px,
@@ -436,6 +450,10 @@ def _snapshot_to_row(snap: AccountSnapshot) -> SnapshotRow:
         day_pnl=snap.day_pnl,
         drawdown_pct=snap.drawdown_pct,
         breaker_state=snap.breaker_state.value,
+        base_currency=snap.base_currency,
+        cash_by_currency=json.dumps(snap.cash_by_currency, sort_keys=True),
+        equity_by_currency=json.dumps(snap.equity_by_currency, sort_keys=True),
+        fx_to_base=json.dumps(snap.fx_to_base, sort_keys=True),
     )
 
 
@@ -449,6 +467,10 @@ def _snapshot_from_row(row: SnapshotRow) -> AccountSnapshot:
         day_pnl=row.day_pnl,
         drawdown_pct=row.drawdown_pct,
         breaker_state=BreakerState(row.breaker_state),
+        base_currency=row.base_currency,
+        cash_by_currency=json.loads(row.cash_by_currency or "{}"),
+        equity_by_currency=json.loads(row.equity_by_currency or "{}"),
+        fx_to_base=json.loads(row.fx_to_base or "{}"),
     )
 
 
@@ -596,7 +618,48 @@ class Ledger:
     def __init__(self, url: str = "sqlite:///trader.db") -> None:
         self._engine = create_engine(url)
         SQLModel.metadata.create_all(self._engine)
+        self._migrate_currency_columns()
         logger.info("ledger ready", extra={"url": url})
+
+    def _migrate_currency_columns(self) -> None:
+        """Additive catch-up for ledgers created before multi-currency audit."""
+        additions = {
+            "candidates": {"currency": "VARCHAR NOT NULL DEFAULT 'USD'"},
+            "orders": {"currency": "VARCHAR NOT NULL DEFAULT 'USD'"},
+            "fills": {"currency": "VARCHAR NOT NULL DEFAULT 'USD'"},
+            "snapshots": {
+                "base_currency": "VARCHAR NOT NULL DEFAULT 'USD'",
+                "cash_by_currency": "VARCHAR NOT NULL DEFAULT '{}'",
+                "equity_by_currency": "VARCHAR NOT NULL DEFAULT '{}'",
+                "fx_to_base": "VARCHAR NOT NULL DEFAULT '{}'",
+            },
+        }
+        inspector = inspect(self._engine)
+        with self._engine.begin() as connection:
+            for table_name, columns in additions.items():
+                if not inspector.has_table(table_name):
+                    continue
+                existing = {column["name"] for column in inspector.get_columns(table_name)}
+                for name, ddl in columns.items():
+                    if name not in existing:
+                        connection.execute(
+                            text(f'ALTER TABLE "{table_name}" ADD COLUMN "{name}" {ddl}')
+                        )
+                if table_name in {"candidates", "orders", "fills"}:
+                    # Older rows received the additive USD default. Canonical
+                    # suffixes are authoritative, so repair non-US execution
+                    # currencies without rewriting any timestamps or history.
+                    connection.execute(
+                        text(
+                            f'''UPDATE "{table_name}"
+                                SET currency = CASE
+                                  WHEN UPPER(symbol) LIKE '%.HK' THEN 'HKD'
+                                  WHEN UPPER(symbol) LIKE '%.SS' OR UPPER(symbol) LIKE '%.SZ' THEN 'CNY'
+                                  WHEN UPPER(symbol) LIKE '%.KS' THEN 'KRW'
+                                  ELSE currency
+                                END'''
+                        )
+                    )
 
     # ------------------------------------------------------------- signals
 
@@ -676,6 +739,7 @@ class Ledger:
                 row.filled_qty = order.filled_qty
                 row.avg_fill_px = order.avg_fill_px
                 row.broker_ref = order.broker_ref
+                row.currency = order.currency
             session.add(row)
             session.commit()
 

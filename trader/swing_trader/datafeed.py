@@ -188,6 +188,10 @@ def _chart_bars(payload: dict, symbol: str, limit: int) -> list[Bar]:
         raise DataFeedError(f"Yahoo chart bars invalid for {symbol}")
 
     fields = {name: quote.get(name) or [] for name in ("open", "high", "low", "close", "volume")}
+    try:
+        adjusted_closes = result["indicators"]["adjclose"][0].get("adjclose") or []
+    except (KeyError, IndexError, TypeError, AttributeError):
+        adjusted_closes = []
     rows: list[Bar] = []
     for index, epoch in enumerate(timestamps):
         try:
@@ -199,6 +203,16 @@ def _chart_bars(payload: dict, symbol: str, limit: int) -> list[Bar]:
             continue
         if None in (opened, high, low, close):
             continue
+        # Yahoo chart fallback returns raw OHLC plus adjusted close. Apply the
+        # same split/dividend factor to every price field so daily evaluation
+        # paths remain comparable with yfinance(auto_adjust=True).
+        adjusted = _as_float(adjusted_closes[index]) if index < len(adjusted_closes) else None
+        if adjusted is not None and close and close > 0:
+            factor = adjusted / close
+            opened *= factor
+            high *= factor
+            low *= factor
+            close = adjusted
         try:
             ts = datetime.fromtimestamp(float(epoch), tz=timezone.utc)
         except (TypeError, ValueError, OverflowError, OSError):
@@ -365,7 +379,12 @@ class YFinanceFeed(DataFeed):
                 )
         ticker = self._ticker(sym)
         try:
-            df = ticker.history(period=period, interval=interval)
+            try:
+                df = ticker.history(period=period, interval=interval, auto_adjust=True)
+            except TypeError:
+                # Minimal injected test/provider shims may expose the older
+                # two-argument shape. Production yfinance supports auto_adjust.
+                df = ticker.history(period=period, interval=interval)
         except Exception as exc:  # noqa: BLE001
             original = DataFeedError(f"history failed for {sym} ({timeframe}): {exc}")
             return self._fallback_bars(sym, timeframe, limit, original)

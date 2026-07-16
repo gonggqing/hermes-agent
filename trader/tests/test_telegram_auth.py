@@ -14,7 +14,7 @@ from swing_trader.schemas import (
     Side,
 )
 
-IN_WINDOW = datetime(2026, 7, 13, 15, 45, tzinfo=timezone.utc)
+IN_WINDOW = datetime(2026, 7, 13, 14, 45, tzinfo=timezone.utc)
 
 
 class MockTransport:

@@ -25,7 +25,7 @@ def _runtime_brief(runtime, market: str):
     return runtime.latest_brief if key == "us" else runtime.latest_briefs.get(key)
 
 
-def _restore_latest_briefs(runtime, markets=("us", "cn", "hk", "kr")) -> list[str]:
+def _restore_latest_briefs(runtime, markets=("us", "hk", "cn", "kr")) -> list[str]:
     """Hydrate volatile FinanceRuntime slots from the durable brief archive."""
     store = getattr(runtime, "brief_store", None)
     restored: list[str] = []
@@ -200,7 +200,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     # port under an un-gated config — so a partial config fails closed here, not
     # at order time. Live *orders* stay separately gated in the ExecutionEngine.
     try:
-        broker = build_broker(settings, starting_cash=args.starting_cash)
+        broker = build_broker(
+            settings,
+            starting_cash=args.starting_cash,
+            starting_cash_hkd=16_000.0,
+        )
     except ImportError as exc:  # ib_async not installed (pip install '.[ibkr]')
         raise SystemExit(
             f"BROKER=ibkr but ib_async is not installed: {exc}. "
@@ -252,9 +256,20 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     # Append-only Portfolio Journal + human-confirmation draft service, sharing
     # the ledger's DB file but none of its tables (Loop.md P0.9 boundary #1).
     from swing_trader.portfolio_draft import PortfolioDraftService
+    from swing_trader.portfolio_controls import PortfolioControlStore
     from swing_trader.portfolio_journal import PortfolioJournal
+    from swing_trader.risk import RiskParams
 
     runtime.portfolio = PortfolioJournal(url=db_url)
+    runtime.portfolio_controls = PortfolioControlStore(url=db_url)
+    portfolio_controls = runtime.portfolio_controls.get()
+    portfolio_risk_params = RiskParams(
+        per_trade_risk_pct=portfolio_controls.per_trade_risk_pct,
+        max_new_entries_per_day=portfolio_controls.max_new_positions_per_day,
+        max_invested_pct=portfolio_controls.invested_ceiling_pct,
+        max_agent_managed_pct=portfolio_controls.agent_ceiling_pct,
+        max_position_pct=portfolio_controls.max_position_pct,
+    )
     # Personal research groups share the durable Finance DB but have their own
     # tables and never flow into the trading watchlist/candidate pipeline.
     from swing_trader.research_watchlists import ResearchWatchlistStore
@@ -282,6 +297,13 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         f"sqlite:///{_DbPath(args.db or settings.db_path).parent / 'prediction_evaluation.db'}"
     )
     runtime.prediction_ledger = PredictionLedger(url=_predictions_url)
+    from swing_trader.prediction_evaluator import PredictionCloseEvaluator
+
+    runtime.prediction_evaluator = PredictionCloseEvaluator(
+        runtime.prediction_ledger,
+        feed,
+        clock=runtime.clock,
+    )
     prediction_backfill = backfill_brief_history(
         runtime.brief_store, runtime.prediction_ledger
     )
@@ -467,6 +489,12 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     search_llm_settings = llm_settings_from_env(role="search")
     brief_llm_settings = llm_settings_from_env(role="decision")
     llm_analyst = LLMAnalyst(search_llm_settings) if search_llm_settings else None
+    if brief_llm_settings:
+        from swing_trader.candidate_review import LLMCandidateReviewer
+
+        order_reviewer = LLMCandidateReviewer(brief_llm_settings)
+    else:
+        order_reviewer = None
     if brief_llm_settings:
         from dataclasses import replace
 
@@ -706,12 +734,18 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         ledger,
         mode=settings.mode,
         live_orders_allowed=settings.live_orders_allowed,
+        risk_params=portfolio_risk_params,
         runtime=runtime,
         telegram=telegram,
         notify=notify,
         fundamentals=fundamentals,  # real fundamentals for the scheduled loop
         earnings_provider=earnings_provider,  # earnings calendar (Phase 0.75)
         llm_analyst=llm_analyst,
+        order_reviewer=order_reviewer,
+        # Production approvals always require the fresh primary-model review;
+        # a missing provider therefore fails closed instead of silently using
+        # the first approval at cutoff.
+        order_review_required=True,
         knowledge=knowledge,
         knowledge_index=knowledge_index,
         kill_switch=kill_switch,  # Phase 0.95 manual HALT
@@ -723,6 +757,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             clock=runtime.clock,
         ),
     )
+    runtime.apply_portfolio_controls = loop.apply_portfolio_controls
     if rehydration.performed:
         loop.execution.seed_synced_fills(rehydration.fill_ids)
         loop.execution.seed_protective_stops(broker.get_orders(active_only=True))
@@ -895,7 +930,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
     # Human-facing research delivery has one canonical cadence, independent of
     # every market's intraday monitor schedule and of the US execution state
-    # machine.  The coordinator refreshes US/CN/HK/KR with the same pipeline,
+    # machine.  The coordinator refreshes US/HK/CN/KR with the same pipeline,
     # asks the Hermes primary model for the final synthesis, persists it, then
     # sends it.  Model/network work stays on its own daemon thread so Telegram
     # callbacks and order execution cannot be starved by a slow brief.
@@ -972,6 +1007,10 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                     runtime.research_running.discard(market)
             if brief_cycle is not None:
                 brief_cycle.catch_up_if_due()
+            # Rebuilds after a regional close automatically fill any still-due
+            # forecast checkpoints. This is non-blocking and never touches the
+            # broker, confirmation service, or trading ledger.
+            runtime.prediction_evaluator.trigger_due()
 
         threading.Thread(
             target=_startup_recovery,
@@ -1025,6 +1064,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 kr_runner.run_pending()
             if brief_runner is not None:
                 brief_runner.run_pending()
+            runtime.prediction_evaluator.trigger_due()
             for _ in range(_TICKS_PER_CYCLE):
                 _poll_extra()
                 _time.sleep(_TG_POLL_S)

@@ -128,24 +128,40 @@ describe("api finance research", () => {
     );
   });
 
-  it("POSTs to /research/run to re-run a market's session", async () => {
+  it.each(["us", "kr"] as const)(
+    "POSTs to /research/run to re-run the %s market session",
+    async (market) => {
+      vi.stubGlobal("window", {});
+      const fetchMock = jsonFetchMock({
+        market: market.toUpperCase(),
+        brief_ready: true,
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      await api.financeRunResearch(market);
+      expect(fetchMock).toHaveBeenCalledWith(
+        `/api/finance/v1/research/run?market=${market}`,
+        expect.objectContaining({ method: "POST" }),
+      );
+    },
+  );
+
+  it("fetches prediction review aggregates with an optional market", async () => {
     vi.stubGlobal("window", {});
-    const fetchMock = jsonFetchMock({ market: "KR", brief_ready: true });
+    const fetchMock = jsonFetchMock({ overview: { series: 0 } });
     vi.stubGlobal("fetch", fetchMock);
-    await api.financeRunResearch("kr");
+    await api.financePredictionSummary("hk");
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/finance/v1/research/run?market=kr",
-      expect.objectContaining({ method: "POST" }),
+      "/api/finance/v1/predictions/summary?market=hk",
+      expect.anything(),
     );
   });
 });
 
 describe("finance market desks", () => {
   it("has Korea active and no UK/Japan placeholders", async () => {
-    const { ACTIVE_MARKETS, PLACEHOLDER_MARKETS } = await import(
-      "@/pages/finance/constants"
-    );
-    expect(ACTIVE_MARKETS).toContain("korea");
+    const { ACTIVE_MARKETS, PLACEHOLDER_MARKETS } =
+      await import("@/pages/finance/constants");
+    expect(ACTIVE_MARKETS).toEqual(["us", "hk", "china", "korea"]);
     expect(PLACEHOLDER_MARKETS).toEqual([]);
   });
 

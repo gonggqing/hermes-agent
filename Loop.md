@@ -36,8 +36,7 @@ Build a system that, each US trading day:
 
 - **Account:** IBKR Hong Kong, **CASH account** (no margin, < $25k). No PDT, but **T+1 settlement** ⇒ **no stock day-trading**; positions are held overnight / multiple days. **Swing/positional only.**
 - **IBKR not opened yet** ⇒ Phase 0 runs entirely on a **PaperBroker** backend + **free market data**; IBKR is a **stub behind an interface** (instrumented for later).
-- **User availability (critical):** user can only watch the US market **09:30–12:30 ET** (= **21:30–00:30 Asia/Shanghai**); offline afterwards until next day.
-  - The agent **finalizes candidates and pushes them to Telegram at 11:30 ET** (23:30 Shanghai). User confirms **by 12:30 ET**.
+- **User availability (critical):** the US decision cycle must finish early in the session. The agent observes the open, **finalizes candidates and pushes them at 10:30 ET** (22:30 Shanghai during EDT), then leaves a full hour for the user to confirm **by 11:30 ET**.
   - Because the user is offline for the US afternoon, **approved orders must be set-and-forget**: **GTC limit**, **GTC stop-loss**, and/or **MOC/LOC** (market/limit-on-close, filling at 16:00 ET close while the user sleeps).
 - **Capital is small and partly family money** ⇒ tiny position sizes, hard risk caps, human-in-loop mandatory.
 
@@ -62,10 +61,10 @@ Build a system that, each US trading day:
 
 | Time (ET) | Shanghai | Step |
 |---|---|---|
-| 09:30–11:00 | 21:30–23:00 | Monitors poll; analysis sub-agents build theses |
-| 11:00–11:30 | 23:00–23:30 | Decision core aggregates → candidate orders; Risk Engine validates |
-| **11:30** | **23:30** | **Publish risk-approved candidates to the Finance portal and push Telegram cards** |
-| 11:30–12:30 | 23:30–00:30 | **User approves / edits / rejects from Desktop, Web, or Telegram**; approved → placed (GTC limit/stop or MOC/LOC) |
+| 09:30–10:00 | 21:30–22:00 | Monitors poll; analysis sub-agents build theses |
+| 10:00–10:30 | 22:00–22:30 | Decision core aggregates → candidate orders; Risk Engine validates |
+| **10:30** | **22:30** | **Publish risk-approved candidates to the Finance portal and push Telegram cards** |
+| 10:30–11:30 | 22:30–23:30 | **User approves / edits / rejects from Desktop, Web, or Telegram**; approved → placed (GTC limit/stop or MOC/LOC) |
 | 16:00 | 04:00 | MOC/LOC fills; resting GTC orders may fill |
 | next 09:00 | next 21:00 | Reporter: overnight fills, ledger update, morning summary |
 
@@ -73,7 +72,7 @@ Order-type policy for approvals: **entries** = GTC limit or MOC/LOC; **protectio
 
 Human-facing research delivery uses a separate Finance-owned Beijing cadence:
 **every calendar day at 09:00 and 21:00 Asia/Shanghai**, one non-blocking
-coordinator refreshes US/CN/HK/KR through the same evidence pipeline, asks the
+coordinator refreshes US/HK/CN/KR through the same evidence pipeline, asks the
 configured Hermes primary model for each final market narrative, persists the
 four results, then pushes them. Market-specific intraday jobs may continue to
 refresh structured evidence, but they do not send an additional human brief or
@@ -88,7 +87,7 @@ behavior/model routing remains in `~/.hermes/config.yaml`.
 
 ### 4b. Two daily sessions — CN morning research + US evening trading (human decision, 2026-07-13)
 
-The user checks the system **twice a day**. Both sessions share the same `monitors → build → 11:30 push` shape but run on their own market clock/calendar:
+The user checks the system **twice a day**. Each session runs on its own market clock/calendar; an execution-capable market completes candidate selection at 10:30 local and preserves a one-hour human window, while research-only sessions may retain a later evidence pass:
 
 | Session | Clock | Focus | Orders | Output |
 |---|---|---|---|---|
@@ -109,7 +108,7 @@ CN is **research-only**: it runs monitors + analysis sub-agents + the research b
 
 **5.1 Broker abstraction**
 - `BrokerInterface`: `get_account()`, `get_positions()`, `get_quote(sym)`, `get_bars(sym, tf)`, `place_order(order)`, `cancel_order(id)`, `get_orders()`
-- Adapters: **`PaperBroker`** (Phase 0; simulates fills at limit / next-bar / close with configurable slippage + commission; tracks cash/positions), `AlpacaPaperBroker` (optional), **`IBKRBroker`** (stub now; implement with `ib_async` later)
+- Adapters: **`PaperBroker`** (deterministic fills plus currency-isolated cash/reservations), `AlpacaPaperBroker` (optional), and **`IBKRBroker`** (offline-tested `ib_async` adapter with SMART/USD and qualified SEHK/HKD contracts; connected-paper acceptance remains required).
 - `DataFeed` interface (`get_quote`, `get_bars`, `get_news`): adapters `YFinanceFeed` (now), IBKR feed (later)
 
 **5.2 Monitors** (scheduled pollers; each persists timestamped snapshots)
@@ -123,11 +122,15 @@ CN is **research-only**: it runs monitors + analysis sub-agents + the research b
 
 **5.4 Decision core** (LLM; Hermes runtime) — consumes monitors + sub-agents + **memory** (user risk profile, past skills, trade journal) → candidate orders `{symbol, side, qty, order_type, limit, stop, tp, sl, rationale, confidence}`.
 
+**5.5 Portfolio controls** — the operator owns durable Web/Desktop controls for total invested target/tolerance, Agent capital window/tolerance, single-position cap, per-trade risk and daily new-position count. The Agent window is a subset of total invested allocation, never additive. Cash and reservations remain currency-specific; aggregate allocation is measured in the configured base currency using explicit FX marks, and a stock order may never trigger implicit conversion.
+
 **5.5 Risk Engine** (pure code, authoritative) — size cap, exposure caps, daily drawdown breaker, liquidity/volatility checks; may **veto** or **shrink size**; agent cannot override.
 
-**5.6 Confirmation service & gateways** — one server-authoritative candidate state machine shared by Desktop, Web, and Telegram. Render concise Telegram cards and native portal approval UI; collect approve/edit/reject; enforce the 11:30–12:30 ET window; expire stale candidates. A canonical candidate ID, idempotency key, authenticated actor/source (`desktop|web|telegram`), and immutable audit trail prevent double execution. Every edit and every approved candidate is re-validated by RiskEngine and ExecutionEngine immediately before broker submission.
+**5.6 Confirmation service & gateways** — one server-authoritative candidate state machine shared by Desktop, Web, and Telegram. Render concise Telegram cards and native portal approval UI; collect approve/edit/reject; enforce the 10:30–11:30 ET window; expire stale candidates. A canonical candidate ID, idempotency key, authenticated actor/source (`desktop|web|telegram`), and immutable audit trail prevent double execution. After the first human approval, a fresh-quote/news primary-model review runs before submission: unchanged terms retain the approval with an audited review; any material price/risk/thesis change supersedes the old candidate with a **new id** and a clearly explained second-confirmation card. The LLM may recommend or explain but never approve; revised terms re-pass CandidateOrder validation and RiskEngine, missing/stale/model-failed reviews fail closed, and stale buttons on the first card cannot approve the replacement.
 
 **5.7 Execution & authority boundary** — translate human-approved candidates to broker calls; prefer GTC limit + attached GTC stop (bracket/OCA) or MOC/LOC; **re-validate price vs signal validity before send**; handle partials/rejects. `place_order` is a service capability exposed only to ExecutionEngine, not a generic conversational skill. In Phase 3, an independently versioned Quant executor may use the same path for a pre-approved, low-notional strategy whitelist; it must identify itself as `quant:<strategy_version>`, satisfy all existing RiskEngine/ledger gates, and be instantly disabled by the human kill switch.
+
+**Ordinary-order lifecycle:** use `DAY` for an ordinary entry parent and discretionary limit exit; keep only protective stop-loss/take-profit children `GTC`. At market close, cancel any unfilled entry remainder and persist `unfilled/expired`; after a partial fill, cancel the remainder while retaining/resizing GTC protection to the filled quantity. The next trading day must run fresh research, quote/news review and RiskEngine checks, generate new terms, and request a new human confirmation rather than silently replaying or repricing the old approval. Any material change to limit, stop or take-profit invalidates the prior approval and requires a second confirmation. Bounded automatic repricing may be considered only after this deterministic cancel/expire/research/reconfirm lifecycle is proven.
 
 **5.8 Ledger & durable market memory** — SQLite ledger stores signals, orders, trades (`mode = paper|live`), fills, pnl, rationale, and approval audit events; feeds statistics (win rate, payoff ratio, max drawdown). Monitor snapshots and fetched source documents are retained by trading date rather than discarded. The ledger remains the authoritative source for numerical/accounting facts; no vector index may be treated as an order, fill, or risk record.
 
@@ -142,7 +145,7 @@ CN is **research-only**: it runs monitors + analysis sub-agents + the research b
 **5.10 Finance knowledge store (historical research + semantic retrieval)** — persist collected daily research, financial news, earnings/quarterly reports, company filings, strategy notes, monitor snapshots, decision rationales, and post-trade reviews. Use three layers:
 - **facts:** immutable source files and normalized structured data, partitioned by event date/trading date (JSONL/Parquet for market/news snapshots; SQLite ledger for trading records);
 - **research documents:** normalized text with source URL/publisher, retrieval date, content hash, symbol/theme, event timestamp, trading date (ET), document type, entitlement/license status, and parser/model version;
-- **local vector index:** production semantic retrieval uses OpenAI `text-embedding-3-small` at native 1536 dimensions in versioned collection `finance_knowledge_openai_te3s_1536`; the prior 256-dimension hashing collection remains rollback-only. Embeddings point back to document IDs and metadata and never replace sources, deterministic market data, predictions, or the Ledger.
+- **local vector index:** production semantic retrieval uses OpenAI `text-embedding-3-small` at native 1536 dimensions in versioned collection `finance_knowledge_openai_te3s_1536`; the retired 256-dimension hashing collection has been backed up and removed after count/search verification. Embeddings point back to document IDs and metadata and never replace sources, deterministic market data, predictions, or the Ledger.
 
 For an initial small local corpus, embedded/local Qdrant persistence is acceptable. Before the Finance service becomes long-running, run Qdrant as a dedicated private Docker service (for example `hermes-finance-vector`) with a named/host-mounted data volume, backup procedure, and **no published host port**; only Finance-service containers may connect over the internal Docker network. The vector database is storage/search infrastructure, not an execution dependency: if it is unavailable, trading must fail closed for research-dependent new entries and never lose or alter Ledger records.
 
@@ -150,15 +153,17 @@ Use public/owned/licensed material only. Public investor-relations filings and o
 
 **Prediction evaluation boundary:** Qdrant is retrieval infrastructure only. Persist every measurable Debate/discovery/brief claim, confidence, horizon, evidence link, revision and deterministic outcome in a separate relational prediction ledger; preserve prose briefs as presentation artifacts. Use append-only revisions, trading-session checkpoints and weekly/monthly/quarterly calibration reviews. Do not add a graph database until real multi-hop requirements exceed relational joins. Full schema and scoring policy: `docs/finance-prediction-ledger.md`.
 
+**Prediction-review UI:** place prediction history and evaluation under **Finance → Investment Research → Research Review → Prediction Review**; expose walk-forward/OOS **Strategy Backtests** as a separate Quant child item beside Prediction Review rather than mixing it into prediction outcomes. Keep four result classes visibly separate: live research forecasts, deterministic forecast evaluation, Quant backtests, and actual account/trade performance. Never present one blended “win rate”; every statistic shows producer, market, horizon, completed sample count and evaluation version. The close evaluator now scores only completed, adjusted market paths; pending, missing-data and correlated horizons remain visible but never count as misses or independent samples.
+
 ---
 
 ## 6. Core data schemas (initial; evolve as needed)
 
 - `Signal(id, ts, source_agent, symbol, thesis, direction, confidence, features_json)`
-- `Order(id, ts, mode, symbol, side, qty, order_type[LMT|STP|MOC|LOC|BRACKET], limit, stop, tp, tif[GTC|DAY], status, broker_ref)`
+- `Order(id, ts, mode, symbol, currency, side, qty, order_type[LMT|STP|MOC|LOC|BRACKET], limit, stop, tp, tif[GTC|DAY], status, broker_ref)`
 - `Trade(id, entry_order_id, exit_order_id, symbol, qty, entry_px, exit_px, pnl, r_multiple, hold_days, rationale, mode)`
-- `Position(symbol, qty, avg_px, mkt_px, upnl, pool)`
-- `AccountSnapshot(ts, mode, equity, cash, upnl, day_pnl, drawdown, breaker_state)`
+- `Position(symbol, currency, qty, avg_px, mkt_px, upnl, pool)`
+- `AccountSnapshot(ts, mode, equity, cash, upnl, day_pnl, drawdown, breaker_state, base_currency, cash_by_currency, equity_by_currency, fx_to_base)`
 
 Paper and live share identical schemas (only the `mode` tag differs) so paper-vs-live comparison is exact.
 
@@ -179,10 +184,10 @@ Paper and live share identical schemas (only the `mode` tag differs) so paper-vs
 
 ### Phase 0.97 — Operational paper validation + IBKR ordinary-order hardening (NOW)
 - **Goal:** prove the built system works unattended on market time and make the ordinary US stock/ETF pending-order lifecycle dependable before granting real-money authority. This phase is deliberately narrow: research → human approval → GTC limit/bracket order → broker state/fill/protection → reconciliation/reporting. No Quant execution or shadow-strategy build belongs in this version.
-- **Runtime freeze / first evidence:** keep the currently deployed image unchanged through the next complete US trading day unless the kill switch or a safety-critical failure requires intervention. Capture monitor, research, candidate, approval, 12:30 ET submission, resting-order state, 16:00 close/fill, protection, restart count and next report before deploying another build. A session with an automatic process restart is useful recovery evidence but does not count as the first uninterrupted session.
+- **Runtime freeze / first evidence:** keep the currently deployed image unchanged through the next complete US trading day unless the kill switch or a safety-critical failure requires intervention. Capture monitor, research, candidate, approval, 11:30 ET submission, resting-order state, 16:00 close/fill, protection, restart count and next report before deploying another build. A session with an automatic process restart is useful recovery evidence but does not count as the first uninterrupted session.
 - **Paper execution acceptance:** capture one uninterrupted US session first, then accumulate ≥20 valid US trading days. Every approved candidate must reach one persisted terminal outcome (`PLACED/FILLED`, broker rejection, explicit skip, or `EXPIRED/missed execution`) with no stranded approval; verify bracket protection, partials, close reporting, restart recovery and ledger↔broker reconciliation.
 - **Research model hierarchy:** collection subagents may use the fast/cheap search model for retrieval, de-duplication, extraction, tagging and evidence organization. The final daily brief is an investment judgment and MUST be synthesized by the configured **primary/decision model** (`FINANCE_LLM_MODEL` / resolved primary role), never `FINANCE_LLM_SEARCH_MODEL`. The primary model receives the cited evidence packet, reconciles conflicting signals, writes the market-specific narrative, and records its model/prompt version. If it fails, show a visible missing-brief alert and retry safely; never substitute template prose or silently downgrade to a subagent model.
-- **Research stability acceptance:** on five consecutive open-market days, US/CN/HK/KR must each publish its scheduled persisted brief with source/as-of/freshness status, a primary-model readable narrative, and alerting on missing/stale inputs. Briefs must survive image/service restart and remain searchable. Five days is the initial soak gate; longer paper evidence continues through the 20-day run.
+- **Research stability acceptance:** on five consecutive open-market days, US/HK/CN/KR must each publish its scheduled persisted brief with source/as-of/freshness status, a primary-model readable narrative, and alerting on missing/stale inputs. Briefs must survive image/service restart and remain searchable. Five days is the initial soak gate; longer paper evidence continues through the 20-day run.
 - **Ordinary-order scope:** US stocks/ETFs in a CASH account; whole-share GTC limit entries; attached GTC stop-loss + take-profit OCA/brackets; cancel/replace; partial fills; overnight resting orders; reconnect/restart recovery; broker rejection; and broker↔ledger reconciliation. MOC/LOC remain supported but secondary. Options, shorting, margin, complex algos and autonomous discretionary orders are out of scope.
 - **IBKR Paper acceptance:** connect the existing adapter to a real IBKR Paper session and prove order-id/permanent-id mapping, `PendingSubmit/PreSubmitted/Submitted/PartiallyFilled/Filled/Cancelled/Inactive/Rejected` normalization, reconnect and resubscription, idempotent submission, cancel/replace, bracket child activation, settled-cash checks and broker-authoritative reconciliation. PaperBroker remains the deterministic test oracle; IBKR Paper measures real broker behavior and differences.
 - **Resilience closure:** finish whole-session step idempotency/mid-session recovery, add a secondary-feed path with per-source staleness, and turn scheduled-session or approved-order failures into visible alerts rather than silent gaps.
@@ -240,16 +245,21 @@ Python 3.11 · `ib_async` (later) · `alpaca-py` (optional) · `yfinance` · `pa
 
 - [x] Connect Finance to the private Qdrant service and provide an idempotent authoritative-document backfill with count/search verification; retain the embedded index as rollback until DR validation.
 - [x] Add the independent relational prediction ledger: primary-model/Debate/discovery claims persist as continuous append-only series with evidence, revision chains, market-session checkpoints, historical backfill and versioned score records; it remains analysis-only.
-- [ ] Run the deterministic prediction evaluator after each relevant market close: fetch adjusted entity/benchmark paths, fill due checkpoints, calculate MFE/MAE/calibration/ranking metrics and publish weekly/monthly/quarterly reviews.
+- [x] Run the restart-safe deterministic evaluator after each relevant market close: fetch adjusted entity/benchmark paths, fill due checkpoints, calculate return/MFE/MAE/calibration metrics, retry missing data without scoring a miss, and expose aggregate APIs.
+- [x] Build the shared Web/Desktop **Prediction Review** workspace under Investment Research with active series, due health, market/horizon evaluation and recent outcomes; keep Quant backtests and real trade P&L separate.
+- [ ] Publish sourced weekly/monthly/quarterly prediction reviews and postmortems; add ranking/IC aggregation for discovery cohorts and confidence intervals once enough completed samples exist.
 - [ ] Freeze deployment through the next complete US session; capture scheduled research→candidate→approval→submission→broker state→fill/protection→close report evidence and record every process restart.
 - [ ] Telegram poll failures are isolated from the Finance process and cutoff execution; add bounded backoff, health state and operator alerting to complete the resilience gate.
-- [x] Route twice-daily US/CN/HK/KR final synthesis through the Hermes primary model on a non-blocking Beijing 09:00/21:00 schedule; persist model/prompt/evidence provenance and show visible failure without template/weak-model fallback.
+- [x] Move US selection/push to 10:30 ET with a 10:30–11:30 human window, and add the fail-closed post-approval fresh-market primary-model review: unchanged orders retain approval; changed terms use a new candidate/card and require a second human confirmation.
+- [x] Route twice-daily US/HK/CN/KR final synthesis through the Hermes primary model on a non-blocking Beijing 09:00/21:00 schedule; persist model/prompt/evidence provenance and show visible failure without template/weak-model fallback.
 - [ ] Accumulate ≥20 valid US paper trading days; every approved candidate must have a persisted terminal outcome and no approval may remain silently stranded.
-- [ ] Run a five-consecutive-open-day US/CN/HK/KR research soak; measure on-time publication, freshness/source gaps, readable briefs, alerts and restart persistence.
+- [ ] Run a five-consecutive-open-day US/HK/CN/KR research soak; measure on-time publication, freshness/source gaps, readable briefs, alerts and restart persistence.
 - [ ] Make the entire session step-idempotent and crash-resumable, not only confirmation execution; prove reruns cannot double-count or double-place.
 - [ ] Add a secondary `DataFeed` implementation/failover path and expose per-source staleness; keep new entries fail-closed when all sources are unhealthy.
 - [ ] Complete the ordinary PaperBroker order matrix: GTC entry, bracket/OCA protection, cancel/replace, partial fill, overnight rest, rejection, close processing and restart recovery.
 - [ ] Connect IBKR Paper and prove ordinary order-state normalization, permanent identity, reconnect/resubscription, cancel/replace, partial fills, bracket activation, settled cash and broker↔ledger reconciliation.
+- [x] Build the offline-tested **multi-currency execution foundation**: currency-tagged schemas/ledger, canonical one-currency-per-symbol validation, USD/HKD PaperBroker cash and reservation sleeves, FX-normalized risk/exposure controls, USD 2,000 + HKD 16,000 paper opening balances, and IBKR SEHK/HKD contract qualification plus order/fill/position reconciliation fields.
+- [ ] Finish connected **HK IBKR Paper acceptance**: persist qualified contract details/conId, enforce board-lot/tick rules, Hong Kong calendar/lunch/auction behavior, fee rules and quote entitlement/freshness; then prove GTC/bracket/partial/cancel/restart/reconciliation parity through the independent **10:30–11:30 Asia/Hong_Kong** human window. Later USD↔HKD conversion requires a fresh quoted rate and separate human-confirmed audit action; never convert implicitly. Detailed plan: `docs/finance-hk-ibkr-rollout.md`.
 - [ ] Add closed-trade analysis feedback for signal/research evaluation only; it may not alter hard risk limits or authority.
 - [ ] Run the end-to-end IBKR Paper dry run, reconciliation and kill-switch drill, then obtain human Phase-1 sign-off.
 
@@ -314,9 +324,12 @@ Each symbol is tagged `{theme, ai_phase(infra|memory|network|power|application|c
 
 ## 13. Progress log (building agent appends; newest first)
 
+- 2026-07-16 — **Balanced prediction review + allocation controls + HK currency foundation.** All-market forecast/recent rows now round-robin US/HK/CN/KR, remove semantic duplicates and use verified regional names; Web/Desktop gained durable operator allocation controls and currency cash visibility; PaperBroker/Ledger/Risk/IBKR now carry isolated USD/HKD execution state with offline SEHK qualification tests, while connected lot/tick/session/fee acceptance remains open.
+- 2026-07-16 — **Automatic prediction evaluation + review UI.** Added restart-safe US/HK/CN/KR close evaluation over adjusted entity/benchmark paths, aggregate calibration APIs and Hermes-native Web/Desktop Prediction Review; tiny samples remain visibly descriptive, while Quant backtests and P&L stay separate.
+- 2026-07-16 — **Prediction-review placement + HK rollout boundary.** Reserved Finance → Investment Research → Prediction Review for live forecasts/evaluation/backtests (kept separate from P&L), fixed market order to US/HK/CN/KR, and sequenced SEHK/HKD/lot-tick/session-aware IBHK Paper validation before any HK live authority.
 - 2026-07-16 — **Semantic retrieval + longitudinal prediction foundation.** Selected OpenAI `text-embedding-3-small` native 1536 in a versioned Qdrant collection with fail-closed migration, and implemented isolated forecast series/revisions/evidence/trading-session checkpoints/outcome scoring plus two-level idempotent historical backfill (96 snapshots → 81 distinct evidence observations, 1,381 changed revisions; replay adds zero); automatic market-close evaluation remains next.
 - 2026-07-16 — **Dedicated Finance Qdrant migration and forecast-evaluation design.** Finance now reaches private Qdrant over an internal-only network; 1,636 authoritative documents were idempotently backfilled and count/search verified. Defined a separate relational prediction ledger with versioned claims, horizons, revisions, evidence and deterministic weekly/monthly/quarterly evaluation; implementation remains the next Phase-0.97 item.
-- 2026-07-16 — **Twice-daily primary-model briefs and restart audit repair.** Added one Finance-owned 09:00/21:00 Beijing cycle for US/CN/HK/KR, isolated Telegram polling failures, made brief restore deterministic, corrected close-fill timestamps and persisted market marks for broker rehydration; soak/backoff/IBKR evidence remain open.
+- 2026-07-16 — **Twice-daily primary-model briefs and restart audit repair.** Added one Finance-owned 09:00/21:00 Beijing cycle for US/HK/CN/KR, isolated Telegram polling failures, made brief restore deterministic, corrected close-fill timestamps and persisted market marks for broker rehydration; soak/backoff/IBKR evidence remain open.
 - 2026-07-16 — **Phase 0.97 narrowed to ordinary orders.** Freeze the deployed runtime through the next complete US session; move final briefs from the search/subagent model to the primary decision model; defer all Quant shadow work to Phase 0.98; prioritize Telegram/process resilience and complete PaperBroker→IBKR Paper GTC/bracket/cancel/partial/reconnect/reconciliation evidence.
 - 2026-07-15 — **Operational truth reset / Phase 0.97 opened.** Runtime audit found persisted regional research and restart recovery working, but the active paper ledger still had 0 orders, 0 fills and 0 trades; build completion was explicitly separated from the ≥20-day execution/research evidence gate.
 - 2026-07-15 — **Phase 0.96 research workspace.** Added human-readable Researcher's Briefs plus durable Hermes-native listed-instrument watch groups and expanded research-only crypto coverage; advanced collaboration/metrics work is deferred.

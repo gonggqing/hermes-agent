@@ -150,11 +150,15 @@ export function regimeTone(regime: string | undefined): BadgeTone {
 
 /** Badge tone for a signal direction (long / short / neutral). */
 export function directionTone(direction: string): BadgeTone {
-  switch (direction) {
+  switch (direction.toLowerCase()) {
     case "long":
+    case "positive":
       return "success";
     case "short":
+    case "negative":
       return "destructive";
+    case "watch":
+      return "warning";
     default:
       return "outline";
   }

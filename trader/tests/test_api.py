@@ -9,6 +9,7 @@ from swing_trader.api import FinanceRuntime, create_app
 from swing_trader.confirmation import ConfirmationService
 from swing_trader.ledger import Ledger
 from swing_trader.paper_broker import PaperBroker
+from swing_trader.portfolio_controls import PortfolioControlStore
 from swing_trader.schemas import (
     AccountSnapshot,
     CandidateOrder,
@@ -18,7 +19,7 @@ from swing_trader.schemas import (
     Side,
 )
 
-IN_WINDOW = datetime(2026, 7, 13, 15, 45, tzinfo=timezone.utc)  # 11:45 EDT
+IN_WINDOW = datetime(2026, 7, 13, 14, 45, tzinfo=timezone.utc)  # 10:45 EDT
 
 
 def candidate(**kw) -> CandidateOrder:
@@ -121,6 +122,34 @@ class TestReads:
         body = client.get("/v1/account").json()
         assert body["equity"] == pytest.approx(5000.0)
 
+    def test_portfolio_controls_are_durable_and_apply_live(self, env, tmp_path):
+        _, _, runtime, client = env
+        runtime.portfolio_controls = PortfolioControlStore(
+            f"sqlite:///{tmp_path / 'controls.db'}"
+        )
+        applied = []
+        runtime.apply_portfolio_controls = applied.append
+
+        defaults = client.get("/v1/portfolio/controls")
+        assert defaults.status_code == 200
+        assert defaults.json()["cash_reserve_floor_pct"] == 35.0
+
+        body = {
+            "invested_target_pct": 55,
+            "invested_tolerance_pct": 5,
+            "agent_budget_pct": 25,
+            "agent_budget_tolerance_pct": 5,
+            "max_position_pct": 10,
+            "per_trade_risk_pct": 0.8,
+            "max_new_positions_per_day": 2,
+            "base_currency": "usd",
+        }
+        response = client.put("/v1/portfolio/controls", json=body)
+        assert response.status_code == 200
+        assert response.json()["cash_reserve_floor_pct"] == 40.0
+        assert response.json()["base_currency"] == "USD"
+        assert applied[-1].max_new_positions_per_day == 2
+
     def test_account_ledger_fallback_for_other_mode(self, env):
         _, _, _, client = env
         body = client.get("/v1/account", params={"mode": "live"}).json()
@@ -221,6 +250,25 @@ class TestReads:
         _, _, runtime, client = env
         runtime.latest_brief = {"mode": "paper", "marker": "from-loop"}
         assert client.get("/v1/research/brief").json()["marker"] == "from-loop"
+
+    def test_prediction_summary_is_read_only_and_filter_validated(self, env, tmp_path):
+        from swing_trader.prediction_ledger import PredictionLedger
+
+        _, _, runtime, client = env
+        assert client.get("/v1/predictions/summary").status_code == 503
+        runtime.prediction_ledger = PredictionLedger(
+            f"sqlite:///{tmp_path / 'predictions.db'}"
+        )
+        body = client.get(
+            "/v1/predictions/summary",
+            params={"market": "us", "due_as_of": "2026-07-17"},
+        ).json()
+        assert body["filters"]["market"] == "US"
+        assert body["overview"]["series"] == 0
+        assert body["overview"]["directional_accuracy"] is None
+        assert client.get(
+            "/v1/predictions/summary", params={"market": "mars"}
+        ).status_code == 422
 
     def test_research_brief_kr_routes_to_per_market_slot(self, env):
         _, _, runtime, client = env

@@ -21,6 +21,7 @@ __all__ = [
     "BreakerState",
     "CandidateOrder",
     "CandidateStatus",
+    "currency_for_symbol",
     "Direction",
     "Fill",
     "Mode",
@@ -43,6 +44,30 @@ def utcnow() -> datetime:
 
 def new_id() -> str:
     return uuid4().hex
+
+
+def currency_for_symbol(symbol: str) -> str:
+    """Execution currency inferred from the canonical market suffix."""
+    value = symbol.strip().upper()
+    if value.endswith(".HK"):
+        return "HKD"
+    if value.endswith((".SS", ".SZ")):
+        return "CNY"
+    if value.endswith(".KS"):
+        return "KRW"
+    return "USD"
+
+
+def _execution_currency(symbol: str, currency: str) -> str:
+    """Enforce one canonical execution currency for each canonical symbol."""
+    expected = currency_for_symbol(symbol)
+    actual = (currency or expected).upper()
+    if actual != expected:
+        raise ValueError(
+            f"{symbol} must execute in {expected}, not {actual}; "
+            "cross-currency lots for one canonical symbol are not supported"
+        )
+    return actual
 
 
 # --------------------------------------------------------------------------- enums
@@ -171,6 +196,7 @@ class Order(_TsModel):
     id: str = Field(default_factory=new_id)
     mode: Mode
     symbol: str
+    currency: str = ""
     side: Side
     qty: float = Field(gt=0)
     order_type: OrderType
@@ -195,6 +221,7 @@ class Order(_TsModel):
 
     @model_validator(mode="after")
     def _required_prices(self) -> "Order":
+        object.__setattr__(self, "currency", _execution_currency(self.symbol, self.currency))
         ot = self.order_type
         if ot in (OrderType.LMT, OrderType.LOC) and self.limit is None:
             raise ValueError(f"{ot.value} order requires a limit price")
@@ -222,11 +249,17 @@ class Fill(_TsModel):
     id: str = Field(default_factory=new_id)
     order_id: str
     symbol: str
+    currency: str = ""
     side: Side
     qty: float = Field(gt=0)
     px: float = Field(gt=0)
     commission: float = Field(default=0.0, ge=0)
     mode: Mode = Mode.PAPER
+
+    @model_validator(mode="after")
+    def _execution_currency(self) -> "Fill":
+        object.__setattr__(self, "currency", _execution_currency(self.symbol, self.currency))
+        return self
 
 
 class Trade(_TsModel):
@@ -250,10 +283,16 @@ class Position(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
 
     symbol: str
+    currency: str = ""
     qty: float  # negative = short (not expected in Phase 0 cash account)
     avg_px: float = Field(ge=0)
     mkt_px: Optional[float] = Field(default=None, ge=0)
     pool: Role = Role.ROTATION
+
+    @model_validator(mode="after")
+    def _execution_currency(self) -> "Position":
+        object.__setattr__(self, "currency", _execution_currency(self.symbol, self.currency))
+        return self
 
     @property
     def upnl(self) -> Optional[float]:
@@ -276,6 +315,22 @@ class AccountSnapshot(_TsModel):
     day_pnl: float = 0.0
     drawdown_pct: float = 0.0  # intraday drawdown vs day-open equity, in %
     breaker_state: BreakerState = BreakerState.NORMAL
+    base_currency: str = "USD"
+    cash_by_currency: dict[str, float] = Field(default_factory=dict)
+    equity_by_currency: dict[str, float] = Field(default_factory=dict)
+    fx_to_base: dict[str, float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _currency_breakdown(self) -> "AccountSnapshot":
+        base = self.base_currency.upper()
+        object.__setattr__(self, "base_currency", base)
+        if not self.cash_by_currency:
+            object.__setattr__(self, "cash_by_currency", {base: self.cash})
+        if not self.equity_by_currency:
+            object.__setattr__(self, "equity_by_currency", {base: self.equity})
+        if not self.fx_to_base:
+            object.__setattr__(self, "fx_to_base", {base: 1.0})
+        return self
 
 
 class CandidateOrder(_TsModel):
@@ -283,6 +338,7 @@ class CandidateOrder(_TsModel):
 
     id: str = Field(default_factory=new_id)
     symbol: str
+    currency: str = ""
     side: Side
     qty: float = Field(gt=0)
     order_type: OrderType
@@ -317,6 +373,7 @@ class CandidateOrder(_TsModel):
     @model_validator(mode="after")
     def _protection_required(self) -> "CandidateOrder":
         """Loop.md §4: never leave a position without a resting stop."""
+        object.__setattr__(self, "currency", _execution_currency(self.symbol, self.currency))
         if self.side is Side.BUY and self.order_type is not OrderType.BRACKET:
             if self.sl is None:
                 raise ValueError(

@@ -393,7 +393,7 @@ def test_push_window_preamble_contents() -> None:
     text = push_window_preamble({"risk_on_off": "risk-on", "vix": 15.2, "breadth": 0.62})
     lines = text.splitlines()
     assert 2 <= len(lines) <= 3
-    assert "confirm by 12:30 ET" in lines[0]
+    assert "confirm by 11:30 ET" in lines[0]
     assert "risk-on" in text
     assert "VIX 15.20" in text
     assert "breadth 0.62" in text

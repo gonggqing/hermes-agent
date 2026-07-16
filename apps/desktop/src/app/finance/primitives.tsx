@@ -14,10 +14,7 @@ import { parseFinanceError } from './lib'
 export function FinanceSectionLabel({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <div
-      className={cn(
-        'text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-(--ui-text-tertiary)',
-        className
-      )}
+      className={cn('text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-(--ui-text-tertiary)', className)}
     >
       {children}
     </div>
@@ -47,8 +44,20 @@ export function StatTile({ hint, label, tone, value }: { hint?: string; label: s
   )
 }
 
-export function FinancePill({ children, variant }: { children: ReactNode; variant?: BadgeProps['variant'] }) {
-  return <Badge variant={variant}>{children}</Badge>
+export function FinancePill({
+  children,
+  className,
+  variant
+}: {
+  children: ReactNode
+  className?: string
+  variant?: BadgeProps['variant']
+}) {
+  return (
+    <Badge className={className} variant={variant}>
+      {children}
+    </Badge>
+  )
 }
 
 export function InlineSpinner({ label }: { label?: string }) {

@@ -32,6 +32,7 @@ def build_broker(
     settings: Settings,
     *,
     starting_cash: float = 100_000.0,
+    starting_cash_hkd: float = 0.0,
     client_factory: Optional[Callable[[], object]] = None,
     role_for_symbol: Optional[Callable[[str], Role]] = None,
 ) -> BrokerInterface:
@@ -46,7 +47,13 @@ def build_broker(
     if backend is BrokerBackend.PAPER:
         from swing_trader.paper_broker import PaperBroker
 
-        return PaperBroker(starting_cash=starting_cash)
+        balances = {"USD": starting_cash}
+        if starting_cash_hkd > 0:
+            balances["HKD"] = starting_cash_hkd
+        return PaperBroker(
+            starting_cash=starting_cash,
+            starting_cash_by_currency=balances,
+        )
 
     if backend is BrokerBackend.IBKR:
         from swing_trader.ibkr_broker import IBKRBroker

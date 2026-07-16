@@ -198,6 +198,76 @@ class TestDeadMansSwitch:
         assert "dead-man's switch" in d.reasons[0]
 
 
+class TestCurrencyAndAllocationControls:
+    def test_hk_entry_requires_hkd_cash_sleeve(self):
+        decision = evaluate(make_candidate(symbol="0700.HK", qty=100))
+        assert decision.verdict is RiskVerdict.VETOED
+        assert "HKD cash sleeve" in decision.reasons[0]
+
+    def test_hk_entry_requires_fx_mark_after_cash_check(self):
+        account = make_account().model_copy(
+            update={"cash_by_currency": {"USD": 100_000, "HKD": 16_000}}
+        )
+        decision = evaluate(make_candidate(symbol="0700.HK", qty=100), account=account)
+        assert decision.verdict is RiskVerdict.VETOED
+        assert "HKD->USD FX mark" in decision.reasons[0]
+
+    def test_hk_entry_passes_with_isolated_cash_and_fx(self):
+        account = make_account().model_copy(
+            update={
+                "cash_by_currency": {"USD": 100_000, "HKD": 16_000},
+                "fx_to_base": {"USD": 1.0, "HKD": 1 / 7.8},
+            }
+        )
+        decision = evaluate(make_candidate(symbol="0700.HK", qty=100), account=account)
+        assert decision.approved
+        assert decision.final_qty == 100
+
+    def test_position_with_unknown_fx_fails_closed(self):
+        account = make_account().model_copy(
+            update={"fx_to_base": {"USD": 1.0}}
+        )
+        positions = [Position(symbol="005930.KS", qty=1, avg_px=100, mkt_px=None)]
+        decision = evaluate(positions=positions, account=account)
+        assert decision.verdict is RiskVerdict.VETOED
+        assert "position currencies lack an FX mark" in decision.reasons[0]
+
+    def test_agent_allocation_cap_shrinks_and_then_vetoes(self):
+        engine = RiskEngine(
+            RiskParams(max_invested_pct=20, max_agent_managed_pct=10, max_position_pct=100)
+        )
+        candidate = make_candidate(qty=100)
+        shrunk = evaluate(
+            candidate,
+            positions=[Position(symbol="AMD", qty=90, avg_px=100, mkt_px=None)],
+            engine=engine,
+        )
+        assert shrunk.verdict is RiskVerdict.SHRUNK and shrunk.final_qty == 10
+        assert any("agent allocation ceiling" in reason for reason in shrunk.reasons)
+
+        vetoed = evaluate(
+            candidate,
+            positions=[Position(symbol="AMD", qty=100, avg_px=100, mkt_px=100)],
+            engine=engine,
+        )
+        assert vetoed.verdict is RiskVerdict.VETOED
+        assert "no headroom" in vetoed.reasons[0]
+
+    def test_single_position_cap_shrinks_and_then_vetoes(self):
+        engine = RiskEngine(RiskParams(max_position_pct=1.5))
+        candidate = make_candidate(qty=100)
+        shrunk = evaluate(candidate, engine=engine)
+        assert shrunk.verdict is RiskVerdict.SHRUNK and shrunk.final_qty == 15
+        assert any("single-position cap" in reason for reason in shrunk.reasons)
+
+        vetoed = evaluate(
+            candidate,
+            positions=[Position(symbol="NVDA", qty=15, avg_px=100, mkt_px=100)],
+            engine=engine,
+        )
+        assert vetoed.verdict is RiskVerdict.VETOED
+        assert "single-position cap" in vetoed.reasons[0]
+
 # ------------------------------------------------------- 2/3. equity & breaker
 
 

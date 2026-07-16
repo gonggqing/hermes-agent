@@ -60,7 +60,7 @@ class FakeIBClient:
             order_ref=spec.order_ref, status="Submitted", filled=0.0,
             remaining=spec.qty, symbol=spec.symbol, action=spec.action,
             qty=spec.qty, order_type=spec.order_type, lmt=spec.lmt, aux=spec.aux,
-            broker_ref=bref)
+            broker_ref=bref, currency=spec.currency, exchange=spec.exchange)
         self._by_broker[bref] = spec.order_ref
         self.placed.append(spec)
         return bref
@@ -88,7 +88,8 @@ class FakeIBClient:
         st.status = "Filled" if st.remaining <= 1e-9 else "Submitted"
         self._fills.append(IbExec(exec_id=exec_id or f"exec-{len(self._fills) + 1}",
                                   order_ref=order_ref, symbol=spec.symbol, side=spec.action,
-                                  qty=qty, px=px, commission=commission))
+                                  qty=qty, px=px, commission=commission,
+                                  currency=spec.currency))
         if st.status == "Filled" and spec.oca_group:  # OCA: fill cancels siblings
             for r, sp in self._specs.items():
                 if (r != order_ref and sp.oca_group == spec.oca_group
@@ -206,6 +207,40 @@ class TestPlaceOrder:
         r2 = b.place_order(o)  # same order.id → must NOT double-submit
         assert r2.accepted and "idempotent" in r2.reason
         assert len(fake.placed) == 1
+
+    def test_hk_order_uses_sehk_hkd_and_hkd_settled_cash(self):
+        account = {
+            "NetLiquidation": "12000",
+            "SettledCash": "1000",
+            "_base_currency": "USD",
+            "_cash_by_currency": {"USD": 1000.0, "HKD": 16000.0},
+            "_equity_by_currency": {"USD": 1000.0, "HKD": 16000.0},
+            "_fx_to_base": {"USD": 1.0, "HKD": 1 / 7.8},
+        }
+        b, fake = _broker(account=account)
+        order = _order(symbol="0700.HK", qty=100, limit=100.0)
+        result = b.place_order(order)
+        assert result.accepted
+        assert result.order.currency == "HKD"
+        assert fake.placed[0].exchange == "SEHK"
+        assert fake.placed[0].currency == "HKD"
+
+        fake.fill(order.id, 100, 99.8, commission=18.0)
+        fill = b.get_fills()[0]
+        assert fill.symbol == "0700.HK" and fill.currency == "HKD"
+
+    def test_hk_order_cannot_borrow_usd_cash_sleeve(self):
+        account = {
+            "NetLiquidation": "100000",
+            "SettledCash": "100000",
+            "_base_currency": "USD",
+            "_cash_by_currency": {"USD": 100000.0, "HKD": 0.0},
+            "_fx_to_base": {"USD": 1.0, "HKD": 1 / 7.8},
+        }
+        b, _ = _broker(account=account)
+        result = b.place_order(_order(symbol="0700.HK", qty=100, limit=100.0))
+        assert not result.accepted
+        assert "HKD" in result.reason
 
 
 class TestBracket:

@@ -6,6 +6,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { StatusDot, type StatusTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Tip } from '@/components/ui/tooltip'
 import {
   createResearchWatchlist,
   type FinanceBriefPendingCandidate,
@@ -27,7 +28,7 @@ import {
 } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { ExternalLink } from '@/lib/external-link'
-import { AlertTriangle, Info, RefreshCw, Search } from '@/lib/icons'
+import { Activity, AlertTriangle, BarChart3, FileText, Info, RefreshCw, Search } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { notify, notifyError } from '@/store/notifications'
 
@@ -49,6 +50,7 @@ import {
   pnlClass,
   REGIME_TONE
 } from './lib'
+import { PredictionReviewPanel, StrategyBacktestsPanel } from './prediction-review'
 import { FinanceCard, FinancePill, FinanceSectionLabel, QuerySection, StatTile } from './primitives'
 import { WATCH_MODULE_IDS, type WatchModuleId, WatchModulePanel } from './watch'
 import { CustomWatchlistPanel } from './watchlists'
@@ -66,28 +68,52 @@ const SEARCH_K = 5
 
 type ResearchCopy = ReturnType<typeof useI18n>['t']['finance']['research']
 
+function ExplainedSectionLabel({ children, description }: { children: React.ReactNode; description: string }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <FinanceSectionLabel>{children}</FinanceSectionLabel>
+      <Tip label={description} side="top">
+        <button
+          aria-label={description}
+          className="inline-flex size-6 cursor-help items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          type="button"
+        >
+          <Info className="size-3.5" />
+        </button>
+      </Tip>
+    </div>
+  )
+}
+
 function explainDiscoveryReason(reason: string, copy: ResearchCopy): string {
   const trend = reason.match(/^20d trend\s+(.+)$/i)
 
-  if (trend) {return copy.discoveryReasonTrend(trend[1])}
+  if (trend) {
+    return copy.discoveryReasonTrend(trend[1])
+  }
 
   const relative = reason.match(/^relative strength\s+(.+)$/i)
 
-  if (relative) {return copy.discoveryReasonRelativeStrength(relative[1])}
+  if (relative) {
+    return copy.discoveryReasonRelativeStrength(relative[1])
+  }
 
   const volume = reason.match(/^volume\s+(.+)\s+20d average$/i)
 
-  if (volume) {return copy.discoveryReasonVolume(volume[1])}
+  if (volume) {
+    return copy.discoveryReasonVolume(volume[1])
+  }
 
   return reason
 }
 
-// Selectable sidebar items. The three ACTIVE markets (US, China, HK) plus the
+// Selectable sidebar items. The four active markets in the product-defined
+// order (US, HK, China, Korea Semiconductor), followed by the
 // read-only watch modules; disabled market placeholders (UK/Korea/Japan) are
 // NOT selectable so they stay out of the enum.
-const ACTIVE_MARKETS = ['us', 'china', 'hk', 'korea'] as const
+const ACTIVE_MARKETS = ['us', 'hk', 'china', 'korea'] as const
 
-const RESEARCH_DESKS = [...ACTIVE_MARKETS, ...WATCH_MODULE_IDS] as const
+const RESEARCH_DESKS = [...ACTIVE_MARKETS, 'predictions', 'backtests', ...WATCH_MODULE_IDS] as const
 
 type ResearchDesk = (typeof RESEARCH_DESKS)[number]
 
@@ -130,8 +156,11 @@ export function FinanceResearchView({
   const setCustomGroupId = (id: null | string) => {
     const params = new URLSearchParams(search)
 
-    if (id) {params.set('watch_group', id)}
-    else {params.delete('watch_group')}
+    if (id) {
+      params.set('watch_group', id)
+    } else {
+      params.delete('watch_group')
+    }
 
     const query = params.toString()
     navigate({ hash, pathname, search: query ? `?${query}` : '' }, { replace: true })
@@ -140,8 +169,11 @@ export function FinanceResearchView({
   const selectDesk = (nextDesk: ResearchDesk) => {
     const params = new URLSearchParams(search)
 
-    if (nextDesk === 'us') {params.delete('desk')}
-    else {params.set('desk', nextDesk)}
+    if (nextDesk === 'us') {
+      params.delete('desk')
+    } else {
+      params.set('desk', nextDesk)
+    }
 
     params.delete('watch_group')
 
@@ -162,13 +194,12 @@ export function FinanceResearchView({
   const customGroups = watchlistsQuery.data ?? []
   const selectedCustomGroup = customGroups.find(group => group.id === customGroupId) ?? null
   const marketDesk = isMarketDesk(desk)
-  const isCnHk = desk === 'china' || desk === 'hk'
   const researchOnly = marketDesk && desk !== 'us'
   const marketKey = desk === 'us' ? 'us' : desk === 'korea' ? 'kr' : desk === 'hk' ? 'hk' : 'cn'
 
   const briefQuery = useQuery({
     enabled: enabled && marketDesk && !customGroupId,
-    queryFn: () => getFinanceResearchBrief(desk === 'us' ? undefined : (marketKey as 'cn' | 'hk' | 'kr')),
+    queryFn: () => getFinanceResearchBrief(marketKey),
     queryKey: financeKey('research', 'brief', marketKey),
     refetchInterval: BRIEF_POLL_MS,
     retry: 1
@@ -183,15 +214,13 @@ export function FinanceResearchView({
     korea: copy.marketKorea
   }
 
-  // Manual "run research now": force the backend to RE-RUN this market's
-  // research session (fresh data), then refetch. Only markets with their own
-  // session (China/HK → cn, Korea → kr); US is loop-driven, watch modules are
-  // cross-asset. Read-only (no orders) so it is ungated.
+  // Manual "run research now": every active market, including US, has a
+  // registered read-only callback. Review/watch/custom desks do not.
   const queryClient = useQueryClient()
-  const canRun = !selectedCustomGroup && marketDesk && desk !== 'us'
+  const canRun = !selectedCustomGroup && marketDesk
 
   const runMutation = useMutation({
-    mutationFn: () => postFinanceResearchRun(marketKey as 'cn' | 'hk' | 'kr'),
+    mutationFn: () => postFinanceResearchRun(marketKey),
     onError: error => notifyError(error instanceof Error ? error : new Error(String(error)), copy.runResearchFailed),
     onSuccess: result => {
       void queryClient.invalidateQueries({ queryKey: financeKey('research', 'brief', marketKey) })
@@ -241,6 +270,21 @@ export function FinanceResearchView({
               title={marketLabel[id]}
             />
           ))}
+        </FinanceListGroup>
+
+        <FinanceListGroup label={t.finance.prediction.groupLabel}>
+          <FinanceNavRow
+            active={!customGroupId && desk === 'predictions'}
+            leading={<FinanceRowGlyph color="#8B5CF6" icon={BarChart3} />}
+            onSelect={() => selectDesk('predictions')}
+            title={t.finance.prediction.navLabel}
+          />
+          <FinanceNavRow
+            active={!customGroupId && desk === 'backtests'}
+            leading={<FinanceRowGlyph color="#64748B" icon={Activity} />}
+            onSelect={() => selectDesk('backtests')}
+            title={t.finance.prediction.backtests}
+          />
         </FinanceListGroup>
 
         <FinanceListGroup label={copy.watchGroup}>
@@ -300,7 +344,10 @@ export function FinanceResearchView({
 
       {/* The watch desks own the full-bleed K-chart, so drop the centered
           max-w column and let the candles fill the pane edge to edge. */}
-      <DetailColumn actionBar={bottomBar} bleed={Boolean(selectedCustomGroup) || !marketDesk}>
+      <DetailColumn
+        actionBar={bottomBar}
+        bleed={Boolean(selectedCustomGroup) || (!marketDesk && desk !== 'predictions' && desk !== 'backtests')}
+      >
         {selectedCustomGroup ? (
           <CustomWatchlistPanel
             enabled={enabled}
@@ -310,30 +357,29 @@ export function FinanceResearchView({
           />
         ) : marketDesk ? (
           <div className="space-y-5">
-            {canRun && (
-              <div className="flex justify-end">
-                <Button
-                  disabled={!enabled || runMutation.isPending}
-                  onClick={() => runMutation.mutate()}
-                  size="xs"
-                  variant="outline"
-                >
-                  <RefreshCw className={cn('h-3.5 w-3.5', runMutation.isPending && 'animate-spin')} />
-                  {runMutation.isPending ? copy.runningResearch : copy.runResearch}
-                </Button>
-              </div>
-            )}
-            {isCnHk && <RegionNote note={copy.regionNote} />}
             <QuerySection
               empty={copy.briefError}
               error={briefQuery.isError ? briefQuery.error : undefined}
               isEmpty={!brief}
               loading={briefQuery.isPending}
             >
-              {brief && <BriefBody brief={brief} onOpenQueue={onOpenQueue} researchOnly={researchOnly} />}
+              {brief && (
+                <BriefBody
+                  brief={brief}
+                  onOpenQueue={onOpenQueue}
+                  onRunResearch={canRun ? () => runMutation.mutate() : undefined}
+                  researchEnabled={enabled}
+                  researchOnly={researchOnly}
+                  researchRunning={runMutation.isPending}
+                />
+              )}
             </QuerySection>
             <KnowledgeSearchSection enabled={enabled} />
           </div>
+        ) : desk === 'predictions' ? (
+          <PredictionReviewPanel enabled={enabled} />
+        ) : desk === 'backtests' ? (
+          <StrategyBacktestsPanel />
         ) : (
           <WatchModulePanel enabled={enabled} module={desk as WatchModuleId} />
         )}
@@ -342,34 +388,30 @@ export function FinanceResearchView({
   )
 }
 
-// Calm note above the China/HK brief explaining the shared-CN partition and its
-// Phase 0.9 status.
-function RegionNote({ note }: { note: string }) {
-  return (
-    <div
-      className={cn(
-        'flex items-start gap-2 rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary) px-3 py-2',
-        'text-[0.7rem] leading-5 text-(--ui-text-secondary)'
-      )}
-    >
-      <Info className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-      <div className="min-w-0">{note}</div>
-    </div>
-  )
-}
-
 export function BriefBody({
   brief,
   onOpenQueue,
+  onRunResearch,
+  researchEnabled,
+  researchRunning,
   researchOnly
 }: {
   brief: FinanceResearchBrief
   onOpenQueue: () => void
+  onRunResearch?: () => void
+  researchEnabled: boolean
+  researchRunning: boolean
   researchOnly: boolean
 }) {
   return (
     <div className="space-y-5">
-      <BriefHeader brief={brief} researchOnly={researchOnly} />
+      <BriefHeader
+        brief={brief}
+        onRunResearch={onRunResearch}
+        researchEnabled={researchEnabled}
+        researchOnly={researchOnly}
+        researchRunning={researchRunning}
+      />
       <FreshnessBanner freshness={brief.freshness} />
       <NarrativeBrief brief={brief} />
       {/* Research-only markets carry no account/positions (risk===null), so the
@@ -393,95 +435,58 @@ export function BriefBody({
 function NarrativeBrief({ brief }: { brief: FinanceResearchBrief }) {
   const { t } = useI18n()
   const copy = t.finance.research
-  const regime = brief.regime?.risk_on_off.toLowerCase()
-
-  const marketView =
-    regime === 'risk_on'
-      ? copy.narrativeMarketRiskOn
-      : regime === 'risk_off'
-        ? copy.narrativeMarketRiskOff
-        : regime === 'neutral'
-          ? copy.narrativeMarketNeutral
-          : copy.narrativeMarketUnknown
-
-  const marketFacts = brief.regime
-    ? copy.narrativeMarketFacts(
-        brief.regime.vix?.toFixed(1) ?? '—',
-        brief.regime.breadth_pct_above_50dma.toFixed(0)
-      )
-    : ''
-
-  const leadTheme = [...brief.themes].sort((a, b) => b.avg_dist_sma50_pct - a.avg_dist_sma50_pct)[0]
-
-  const leadMover = [...brief.movers.top, ...brief.movers.bottom].sort(
-    (a, b) => Math.abs(b.dist_sma20_pct) - Math.abs(a.dist_sma20_pct)
-  )[0]
-
-  const focus = leadTheme
-    ? copy.narrativeThemeFocus(
-        leadTheme.theme,
-        fmtSignedPct(leadTheme.avg_dist_sma50_pct),
-        leadTheme.leaders.join(', ') || '—'
-      )
-    : leadMover
-      ? copy.narrativeMoverFocus(leadMover.display_name || leadMover.symbol, fmtSignedPct(leadMover.dist_sma20_pct))
-      : copy.narrativeFocusUnknown
-
-  const opportunity = [...(brief.discovery?.candidates ?? [])].sort((a, b) => a.rank - b.rank)[0]
-
-  const opportunityText = opportunity
-    ? copy.narrativeOpportunity(
-        opportunity.display_name || opportunity.symbol,
-        opportunity.score.toFixed(1),
-        opportunity.reasons
-          .slice(0, 2)
-          .map(reason => explainDiscoveryReason(reason, copy))
-          .join(' · ') || opportunity.relationship
-      )
-    : copy.narrativeOpportunityNone
-
-  const warningCount =
-    brief.freshness.warnings.length + (brief.risk?.warnings.length ?? 0) + brief.uncertainty.length
-
-  const riskSummary =
-    warningCount === 0
-      ? copy.narrativeRiskClear
-      : copy.narrativeRiskSummary(
-          brief.freshness.warnings.length,
-          brief.risk?.warnings.length ?? 0,
-          brief.uncertainty.length
-        )
-
-  const sections = [
-    {
-      body: `${marketView}${marketFacts ? ` ${marketFacts}` : ''}`,
-      label: copy.narrativeMarketLabel
-    },
-    { body: focus, label: copy.narrativeFocusLabel },
-    { body: opportunityText, label: copy.narrativeOpportunityLabel },
-    {
-      body: `${riskSummary} ${copy.narrativeAction}`,
-      label: copy.narrativeRiskLabel
-    }
-  ]
+  const narrative = brief.narrative
 
   return (
-    <FinanceCard className="space-y-4 border-primary/30 bg-primary/5">
+    <FinanceCard className="space-y-5 border-primary/30 bg-primary/5">
       <div className="flex items-start gap-2.5">
-        <Info className="mt-0.5 size-4 shrink-0 text-primary" />
+        <FileText className="mt-0.5 size-4 shrink-0 text-primary" />
         <div className="min-w-0">
           <div className="text-sm font-semibold text-foreground">{copy.narrativeTitle}</div>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">{copy.narrativeSubtitle}</p>
+          {narrative && (
+            <p className="mt-1 text-[0.62rem] text-muted-foreground">
+              {narrative.market} · {narrative.model}
+            </p>
+          )}
         </div>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {sections.map(section => (
-          <div className="border-l-2 border-primary/30 pl-3" key={section.label}>
-            <FinanceSectionLabel>{section.label}</FinanceSectionLabel>
-            <p className="mt-1 text-xs leading-5 text-foreground">{section.body}</p>
+      {!narrative ? (
+        <p className="text-xs leading-5 text-muted-foreground">{copy.narrativeUnavailable}</p>
+      ) : (
+        <>
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold leading-6 text-foreground">{narrative.headline}</h3>
+            {narrative.summary.split(/\n{2,}/).map(paragraph => (
+              <p className="text-xs leading-5 text-foreground/90" key={paragraph}>
+                {paragraph}
+              </p>
+            ))}
           </div>
-        ))}
-      </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {narrative.sections.map(section => (
+              <section className="border-l-2 border-primary/30 pl-3" key={section.title}>
+                <FinanceSectionLabel>{section.title}</FinanceSectionLabel>
+                <p className="mt-1 text-xs leading-5 text-foreground">{section.analysis}</p>
+              </section>
+            ))}
+          </div>
+          {narrative.watch_next.length > 0 && (
+            <section className="border-t border-(--ui-stroke-tertiary) pt-3">
+              <FinanceSectionLabel>{copy.narrativeWatchNext}</FinanceSectionLabel>
+              <ul className="mt-2 grid gap-2 sm:grid-cols-2">
+                {narrative.watch_next.map(item => (
+                  <li
+                    className="border-l border-(--ui-stroke-secondary) pl-3 text-xs leading-5 text-muted-foreground"
+                    key={item}
+                  >
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </>
+      )}
     </FinanceCard>
   )
 }
@@ -532,9 +537,7 @@ function DiscoverySection({ pool }: { pool?: FinanceDiscoveryPool | null }) {
 
   return (
     <section className="space-y-2">
-      <FinanceSectionLabel>{copy.discoveryTitle}</FinanceSectionLabel>
-      <p className="text-xs leading-5 text-muted-foreground">{copy.discoveryDescription}</p>
-      <p className="text-[0.62rem] leading-5 text-muted-foreground/80">{copy.discoveryScoreMeaning}</p>
+      <ExplainedSectionLabel description={copy.discoveryDescription}>{copy.discoveryTitle}</ExplainedSectionLabel>
       {!pool || pool.candidates.length === 0 ? (
         <div className="py-1 text-xs text-muted-foreground">{copy.discoveryEmpty}</div>
       ) : (
@@ -603,13 +606,26 @@ function ResearchOnlyNote() {
 
 // ── Header: trading day, PAPER/LIVE, as-of, per-source freshness ─────────────
 
-function BriefHeader({ brief, researchOnly }: { brief: FinanceResearchBrief; researchOnly: boolean }) {
+function BriefHeader({
+  brief,
+  onRunResearch,
+  researchEnabled,
+  researchOnly,
+  researchRunning
+}: {
+  brief: FinanceResearchBrief
+  onRunResearch?: () => void
+  researchEnabled: boolean
+  researchOnly: boolean
+  researchRunning: boolean
+}) {
   const { t } = useI18n()
   const copy = t.finance.research
   const { freshness } = brief
 
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+      <span className="text-base font-semibold text-foreground">{copy.briefTitle}</span>
       <span className="text-sm font-semibold tracking-tight text-foreground">
         {copy.tradingDay(brief.trading_date)}
       </span>
@@ -635,6 +651,18 @@ function BriefHeader({ brief, researchOnly }: { brief: FinanceResearchBrief; res
           stale={freshness.portfolio_stale}
         />
       </span>
+      {onRunResearch && (
+        <Button
+          className="ml-auto"
+          disabled={!researchEnabled || researchRunning}
+          onClick={onRunResearch}
+          size="xs"
+          variant="outline"
+        >
+          <RefreshCw className={cn('h-3.5 w-3.5', researchRunning && 'animate-spin')} />
+          {researchRunning ? copy.runningResearch : copy.runResearch}
+        </Button>
+      )}
     </div>
   )
 }
@@ -693,8 +721,7 @@ function RiskSection({ risk }: { risk: FinanceRiskView | null }) {
 
   return (
     <section className="space-y-2">
-      <FinanceSectionLabel>{copy.riskTitle}</FinanceSectionLabel>
-      <p className="text-xs leading-5 text-muted-foreground">{copy.riskDescription}</p>
+      <ExplainedSectionLabel description={copy.riskDescription}>{copy.riskTitle}</ExplainedSectionLabel>
 
       {!risk ? (
         <div className="py-1 text-xs text-muted-foreground">{copy.riskEmpty}</div>
@@ -787,8 +814,9 @@ function RegimeSection({ regime }: { regime: FinanceRegimeView | null }) {
 
   return (
     <section className="space-y-2">
-      <FinanceSectionLabel>{market.regimeTitle}</FinanceSectionLabel>
-      <p className="text-xs leading-5 text-muted-foreground">{t.finance.research.regimeDescription}</p>
+      <ExplainedSectionLabel description={t.finance.research.regimeDescription}>
+        {market.regimeTitle}
+      </ExplainedSectionLabel>
 
       {!regime ? (
         <div className="py-1 text-xs text-muted-foreground">{market.regimeEmpty}</div>
@@ -842,8 +870,7 @@ function MoversSection({ bottom, top }: { bottom: FinanceMover[]; top: FinanceMo
 
   return (
     <section className="space-y-2">
-      <FinanceSectionLabel>{copy.moversTitle}</FinanceSectionLabel>
-      <p className="text-xs leading-5 text-muted-foreground">{copy.moversDescription}</p>
+      <ExplainedSectionLabel description={copy.moversDescription}>{copy.moversTitle}</ExplainedSectionLabel>
 
       {top.length === 0 && bottom.length === 0 ? (
         <div className="py-1 text-xs text-muted-foreground">{copy.moversEmpty}</div>
@@ -891,8 +918,7 @@ function ThemesSection({ themes }: { themes: FinanceThemeView[] }) {
 
   return (
     <section className="space-y-2">
-      <FinanceSectionLabel>{copy.themesTitle}</FinanceSectionLabel>
-      <p className="text-xs leading-5 text-muted-foreground">{copy.themesDescription}</p>
+      <ExplainedSectionLabel description={copy.themesDescription}>{copy.themesTitle}</ExplainedSectionLabel>
 
       {themes.length === 0 ? (
         <div className="py-1 text-xs text-muted-foreground">{copy.themesEmpty}</div>
@@ -929,7 +955,6 @@ function NewsSection({ news }: { news: FinanceResearchBrief['news'] }) {
   return (
     <section className="space-y-2">
       <FinanceSectionLabel>{copy.newsTitle}</FinanceSectionLabel>
-      <p className="text-xs leading-5 text-muted-foreground">{copy.newsDescription}</p>
 
       {news.items.length === 0 ? (
         <div className="py-1 text-xs text-muted-foreground">{copy.newsEmpty}</div>
@@ -979,8 +1004,7 @@ function SignalsSection({ signals }: { signals: FinanceSignalView[] }) {
 
   return (
     <section className="space-y-2">
-      <FinanceSectionLabel>{copy.signalsTitle}</FinanceSectionLabel>
-      <p className="text-xs leading-5 text-muted-foreground">{copy.signalsDescription}</p>
+      <ExplainedSectionLabel description={copy.signalsDescription}>{copy.signalsTitle}</ExplainedSectionLabel>
 
       {signals.length === 0 ? (
         <div className="py-1 text-xs text-muted-foreground">{copy.signalsEmpty}</div>
@@ -1094,8 +1118,7 @@ function UncertaintySection({ items }: { items: string[] }) {
 
   return (
     <section className="space-y-2">
-      <FinanceSectionLabel>{copy.uncertaintyTitle}</FinanceSectionLabel>
-      <p className="text-xs leading-5 text-muted-foreground">{copy.uncertaintyDescription}</p>
+      <ExplainedSectionLabel description={copy.uncertaintyDescription}>{copy.uncertaintyTitle}</ExplainedSectionLabel>
       {items.length > 0 && (
         <FinanceCard>
           <ul className="list-inside list-disc space-y-0.5 text-xs leading-5 text-(--ui-text-secondary)">

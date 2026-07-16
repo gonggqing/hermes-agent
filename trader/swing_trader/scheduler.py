@@ -1,7 +1,7 @@
 """ET-aware daily scheduler (Loop.md §4 state machine; §9 testing bar; backlog #13).
 
-Drives the daily loop: monitors start at 09:30 ET, decision core at 11:00,
-candidates pushed to Telegram at 11:30, confirmation cutoff at 12:30, market
+Drives the daily loop: monitors start at 09:30 ET, decision core at 10:00,
+candidates pushed to Telegram at 10:30, confirmation cutoff at 11:30, market
 close at 16:00, and the morning report at 09:00 the next trading day.
 
 DESIGN DECISION (Loop.md §8 allows substitution with justification): this
@@ -10,7 +10,7 @@ instead of APScheduler. Rationale:
 
 - **Deterministic, DST-safe unit tests.** Every instant is computed as an ET
   wall time converted to UTC via ``zoneinfo``, so the EDT/EST switch is
-  covered by plain assertions (11:30 ET == 15:30 UTC in July, == 16:30 UTC in
+  covered by plain assertions (10:30 ET == 14:30 UTC in July, == 15:30 UTC in
   January) with no threads, no sleeps, and no wall clock — tests never touch
   the network or real time (Loop.md §3, §9).
 - **Pure core.** ``phase_at`` / ``next_event`` / ``DailyLoopRunner.run_pending``
@@ -22,7 +22,7 @@ Calendar notes:
 - ``is_trading_day`` covers Mon–Fri minus NYSE **full-day** holidays for
   2026. Early-close half days (e.g. 2026-11-27, 2026-12-24) are deliberately
   treated as normal trading days for the daily loop — the user window
-  (09:30–12:30 ET) ends well before any 13:00 ET early close; only the
+  (09:30–11:30 ET) ends well before any 13:00 ET early close; only the
   16:00 MARKET_CLOSE event is nominally late on those days.
 - All public functions take and return timezone-aware **UTC** datetimes;
   naive datetimes are rejected.
@@ -81,9 +81,9 @@ class Event(str, Enum):
 
     MORNING_REPORT = "MORNING_REPORT"  # 09:00 — overnight fills, ledger, summary
     MONITOR_START = "MONITOR_START"  # 09:30 — monitors poll, sub-agents build theses
-    DECIDE_START = "DECIDE_START"  # 11:00 — decision core aggregates, risk validates
-    PUSH_CANDIDATES = "PUSH_CANDIDATES"  # 11:30 — push approved candidates to Telegram
-    CONFIRM_CUTOFF = "CONFIRM_CUTOFF"  # 12:30 — user confirmation window closes
+    DECIDE_START = "DECIDE_START"  # 10:00 — decision core aggregates, risk validates
+    PUSH_CANDIDATES = "PUSH_CANDIDATES"  # 10:30 — push approved candidates to Telegram
+    CONFIRM_CUTOFF = "CONFIRM_CUTOFF"  # 11:30 — user confirmation window closes
     MARKET_CLOSE = "MARKET_CLOSE"  # 16:00 — MOC/LOC fill, resting GTC may fill
     MORNING_BRIEF = "MORNING_BRIEF"  # 09:00 Asia/Shanghai — all-market brief
     EVENING_BRIEF = "EVENING_BRIEF"  # 21:00 Asia/Shanghai — all-market brief
@@ -92,9 +92,9 @@ class Event(str, Enum):
 EVENT_TIMES_ET: Mapping[Event, time] = {
     Event.MORNING_REPORT: time(9, 0),
     Event.MONITOR_START: time(9, 30),
-    Event.DECIDE_START: time(11, 0),
-    Event.PUSH_CANDIDATES: time(11, 30),
-    Event.CONFIRM_CUTOFF: time(12, 30),
+    Event.DECIDE_START: time(10, 0),
+    Event.PUSH_CANDIDATES: time(10, 30),
+    Event.CONFIRM_CUTOFF: time(11, 30),
     Event.MARKET_CLOSE: time(16, 0),
 }
 
@@ -109,9 +109,9 @@ class LoopPhase(str, Enum):
 
     OFF_HOURS = "OFF_HOURS"  # non-trading day, or before 09:30 ET
     MONITORING = "MONITORING"  # 09:30–11:00 ET
-    DECIDING = "DECIDING"  # 11:00–11:30 ET
-    CONFIRM_WINDOW = "CONFIRM_WINDOW"  # 11:30–12:30 ET
-    SET_AND_FORGET = "SET_AND_FORGET"  # 12:30–16:00 ET (user offline; orders rest)
+    DECIDING = "DECIDING"  # 10:00–10:30 ET
+    CONFIRM_WINDOW = "CONFIRM_WINDOW"  # 10:30–11:30 ET
+    SET_AND_FORGET = "SET_AND_FORGET"  # 11:30–16:00 ET (user offline; orders rest)
     AFTER_CLOSE = "AFTER_CLOSE"  # 16:00–24:00 ET
 
 
@@ -246,7 +246,11 @@ CN_SCHEDULE = SessionSchedule(
 HK_SCHEDULE = SessionSchedule(
     market_id="HK",
     tz=HONG_KONG,
-    event_times=CN_EVENT_TIMES_LOCAL,
+    event_times={
+        Event.MONITOR_START: time(9, 30),
+        Event.DECIDE_START: time(10, 0),
+        Event.PUSH_CANDIDATES: time(10, 30),
+    },
     holidays=HK_HOLIDAYS_2026,
 )
 
@@ -334,7 +338,7 @@ def event_instant(
     """UTC instant at which ``event`` occurs on ``schedule``'s calendar day ``d``.
 
     Pure wall-time -> UTC conversion; does NOT check ``is_trading_day``.
-    US event times (09:00–16:00 ET) and CN event times (09:30–11:30 CST) are
+    US event times (09:00–16:00 ET) and Asian event times are
     never ambiguous/nonexistent under DST — the US transitions happen at 02:00
     local and China observes no DST — so no fold handling is needed.
     """
@@ -352,7 +356,7 @@ def phase_at(
     """Map a UTC instant onto the Loop.md §4 confirmation-window state machine.
 
     Boundaries are half-open ``[start, end)``: 09:30:00 ET is already
-    MONITORING, 11:00:00 is DECIDING, and so on. Non-trading days (weekends
+    MONITORING, 10:00:00 is DECIDING, and so on. Non-trading days (weekends
     and full-day holidays) are OFF_HOURS all day, as is 00:00–09:30 ET on a
     trading day. Only meaningful for a schedule that defines the full six-event
     US day (the CN research session has no confirmation window).
