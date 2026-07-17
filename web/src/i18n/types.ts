@@ -257,6 +257,15 @@ export interface FinanceTranslations {
     drawdown: string;
     equityCurve: string;
     notEnoughSnapshots: string;
+    perMarketTitle: string;
+    perMarketHint: string;
+    perMarketEmpty: string;
+    colMarket: string;
+    colWinRate: string;
+    colClosed: string;
+    colPnl: string;
+    colCash: string;
+    colOpen: string;
   };
   positions: {
     title: string;

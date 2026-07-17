@@ -23,6 +23,7 @@ import type {
   FinancePosition,
   FinanceReports,
   FinanceResearchBrief as FinanceResearchBriefData,
+  FinanceMarketPerformance,
   FinanceSnapshot,
   FinanceStats,
   FinanceWatchlistItem,
@@ -304,19 +305,121 @@ function EquityCurve({ snapshots }: { snapshots: FinanceSnapshot[] }) {
   );
 }
 
+// Per-market trade performance — each market in its OWN currency, never a
+// single blended win rate/P&L (Loop.md §5.10). Self-contained fetch (server
+// defaults to its mode), refreshed with the surrounding account view.
+function MarketPerformanceCard({ reloadToken }: { reloadToken: number }) {
+  const ft = useFinanceT();
+  const a = ft.account;
+  const [rows, setRows] = useState<FinanceMarketPerformance[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .financeStatsByMarket()
+      .then((r) => {
+        if (!cancelled) setRows(r);
+      })
+      .catch(() => {
+        if (!cancelled) setRows([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadToken]);
+
+  const withTrades = (rows ?? []).filter(
+    (r) => r.stats.n_closed > 0 || r.n_open > 0,
+  );
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <TrendingUp className="h-5 w-5 text-muted-foreground" />
+          <CardTitle className="text-base">{a.perMarketTitle}</CardTitle>
+        </div>
+        <p className="font-mondwest normal-case text-xs text-text-tertiary">
+          {a.perMarketHint}
+        </p>
+      </CardHeader>
+      <CardContent>
+        {withTrades.length === 0 ? (
+          <p className="font-mondwest normal-case py-2 text-sm text-muted-foreground">
+            {a.perMarketEmpty}
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full font-mondwest normal-case text-sm">
+              <thead>
+                <tr className="border-b border-border text-muted-foreground text-xs">
+                  <th className="text-left py-2 pr-4 font-medium">{a.colMarket}</th>
+                  <th className="text-right py-2 px-4 font-medium">{a.colWinRate}</th>
+                  <th className="text-right py-2 px-4 font-medium">{a.colClosed}</th>
+                  <th className="text-right py-2 px-4 font-medium">{a.colPnl}</th>
+                  <th className="text-right py-2 px-4 font-medium">{a.colCash}</th>
+                  <th className="text-right py-2 pl-4 font-medium">{a.colOpen}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {withTrades.map((r) => (
+                  <tr
+                    key={r.market}
+                    className="border-b border-border/50 hover:bg-secondary/20 transition-colors"
+                  >
+                    <td className="py-2 pr-4">
+                      <span className="text-foreground">{r.market}</span>{" "}
+                      <span className="text-xs text-muted-foreground">
+                        {r.currency}
+                      </span>
+                    </td>
+                    <td className="text-right py-2 px-4">
+                      {r.stats.n_closed > 0
+                        ? `${Math.round(r.stats.win_rate * 100)}%`
+                        : "—"}
+                    </td>
+                    <td className="text-right py-2 px-4">{r.stats.n_closed}</td>
+                    <td
+                      className={cn(
+                        "text-right py-2 px-4",
+                        pnlClass(r.stats.total_pnl),
+                      )}
+                    >
+                      {r.stats.n_closed > 0
+                        ? `${fmtSigned(r.stats.total_pnl)} ${r.currency}`
+                        : "—"}
+                    </td>
+                    <td className="text-right py-2 px-4 text-muted-foreground">
+                      {fmtMoney(r.cash)} {r.currency}
+                    </td>
+                    <td className="text-right py-2 pl-4">{r.n_open}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function AccountSection({
   numbers,
   stats,
   snapshots,
   ledgerFallback,
+  reloadToken,
 }: {
   numbers: AccountNumbers | null;
   stats: FinanceStats | null;
   snapshots: FinanceSnapshot[];
   ledgerFallback: boolean;
+  reloadToken: number;
 }) {
   const ft = useFinanceT();
   return (
+    <div className="flex flex-col gap-6">
     <div className="grid gap-6 lg:grid-cols-2">
       <Card>
         <CardHeader>
@@ -396,6 +499,8 @@ function AccountSection({
           <EquityCurve snapshots={snapshots} />
         </CardContent>
       </Card>
+    </div>
+    <MarketPerformanceCard reloadToken={reloadToken} />
     </div>
   );
 }
@@ -1201,6 +1306,7 @@ function PortfolioView({
               stats={stats}
               snapshots={snapshots}
               ledgerFallback={ledgerFallback}
+              reloadToken={snapshots.length}
             />
             <PositionsCard view={liveView} />
           </div>

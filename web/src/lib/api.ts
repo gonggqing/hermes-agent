@@ -1362,6 +1362,10 @@ export const api = {
     ),
   financeStats: (mode?: FinanceMode) =>
     fetchJSON<FinanceStats>(`/api/finance/v1/stats${financeQuery({ mode })}`),
+  financeStatsByMarket: (mode?: FinanceMode) =>
+    fetchJSON<FinanceMarketPerformance[]>(
+      `/api/finance/v1/stats/by-market${financeQuery({ mode })}`,
+    ),
   financeSnapshots: (limit = 90, mode?: FinanceMode) =>
     fetchJSON<FinanceSnapshot[]>(
       `/api/finance/v1/snapshots${financeQuery({ limit, mode })}`,
@@ -3286,6 +3290,16 @@ export interface FinanceStats {
   total_pnl: number;
   avg_hold_days: number | null;
   max_drawdown_pct: number;
+}
+
+/** One market's trade performance in its OWN currency (never blended). */
+export interface FinanceMarketPerformance {
+  market: string;
+  currency: string;
+  stats: FinanceStats;
+  cash: number;
+  equity: number;
+  n_open: number;
 }
 
 export interface FinanceSnapshot {
