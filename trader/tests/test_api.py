@@ -593,3 +593,35 @@ class TestPendingAndActions:
         _SAFE = {"/v1/orders", "/v1/orders/cancel-all"}
         assert not any("order" in p and p not in _SAFE for p in paths)
         assert client.post("/v1/orders", json={}).status_code == 405
+
+
+class TestByMarketStats:
+    def test_stats_by_market_never_blends_currencies(self, env):
+        from datetime import timedelta
+
+        from swing_trader.schemas import Fill, Mode, Side
+        ledger, _, _, client = env
+        t0 = IN_WINDOW
+
+        def close(symbol, currency, entry, exit_px, day):
+            t = t0 + timedelta(days=day)
+            ledger.record_fill(Fill(order_id=f"e{symbol}{day}", symbol=symbol,
+                                    currency=currency, side=Side.BUY, qty=10,
+                                    px=entry, commission=1.0, mode=Mode.PAPER, ts=t))
+            ledger.record_fill(Fill(order_id=f"x{symbol}{day}", symbol=symbol,
+                                    currency=currency, side=Side.SELL, qty=10,
+                                    px=exit_px, commission=1.0, mode=Mode.PAPER,
+                                    ts=t + timedelta(days=1)))
+
+        close("NVDA", "USD", 100.0, 120.0, 0)     # US win
+        close("0700.HK", "HKD", 100.0, 80.0, 2)   # HK loss
+
+        rows = client.get("/v1/stats/by-market").json()
+        by = {r["market"]: r for r in rows}
+        assert by["US"]["currency"] == "USD"
+        assert by["US"]["stats"]["win_rate"] == 1.0
+        assert by["HK"]["currency"] == "HKD"
+        assert by["HK"]["stats"]["win_rate"] == 0.0
+        # each market's P&L stays in its own currency, never summed
+        assert by["US"]["stats"]["total_pnl"] > 0
+        assert by["HK"]["stats"]["total_pnl"] < 0

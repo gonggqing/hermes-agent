@@ -393,6 +393,7 @@ def create_app(runtime: FinanceRuntime):
             t.__dict__
             | {
                 "mode": t.mode.value,
+                "market": t.market,
                 "entry_ts": t.entry_ts.isoformat(),
                 "exit_ts": t.exit_ts.isoformat() if t.exit_ts else None,
             }
@@ -402,6 +403,22 @@ def create_app(runtime: FinanceRuntime):
     @app.get(f"/{API_VERSION}/stats")
     def stats(mode: Optional[str] = Query(default=None)) -> dict:
         return runtime.ledger.stats(_mode(mode)).__dict__
+
+    @app.get(f"/{API_VERSION}/stats/by-market")
+    def stats_by_market(mode: Optional[str] = Query(default=None)) -> list[dict]:
+        """Per-market trade performance, each in its OWN currency — never a
+        single blended win rate/P&L (Loop.md §5.10)."""
+        return [
+            {
+                "market": p.market,
+                "currency": p.currency,
+                "stats": p.stats.__dict__,
+                "cash": p.cash,
+                "equity": p.equity,
+                "n_open": p.n_open,
+            }
+            for p in runtime.ledger.market_performance(_mode(mode))
+        ]
 
     @app.get(f"/{API_VERSION}/snapshots")
     def snapshots(
