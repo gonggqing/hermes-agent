@@ -47,6 +47,7 @@ from swing_trader.schemas import (
     Position,
     Role,
     Side,
+    market_for_currency,
     Signal,
     TimeInForce,
 )
@@ -62,6 +63,7 @@ __all__ = [
     "OrderRow",
     "SignalRow",
     "SnapshotRow",
+    "MarketPerformance",
     "TradeRecord",
     "TradeRow",
     "TradeStats",
@@ -202,6 +204,7 @@ class TradeRow(SQLModel, table=True):
     ts: str  # ENTRY timestamp (first entry fill), ISO-8601 UTC
     mode: str = Field(index=True)
     symbol: str = Field(index=True)
+    currency: str = Field(default="USD", index=True)  # → market (never blended)
     qty: float
     entry_order_id: str
     exit_order_id: Optional[str] = None
@@ -506,6 +509,11 @@ class TradeRecord:
     risk_per_share: Optional[float]
     entry_commission: float
     exit_commission: float
+    currency: str = "USD"
+
+    @property
+    def market(self) -> str:
+        return market_for_currency(self.currency)
 
 
 def _trade_record(row: TradeRow) -> TradeRecord:
@@ -528,6 +536,7 @@ def _trade_record(row: TradeRow) -> TradeRecord:
         risk_per_share=row.risk_per_share,
         entry_commission=row.entry_commission,
         exit_commission=row.exit_commission,
+        currency=row.currency,
     )
 
 
@@ -612,6 +621,19 @@ class TradeStats:
     max_drawdown_pct: float
 
 
+@dataclass
+class MarketPerformance:
+    """One market's trade performance kept in its OWN currency — never blended
+    with another market's P&L/cash (Loop.md §5.10)."""
+
+    market: str  # "US", "HK", ...
+    currency: str  # "USD", "HKD", ...
+    stats: TradeStats  # win rate / P&L / drawdown for this market only
+    cash: float  # latest cash sleeve in this currency
+    equity: float  # latest equity sleeve in this currency
+    n_open: int  # open positions in this market
+
+
 # ------------------------------------------------------------------ ledger
 
 
@@ -633,6 +655,7 @@ class Ledger:
             },
             "orders": {"currency": "VARCHAR NOT NULL DEFAULT 'USD'"},
             "fills": {"currency": "VARCHAR NOT NULL DEFAULT 'USD'"},
+            "trades": {"currency": "VARCHAR NOT NULL DEFAULT 'USD'"},
             "snapshots": {
                 "base_currency": "VARCHAR NOT NULL DEFAULT 'USD'",
                 "cash_by_currency": "VARCHAR NOT NULL DEFAULT '{}'",
@@ -651,7 +674,7 @@ class Ledger:
                         connection.execute(
                             text(f'ALTER TABLE "{table_name}" ADD COLUMN "{name}" {ddl}')
                         )
-                if table_name in {"candidates", "orders", "fills"}:
+                if table_name in {"candidates", "orders", "fills", "trades"}:
                     # Older rows received the additive USD default. Canonical
                     # suffixes are authoritative, so repair non-US execution
                     # currencies without rewriting any timestamps or history.
@@ -842,6 +865,7 @@ class Ledger:
                 ts=_to_iso(fill.ts),
                 mode=fill.mode.value,
                 symbol=fill.symbol.strip().upper(),
+                currency=fill.currency,
                 qty=fill.qty,
                 entry_order_id=fill.order_id,
                 entry_px=fill.px,
@@ -898,6 +922,7 @@ class Ledger:
             ts=open_row.ts,
             mode=open_row.mode,
             symbol=open_row.symbol,
+            currency=open_row.currency,
             qty=closed_qty,
             entry_order_id=open_row.entry_order_id,
             exit_order_id=fill.order_id,
@@ -924,11 +949,14 @@ class Ledger:
         mode: Mode | str,
         open_only: bool = False,
         closed_only: bool = False,
+        currency: str | None = None,
     ) -> list[TradeRecord]:
         if open_only and closed_only:
             raise ValueError("open_only and closed_only are mutually exclusive")
         with Session(self._engine) as session:
             stmt = select(TradeRow).where(TradeRow.mode == _mode_value(mode))
+            if currency is not None:
+                stmt = stmt.where(TradeRow.currency == currency.upper())
             if open_only:
                 stmt = stmt.where(TradeRow.is_open == True)  # noqa: E712
             if closed_only:
@@ -1021,9 +1049,15 @@ class Ledger:
 
     # --------------------------------------------------------------- stats
 
-    def stats(self, mode: Mode | str) -> TradeStats:
-        """Win rate / payoff / expectancy over closed trades; equity drawdown."""
-        closed = self.get_trades(mode, closed_only=True)
+    def stats(self, mode: Mode | str, currency: str | None = None) -> TradeStats:
+        """Win rate / payoff / expectancy over closed trades; equity drawdown.
+
+        Pass ``currency`` to scope to ONE market's trades (e.g. "HKD" for HK) so
+        P&L, win rate and drawdown are never blended across currencies — a
+        cross-currency total_pnl would be meaningless (Loop.md §5.10). ``None``
+        keeps the legacy all-trades view.
+        """
+        closed = self.get_trades(mode, closed_only=True, currency=currency)
         pnls = [t.pnl for t in closed if t.pnl is not None]
         wins = [p for p in pnls if p > 0]
         losses = [p for p in pnls if p < 0]
@@ -1052,12 +1086,24 @@ class Ledger:
             expectancy=expectancy,
             total_pnl=total_pnl,
             avg_hold_days=avg_hold_days,
-            max_drawdown_pct=self._max_drawdown_pct(mode),
+            max_drawdown_pct=self._max_drawdown_pct(mode, currency=currency),
         )
 
-    def _max_drawdown_pct(self, mode: Mode | str) -> float:
-        """Largest peak-to-trough equity decline (positive %); 0 if < 2 snapshots."""
-        equities = [s.equity for s in self.get_snapshots(mode)]
+    def _max_drawdown_pct(
+        self, mode: Mode | str, currency: str | None = None
+    ) -> float:
+        """Largest peak-to-trough equity decline (positive %); 0 if < 2 snapshots.
+
+        With ``currency`` set, uses that currency's equity sleeve
+        (``equity_by_currency``) so an HK drawdown is measured in HKD, never
+        blended with the USD sleeve through the FX-normalized total.
+        """
+        snaps = self.get_snapshots(mode)
+        if currency is None:
+            equities = [s.equity for s in snaps]
+        else:
+            cur = currency.upper()
+            equities = [s.equity_by_currency.get(cur, 0.0) for s in snaps]
         if len(equities) < 2:
             return 0.0
         peak = equities[0]
@@ -1070,3 +1116,32 @@ class Ledger:
                 if dd > max_dd:
                     max_dd = dd
         return max_dd
+
+    def market_performance(self, mode: Mode | str) -> list["MarketPerformance"]:
+        """Per-market trade performance, each in its OWN currency — never
+        blended (Loop.md §5.10). Covers every currency that has a trade or a
+        cash/equity sleeve in the latest snapshot, ordered by currency."""
+        trades = self.get_trades(mode)
+        snaps = self.get_snapshots(mode)
+        latest = snaps[-1] if snaps else None
+        currencies: set[str] = {t.currency for t in trades}
+        if latest is not None:
+            currencies |= set(latest.cash_by_currency)
+            currencies |= set(latest.equity_by_currency)
+        out: list[MarketPerformance] = []
+        for cur in sorted(currencies):
+            out.append(
+                MarketPerformance(
+                    market=market_for_currency(cur),
+                    currency=cur,
+                    stats=self.stats(mode, currency=cur),
+                    cash=latest.cash_by_currency.get(cur, 0.0) if latest else 0.0,
+                    equity=(
+                        latest.equity_by_currency.get(cur, 0.0) if latest else 0.0
+                    ),
+                    n_open=sum(
+                        1 for t in trades if t.currency == cur and t.is_open
+                    ),
+                )
+            )
+        return out

@@ -58,6 +58,15 @@ def currency_for_symbol(symbol: str) -> str:
     return "USD"
 
 
+#: Execution currency -> owning market id (keeps per-market stats un-blended).
+_CURRENCY_MARKET = {"USD": "US", "HKD": "HK", "CNY": "CN", "KRW": "KR"}
+
+
+def market_for_currency(currency: str) -> str:
+    """Owning market id for an execution currency ("HKD" -> "HK")."""
+    return _CURRENCY_MARKET.get((currency or "").upper(), (currency or "").upper())
+
+
 def _execution_currency(symbol: str, currency: str) -> str:
     """Enforce one canonical execution currency for each canonical symbol."""
     expected = currency_for_symbol(symbol)
@@ -268,6 +277,7 @@ class Trade(_TsModel):
     id: str = Field(default_factory=new_id)
     mode: Mode
     symbol: str
+    currency: str = "USD"  # execution currency → market (never P&L-blended)
     qty: float = Field(gt=0)
     entry_order_id: str
     exit_order_id: Optional[str] = None
@@ -277,6 +287,10 @@ class Trade(_TsModel):
     r_multiple: Optional[float] = None  # pnl / initial risk (entry - stop)
     hold_days: Optional[float] = None
     rationale: str = ""
+
+    @property
+    def market(self) -> str:
+        return market_for_currency(self.currency)
 
 
 class Position(BaseModel):

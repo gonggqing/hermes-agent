@@ -740,3 +740,43 @@ class TestCandidateMarketDiscriminator:
         led = Ledger(url=f"sqlite:///{tmp_path/'m2.db'}")
         led.record_candidate(make_candidate(market="HK"), Mode.PAPER)
         assert led.get_candidates(mode=Mode.PAPER)[0].market == "HK"
+
+
+class TestPerMarketStats:
+    """Trade stats are scoped per market/currency and never blended
+    (Loop.md §5.10: never one blended win rate)."""
+
+    def _close(self, led, symbol, currency, entry, exit_px, day):
+        from datetime import timedelta
+        t = T0 + timedelta(days=day)
+        led.record_fill(make_fill(order_id=f"e-{symbol}-{day}", symbol=symbol,
+                                  currency=currency, side=Side.BUY, qty=10,
+                                  px=entry, commission=1.0, ts=t))
+        led.record_fill(make_fill(order_id=f"x-{symbol}-{day}", symbol=symbol,
+                                  currency=currency, side=Side.SELL, qty=10,
+                                  px=exit_px, commission=1.0, ts=t + timedelta(days=1)))
+
+    def test_win_rate_not_blended_across_currencies(self, tmp_path):
+        led = Ledger(url=f"sqlite:///{tmp_path/'mm.db'}")
+        self._close(led, "NVDA", "USD", entry=100.0, exit_px=120.0, day=0)   # US win
+        self._close(led, "0700.HK", "HKD", entry=100.0, exit_px=80.0, day=2)  # HK loss
+
+        us = led.stats(Mode.PAPER, currency="USD")
+        hk = led.stats(Mode.PAPER, currency="HKD")
+        assert us.n_closed == 1 and us.win_rate == 1.0 and us.total_pnl > 0
+        assert hk.n_closed == 1 and hk.win_rate == 0.0 and hk.total_pnl < 0
+        # the two P&Ls are in different currencies and never summed together
+
+    def test_market_performance_lists_each_market_separately(self, tmp_path):
+        led = Ledger(url=f"sqlite:///{tmp_path/'mp.db'}")
+        self._close(led, "NVDA", "USD", 100.0, 120.0, 0)
+        self._close(led, "0700.HK", "HKD", 100.0, 80.0, 2)
+        perf = {p.market: p for p in led.market_performance(Mode.PAPER)}
+        assert perf["US"].currency == "USD" and perf["US"].stats.win_rate == 1.0
+        assert perf["HK"].currency == "HKD" and perf["HK"].stats.win_rate == 0.0
+
+    def test_trade_carries_currency_from_symbol(self, tmp_path):
+        led = Ledger(url=f"sqlite:///{tmp_path/'tc.db'}")
+        led.record_fill(make_fill(symbol="0700.HK", currency="HKD"))
+        t = led.get_trades(Mode.PAPER)[0]
+        assert t.currency == "HKD" and t.market == "HK"
