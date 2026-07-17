@@ -864,7 +864,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 # index, not the US SPY/QQQ/^VIX tape.
                 index_symbols=list(HK_INDEX_SYMBOLS),
                 anchor_symbol="^HSI",
-                vix_symbol="^VHSI",
+                vix_symbol="",  # no reliable HK vol index on the free feed; regime uses ^HSI trend
                 runtime=runtime,
                 telegram=telegram,
                 notify=notify,

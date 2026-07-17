@@ -408,10 +408,11 @@ class MarketMonitor(_BaseMonitor):
                 spy_long_sma = sma200 if sma200 is not None else sma50
 
         vix: Optional[float] = None
-        try:
-            vix = self._feed.get_quote(self._vix_symbol).last
-        except DataFeedError as exc:
-            logger.warning("VIX quote unavailable", extra={"error": str(exc)})
+        if self._vix_symbol:  # empty → this market has no usable vol index (HK)
+            try:
+                vix = self._feed.get_quote(self._vix_symbol).last
+            except DataFeedError as exc:
+                logger.warning("VIX quote unavailable", extra={"error": str(exc)})
 
         breadth = self._breadth_pct_above_50dma()
         regime = self._regime(spy_last, spy_sma50, spy_long_sma, vix)
