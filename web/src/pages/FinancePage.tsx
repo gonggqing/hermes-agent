@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
@@ -124,8 +124,15 @@ interface AccountNumbers {
 
 // ── Account / positions / orders / market / reports sections ──────────
 
-function EquitySparkline({ snapshots }: { snapshots: FinanceSnapshot[] }) {
+// Equity curve: a single-series line chart of account equity over time with
+// real x (time) / y (value) axes, recessive gridlines and a hover readout.
+// Hand-rolled SVG in the house style (currentColor driven by text-* classes,
+// uniform viewBox scaling — no preserveAspectRatio distortion).
+function EquityCurve({ snapshots }: { snapshots: FinanceSnapshot[] }) {
   const ft = useFinanceT();
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [hover, setHover] = useState<number | null>(null);
+
   if (snapshots.length < 2) {
     return (
       <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
@@ -133,42 +140,165 @@ function EquitySparkline({ snapshots }: { snapshots: FinanceSnapshot[] }) {
       </p>
     );
   }
+
+  const W = 720;
+  const H = 240;
+  const M = { top: 16, right: 16, bottom: 30, left: 64 };
+  const innerW = W - M.left - M.right;
+  const innerH = H - M.top - M.bottom;
+
   const values = snapshots.map((s) => s.equity);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const range = max - min || 1;
-  const W = 600;
-  const H = 80;
-  const PAD = 4;
-  const points = values
-    .map((v, i) => {
-      const x = PAD + (i / (values.length - 1)) * (W - PAD * 2);
-      const y = PAD + (1 - (v - min) / range) * (H - PAD * 2);
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
+  const rawMin = Math.min(...values);
+  const rawMax = Math.max(...values);
+  // pad the value range so the line never glues to the top/bottom edge.
+  const pad = (rawMax - rawMin || Math.abs(rawMax) || 1) * 0.08;
+  const yMin = rawMin - pad;
+  const yMax = rawMax + pad;
+  const yRange = yMax - yMin || 1;
+
+  const px = (i: number) => M.left + (i / (values.length - 1)) * innerW;
+  const py = (v: number) => M.top + (1 - (v - yMin) / yRange) * innerH;
+
+  const linePts = values
+    .map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`)
     .join(" ");
-  const delta = values[values.length - 1] - values[0];
+  const base = (M.top + innerH).toFixed(1);
+  const areaPts = `${px(0).toFixed(1)},${base} ${linePts} ${px(
+    values.length - 1,
+  ).toFixed(1)},${base}`;
+
+  const N_Y = 4;
+  const yTicks = Array.from(
+    { length: N_Y + 1 },
+    (_, k) => yMin + (k / N_Y) * yRange,
+  );
+  const last = values.length - 1;
+  const xIdx = Array.from(
+    new Set([0, Math.round(last / 3), Math.round((2 * last) / 3), last]),
+  );
+
+  const delta = values[last] - values[0];
+
+  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0) return;
+    const localX = ((e.clientX - rect.left) / rect.width) * W;
+    const frac = (localX - M.left) / innerW;
+    const idx = Math.max(0, Math.min(last, Math.round(frac * last)));
+    setHover(idx);
+  };
+
+  const hv = hover !== null ? snapshots[hover] : null;
+
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-2">
       <svg
+        ref={svgRef}
         viewBox={`0 0 ${W} ${H}`}
-        preserveAspectRatio="none"
-        className="h-20 w-full text-primary"
+        className="w-full text-primary"
+        style={{ aspectRatio: `${W} / ${H}` }}
         role="img"
         aria-label={ft.account.equityCurve}
+        onMouseMove={onMove}
+        onMouseLeave={() => setHover(null)}
       >
+        <defs>
+          <linearGradient id="equity-fill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="currentColor" stopOpacity="0.16" />
+            <stop offset="100%" stopColor="currentColor" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+
+        {/* horizontal gridlines + y-axis (value) labels */}
+        {yTicks.map((tv, k) => (
+          <g key={`y${k}`} className="text-muted-foreground">
+            <line
+              x1={M.left}
+              x2={W - M.right}
+              y1={py(tv)}
+              y2={py(tv)}
+              stroke="currentColor"
+              strokeOpacity={0.18}
+              strokeWidth={1}
+              vectorEffect="non-scaling-stroke"
+            />
+            <text
+              x={M.left - 10}
+              y={py(tv)}
+              dy="0.32em"
+              textAnchor="end"
+              fill="currentColor"
+              className="font-mono-ui"
+              fontSize={11}
+            >
+              {fmtMoney(tv)}
+            </text>
+          </g>
+        ))}
+
+        {/* x-axis (time) labels */}
+        {xIdx.map((i) => (
+          <text
+            key={`x${i}`}
+            x={px(i)}
+            y={H - 10}
+            textAnchor={i === 0 ? "start" : i === last ? "end" : "middle"}
+            fill="currentColor"
+            className="font-mondwest text-muted-foreground"
+            fontSize={11}
+          >
+            {fmtTs(snapshots[i].ts)}
+          </text>
+        ))}
+
+        {/* area + equity line */}
+        <polygon points={areaPts} fill="url(#equity-fill)" stroke="none" />
         <polyline
-          points={points}
+          points={linePts}
           fill="none"
           stroke="currentColor"
-          strokeWidth="1.5"
+          strokeWidth={2}
+          strokeLinejoin="round"
+          strokeLinecap="round"
           vectorEffect="non-scaling-stroke"
         />
+
+        {/* hover crosshair + marker */}
+        {hv && hover !== null && (
+          <g>
+            <line
+              x1={px(hover)}
+              x2={px(hover)}
+              y1={M.top}
+              y2={M.top + innerH}
+              stroke="currentColor"
+              strokeOpacity={0.35}
+              strokeWidth={1}
+              vectorEffect="non-scaling-stroke"
+            />
+            <circle cx={px(hover)} cy={py(hv.equity)} r={5} fill="none"
+              stroke="currentColor" strokeWidth={2} />
+            <circle cx={px(hover)} cy={py(hv.equity)} r={2} fill="currentColor" />
+          </g>
+        )}
       </svg>
+
+      {/* readout: the hovered point, else start → end with the net delta */}
       <div className="flex justify-between font-mondwest normal-case text-xs text-text-tertiary">
-        <span>{fmtTs(snapshots[0].ts)}</span>
-        <span className={pnlClass(delta)}>{fmtSigned(delta)}</span>
-        <span>{fmtTs(snapshots[snapshots.length - 1].ts)}</span>
+        {hv ? (
+          <>
+            <span>{fmtTs(hv.ts)}</span>
+            <span className="text-foreground">
+              {ft.account.equity}: {fmtMoney(hv.equity)}
+            </span>
+          </>
+        ) : (
+          <>
+            <span>{fmtTs(snapshots[0].ts)}</span>
+            <span className={pnlClass(delta)}>{fmtSigned(delta)}</span>
+            <span>{fmtTs(snapshots[last].ts)}</span>
+          </>
+        )}
       </div>
     </div>
   );
@@ -263,7 +393,7 @@ function AccountSection({
           </div>
         </CardHeader>
         <CardContent>
-          <EquitySparkline snapshots={snapshots} />
+          <EquityCurve snapshots={snapshots} />
         </CardContent>
       </Card>
     </div>

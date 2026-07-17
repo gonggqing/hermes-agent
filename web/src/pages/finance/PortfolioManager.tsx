@@ -95,6 +95,11 @@ import {
 
 type ShowToast = (message: string, type: "error" | "success") => void;
 
+// Portfolio live-price auto-refresh cadence. 60s balances freshness against
+// the yfinance rate limit for imported/real holdings at swing cadence; the
+// poll pauses entirely while the tab is hidden.
+const AUTO_REFRESH_MS = 60_000;
+
 // ── Small shared presentational bits ─────────────────────────────────────
 
 function Loading() {
@@ -497,6 +502,37 @@ function ValuationView({
   }, [accountId, environment, isAggregate, riskOnly, reloadToken, localReload]);
 
   const reload = () => setLocalReload((n) => n + 1);
+
+  // Auto-refresh live marks every 60s while the tab is visible (paused when
+  // the browser tab/window is hidden, to spare the yfinance quota). Silent:
+  // no toast/spinner, it swallows transient errors and keeps the last data,
+  // and an in-flight tick never overlaps itself or a manual refresh.
+  const autoBusy = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      if (document.visibilityState !== "visible" || autoBusy.current) return;
+      autoBusy.current = true;
+      try {
+        const res = await api.financeRefreshMarks();
+        if (!cancelled && res.ok && res.data !== null) reload();
+      } catch {
+        /* background refresh: ignore, the last valuation stays on screen */
+      } finally {
+        autoBusy.current = false;
+      }
+    };
+    const id = window.setInterval(() => void tick(), AUTO_REFRESH_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
 
   const refresh = async () => {
     setRefreshing(true);
