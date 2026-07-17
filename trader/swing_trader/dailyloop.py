@@ -81,6 +81,11 @@ _PRE_CUTOFF_REMINDER = time(11, 0)
 _CUTOFF_TIME = time(11, 30)
 _MARKET_CLOSE_TIME = time(16, 0)
 _EXECUTION_RETRY_INTERVAL = timedelta(minutes=5)
+_REVIEW_RETRY_DELAYS = (
+    timedelta(minutes=1),
+    timedelta(minutes=5),
+)
+_REVIEW_MAX_ATTEMPTS = 3
 
 __all__ = ["DailyLoop", "TelegramSurfaceAdapter"]
 
@@ -1105,10 +1110,52 @@ class DailyLoop:
             )
         )
 
+    def _post_approval_review_failures(self, candidate_id: str) -> list[AuditEvent]:
+        return sorted(
+            (
+                event
+                for event in self.ledger.get_audit(
+                    mode=self.mode, candidate_id=candidate_id
+                )
+                if event.action == "post_approval_review_failed"
+            ),
+            key=lambda event: event.ts,
+        )
+
+    def _review_retry_due(self, candidate_id: str, now: datetime) -> bool:
+        """Bound failed primary-model calls and preserve retry state on restart."""
+        failures = self._post_approval_review_failures(candidate_id)
+        if len(failures) >= _REVIEW_MAX_ATTEMPTS:
+            return False
+        if not failures:
+            return True
+        delay = _REVIEW_RETRY_DELAYS[len(failures) - 1]
+        return now >= failures[-1].ts + delay
+
+    def _record_review_failure(
+        self, candidate: CandidateOrder, now: datetime, detail: str
+    ) -> bool:
+        """Persist one bounded attempt; return True only for the first alert."""
+        failures = self._post_approval_review_failures(candidate.id)
+        attempt = len(failures) + 1
+        if attempt > _REVIEW_MAX_ATTEMPTS:
+            return False
+        self._audit_once(
+            candidate,
+            now,
+            action="post_approval_review_failed",
+            prev=candidate.status,
+            new=candidate.status,
+            detail=f"attempt {attempt}/{_REVIEW_MAX_ATTEMPTS}: {detail}",
+            key=f"post-approval-review-failed:{candidate.id}:{attempt}",
+        )
+        return not failures
+
     def _launch_post_approval_reviews(
         self, candidates: list[CandidateOrder]
     ) -> None:
-        """Start one non-blocking fresh-market review per first approval."""
+        """Start one bounded, non-blocking fresh-market review per approval."""
+        now = self.clock()
         for candidate in candidates:
             if self._post_approval_review_complete(candidate.id):
                 continue
@@ -1119,6 +1166,8 @@ class DailyLoop:
                         f"⚠️ {candidate.symbol} 已获首次批准，但主模型复核不可用；"
                         "尚未挂单，若截止前未恢复将自动过期。"
                     )
+                continue
+            if not self._review_retry_due(candidate.id, now):
                 continue
             with self._review_lock:
                 if candidate.id in self._review_inflight:
@@ -1140,10 +1189,14 @@ class DailyLoop:
                 bars = self.feed.get_bars(candidate.symbol, "1d", limit=20)
                 news = self.feed.get_news(candidate.symbol, limit=8)
             except (DataFeedError, ValueError) as exc:
-                if self.telegram is not None:
+                first_failure = self._record_review_failure(
+                    candidate, now, f"market data unavailable: {type(exc).__name__}"
+                )
+                if first_failure and self.telegram is not None:
                     self.telegram.push_recovery_notice(
                         f"⚠️ {candidate.symbol} 复核行情不可用（{type(exc).__name__}）；"
-                        "尚未挂单，截止前未恢复将自动过期。"
+                        "尚未挂单。系统将按 1/5 分钟间隔有限重试，期间不重复提醒；"
+                        "截止前未恢复将自动过期。"
                     )
                 return
             review = self.order_reviewer.review(
@@ -1154,9 +1207,13 @@ class DailyLoop:
                 self._market.risk_on_off if self._market else "neutral",
             )
             if review is None:
-                if self.telegram is not None:
+                first_failure = self._record_review_failure(
+                    candidate, now, "primary-model response unavailable or invalid"
+                )
+                if first_failure and self.telegram is not None:
                     self.telegram.push_recovery_notice(
                         f"⚠️ {candidate.symbol} 主模型复核失败；尚未挂单，"
+                        "系统将按 1/5 分钟间隔最多尝试 3 次，期间不重复提醒；"
                         "截止前未恢复将自动过期。"
                     )
                 return

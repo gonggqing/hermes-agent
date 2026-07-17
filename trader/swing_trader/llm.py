@@ -196,7 +196,36 @@ def http_complete(
         timeout=settings.timeout,
     )
     resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
+    message = resp.json()["choices"][0]["message"]
+    content = message.get("content")
+    if isinstance(content, str) and content.strip():
+        return content
+
+    # Reasoning providers are not perfectly consistent about the final answer
+    # field.  MiniMax has returned either ``reasoning_content`` or structured
+    # ``reasoning_details`` when ``reasoning_split`` is enabled.  Recover text
+    # from those documented-compatible shapes, while still failing closed when
+    # the response contains no usable text at all.
+    reasoning = message.get("reasoning_content")
+    if isinstance(reasoning, str) and reasoning.strip():
+        return reasoning
+    details = message.get("reasoning_details")
+    if isinstance(details, list):
+        parts: list[str] = []
+        for item in details:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                for key in ("text", "content", "reasoning"):
+                    value = item.get(key)
+                    if isinstance(value, str) and value.strip():
+                        parts.append(value)
+                        break
+        joined = "\n".join(parts).strip()
+        if joined:
+            return joined
+    fields = ",".join(sorted(str(key) for key in message))
+    raise ValueError(f"completion message has no usable content (fields={fields})")
 
 
 class LLMAnalyst:

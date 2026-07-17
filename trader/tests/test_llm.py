@@ -155,3 +155,23 @@ def test_http_complete_splits_minimax_reasoning_only(monkeypatch):
     assert http_complete(other, "system", "prompt") == '{"ok":true}'
     assert payloads[0]["reasoning_split"] is True
     assert "reasoning_split" not in payloads[1]
+
+
+def test_http_complete_recovers_provider_reasoning_fields(monkeypatch):
+    messages = iter([
+        {"reasoning_content": '{"action":"keep"}'},
+        {"reasoning_details": [{"type": "text", "text": '{"action":"keep"}'}]},
+    ])
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": next(messages)}]}
+
+    monkeypatch.setattr("requests.post", lambda *_args, **_kwargs: _Response())
+    settings = LLMSettings("https://api.minimaxi.com/v1", "MiniMax-M3", "secret")
+
+    assert http_complete(settings, "system", "prompt") == '{"action":"keep"}'
+    assert http_complete(settings, "system", "prompt") == '{"action":"keep"}'

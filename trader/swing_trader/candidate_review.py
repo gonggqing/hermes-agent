@@ -51,7 +51,15 @@ class LLMCandidateReviewer:
         complete: Optional[Callable[[LLMSettings, str, str], str]] = None,
     ) -> None:
         self.settings = settings
-        self._complete = complete or http_complete
+        # Primary reasoning models can spend most of an 800-token completion
+        # budget before emitting the small JSON verdict.  Give this narrow,
+        # fail-closed review enough headroom without changing cheap subagent
+        # calls that share ``http_complete``.
+        self._complete = complete or (
+            lambda cfg, system, prompt: http_complete(
+                cfg, system, prompt, max_tokens=2_000
+            )
+        )
 
     def review(
         self,

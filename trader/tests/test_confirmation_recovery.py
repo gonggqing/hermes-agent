@@ -149,3 +149,53 @@ def test_pre_cutoff_warning_is_sent_once(recovery_env):
 
     assert len(telegram.notices) == 1
     assert "不足 30 分钟" in telegram.notices[0]
+
+
+def test_failed_primary_review_is_bounded_and_alerted_once(recovery_env):
+    loop, _, ledger, _, feed, clock, day = recovery_env
+    candidate_id, service = _seed_approved(ledger, feed, clock, day)
+    candidate = service.get(candidate_id)[0]
+    loop._confirmation = service
+
+    class ReviewerStub:
+        def __init__(self):
+            self.calls = 0
+
+        def review(self, *_args):
+            self.calls += 1
+            return None
+
+    class TelegramStub:
+        def __init__(self):
+            self.notices = []
+
+        def push_recovery_notice(self, text):
+            self.notices.append(text)
+
+    reviewer = ReviewerStub()
+    telegram = TelegramStub()
+    loop.order_reviewer = reviewer
+    loop.telegram = telegram
+
+    first = clock.set_et(day, 10, 45)
+    loop._run_post_approval_review(candidate)
+    assert reviewer.calls == 1
+    assert len(telegram.notices) == 1
+    assert "最多尝试 3 次" in telegram.notices[0]
+    assert loop._review_retry_due(candidate_id, first) is False
+
+    second = clock.set_et(day, 10, 46)
+    assert loop._review_retry_due(candidate_id, second) is True
+    loop._run_post_approval_review(candidate)
+    assert reviewer.calls == 2 and len(telegram.notices) == 1
+
+    third = clock.set_et(day, 10, 51)
+    assert loop._review_retry_due(candidate_id, third) is True
+    loop._run_post_approval_review(candidate)
+    assert reviewer.calls == 3 and len(telegram.notices) == 1
+    assert loop._review_retry_due(candidate_id, clock.set_et(day, 11, 20)) is False
+    failures = [
+        event for event in ledger.get_audit(candidate_id=candidate_id)
+        if event.action == "post_approval_review_failed"
+    ]
+    assert len(failures) == 3
