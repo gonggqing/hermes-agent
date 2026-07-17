@@ -142,6 +142,11 @@ class TelegramSurfaceAdapter:
         self._candidate_account_label = candidate_account_label
         self._candidate_reasoner: Optional[Callable[[CandidateOrder], Optional[str]]] = None
         self._by_short_id: dict[str, str] = {}
+        # short-id -> the ConfirmationService that OWNS that candidate. Lets a
+        # single Telegram poller serve more than one concurrent market (US + HK):
+        # a candidate's callback routes to its own service even when the poll is
+        # driven by a different loop. Falls back to the polled service.
+        self._service_by_short_id: dict[str, ConfirmationService] = {}
         self._offset: Optional[int] = None
         self._bot_username: Optional[str] = None
         self._bot_identified = False
@@ -253,19 +258,34 @@ class TelegramSurfaceAdapter:
             username in self._allowed_users or user_id in self._allowed_users
         )
 
-    def push_cards(self, candidates: list[CandidateOrder], preamble: str = "") -> None:
+    def push_cards(
+        self,
+        candidates: list[CandidateOrder],
+        preamble: str = "",
+        service: Optional[ConfirmationService] = None,
+    ) -> None:
         if preamble:
             self._transport.send_message(self._chat_id, preamble)
         for cand in candidates:
-            self._by_short_id[cand.id[:CALLBACK_ID_LEN]] = cand.id
+            short = cand.id[:CALLBACK_ID_LEN]
+            self._by_short_id[short] = cand.id
+            if service is not None:
+                self._service_by_short_id[short] = service
             self._transport.send_message(
                 self._chat_id, render_card(cand), reply_markup=build_keyboard(cand)
             )
 
-    def restore_cards(self, candidates: list[CandidateOrder]) -> None:
+    def restore_cards(
+        self,
+        candidates: list[CandidateOrder],
+        service: Optional[ConfirmationService] = None,
+    ) -> None:
         """Restore callback-id routing without sending duplicate cards."""
         for cand in candidates:
-            self._by_short_id[cand.id[:CALLBACK_ID_LEN]] = cand.id
+            short = cand.id[:CALLBACK_ID_LEN]
+            self._by_short_id[short] = cand.id
+            if service is not None:
+                self._service_by_short_id[short] = service
 
     def push_recovery_notice(self, text: str) -> None:
         """Send one durable confirmation/recovery status line to Telegram."""
@@ -344,7 +364,11 @@ class TelegramSurfaceAdapter:
                 cb_id, data, callback.get("from", {}) or {}, now_utc
             )
             return
-        full_id = self._by_short_id.get(str(data.get("id", "")))
+        short = str(data.get("id", ""))
+        full_id = self._by_short_id.get(short)
+        # Route to the candidate's OWNING service (US or HK), falling back to the
+        # service the current poll was driven with.
+        service = self._service_by_short_id.get(short, service)
         action = {"ok": "approve", "no": "reject", "edit": "edit"}.get(data.get("a"))
         if full_id is None or action is None:
             if data.get("a") == "edit":
@@ -873,7 +897,7 @@ class DailyLoop:
         # asks for permission. Both live in the same chat.
         self.notify(preamble)
         if self.telegram is not None:
-            self.telegram.push_cards(published)
+            self.telegram.push_cards(published, service=self._confirmation)
         else:
             self.notify(
                 f"{len(published)} candidate(s) await review in the Finance "
@@ -1073,7 +1097,7 @@ class DailyLoop:
         if self.runtime is not None:
             self.runtime.confirmation = service
         if self.telegram is not None:
-            self.telegram.restore_cards(restored)
+            self.telegram.restore_cards(restored, service=service)
         return restored
 
     def recover_confirmation_state(self, now: datetime | None = None) -> dict:
@@ -1302,7 +1326,7 @@ class DailyLoop:
                     f"🔁 {candidate.symbol} 最新行情触发参数/观点修订；"
                     "原批准已失效，请确认下面的新卡片。"
                 )
-                self.telegram.push_cards([pushed])
+                self.telegram.push_cards([pushed], service=self._confirmation)
         except Exception:
             logger.exception(
                 "post-approval candidate review crashed",

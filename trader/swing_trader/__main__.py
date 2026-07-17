@@ -832,54 +832,102 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     # freshness and persisted brief. It remains research-only.
     hk_runner = None
     hk_session = None
+    hk_loop = None
     if settings.hk_session_enabled:
         from zoneinfo import ZoneInfo
 
         from swing_trader.hk_watchlist import HK_INDEX_SYMBOLS, build_hk_watchlist
         from swing_trader.research_session import ResearchSession
-        from swing_trader.scheduler import HK_SCHEDULE
+        from swing_trader.scheduler import HK_SCHEDULE, HK_TRADING_SCHEDULE
 
         hk_wl = build_hk_watchlist(settings.hk_symbols)
         hk_feed = RetryingFeed(YFinanceFeed())
-        hk_session = ResearchSession(
-            market_id="HK",
-            market_label="Hong Kong",
-            feed=hk_feed,
-            ledger=ledger,
-            symbols=hk_wl.symbols,
-            watchlist_lookup=hk_wl.lookup,
-            trading_tz=ZoneInfo(settings.hk_market_tz),
-            index_symbols=list(HK_INDEX_SYMBOLS),
-            mode=settings.mode,
-            runtime=runtime,
-            notify=notify,
-            llm_analyst=(
-                LLMAnalyst(search_llm_settings) if search_llm_settings else None
-            ),
-            knowledge=knowledge,
-            knowledge_index=knowledge_index,
-            focus_note="香港独立研究: 科技 / 平台 / 半导体供应链",
-            lang="zh",
-            clock=runtime.clock,
-            discovery_scanner=MarketDiscoveryScanner(
+        if settings.hk_orders_enabled:
+            # ORDER-CAPABLE HK session on the SHARED (HKD-funded) broker + ledger,
+            # behind the SAME §3 boundaries as US: RiskEngine authoritative,
+            # human confirms, DAY-entry fill-chain lifecycle, SEHK tick/lot/fee
+            # rules. Its own 10:30-11:30 Asia/Hong_Kong window (HK_TRADING_SCHEDULE)
+            # sits ~12h from the US window, so the single Telegram poller and the
+            # per-candidate service registry route each market's cards correctly;
+            # the market discriminator keeps US and HK candidates from colliding.
+            hk_loop = DailyLoop(
                 hk_feed,
-                discovery_universe,
-                benchmark_symbol="^HSI",
-                min_adv=5_000_000,
+                broker,
+                ledger,
+                mode=settings.mode,
+                market_id="HK",
+                schedule=HK_TRADING_SCHEDULE,
+                live_orders_allowed=settings.live_orders_allowed,
+                risk_params=portfolio_risk_params,
+                symbols=hk_wl.symbols,
+                runtime=runtime,
+                telegram=telegram,
+                notify=notify,
+                fundamentals=fundamentals,
+                earnings_provider=earnings_provider,
+                llm_analyst=llm_analyst,
+                order_reviewer=order_reviewer,
+                order_review_required=True,
+                knowledge=knowledge,
+                knowledge_index=knowledge_index,
+                kill_switch=kill_switch,
+                discovery_scanner=MarketDiscoveryScanner(
+                    hk_feed,
+                    discovery_universe,
+                    benchmark_symbol="^HSI",
+                    min_adv=5_000_000,
+                    clock=runtime.clock,
+                ),
+            )
+            hk_runner = DailyLoopRunner(
+                hk_loop.callbacks(), clock=runtime.clock,
+                schedule=HK_TRADING_SCHEDULE,
+            )
+            runtime.run_research["hk"] = hk_loop.run_research_now
+            logger.info(
+                "hk ORDER-CAPABLE session enabled (paper)",
+                extra={"n_symbols": len(hk_wl.symbols)},
+            )
+        else:
+            hk_session = ResearchSession(
+                market_id="HK",
+                market_label="Hong Kong",
+                feed=hk_feed,
+                ledger=ledger,
+                symbols=hk_wl.symbols,
+                watchlist_lookup=hk_wl.lookup,
+                trading_tz=ZoneInfo(settings.hk_market_tz),
+                index_symbols=list(HK_INDEX_SYMBOLS),
+                mode=settings.mode,
+                runtime=runtime,
+                notify=notify,
+                llm_analyst=(
+                    LLMAnalyst(search_llm_settings) if search_llm_settings else None
+                ),
+                knowledge=knowledge,
+                knowledge_index=knowledge_index,
+                focus_note="香港独立研究: 科技 / 平台 / 半导体供应链",
+                lang="zh",
                 clock=runtime.clock,
-            ),
-        )
-        hk_runner = DailyLoopRunner(
-            {
-                event: callback
-                for event, callback in hk_session.callbacks().items()
-                if event is not Event.PUSH_CANDIDATES
-            },
-            clock=runtime.clock,
-            schedule=HK_SCHEDULE,
-        )
-        runtime.run_research["hk"] = hk_session.run_now
-        logger.info("hk research session enabled", extra={"n_symbols": len(hk_wl.symbols)})
+                discovery_scanner=MarketDiscoveryScanner(
+                    hk_feed,
+                    discovery_universe,
+                    benchmark_symbol="^HSI",
+                    min_adv=5_000_000,
+                    clock=runtime.clock,
+                ),
+            )
+            hk_runner = DailyLoopRunner(
+                {
+                    event: callback
+                    for event, callback in hk_session.callbacks().items()
+                    if event is not Event.PUSH_CANDIDATES
+                },
+                clock=runtime.clock,
+                schedule=HK_SCHEDULE,
+            )
+            runtime.run_research["hk"] = hk_session.run_now
+            logger.info("hk research session enabled", extra={"n_symbols": len(hk_wl.symbols)})
 
     # KR (Korea) semiconductor RESEARCH session (human directive 2026-07-14): a
     # narrow semi-only read (memory giants + HBM chain) whose sentiment leads/
@@ -995,6 +1043,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 loop.recover_confirmation_state()
             except Exception:
                 logger.exception("startup confirmation recovery failed")
+            if hk_loop is not None:
+                try:
+                    hk_loop.recover_confirmation_state()
+                except Exception:
+                    logger.exception("startup HK confirmation recovery failed")
             for market in missing_markets:
                 if market in runtime.research_running:
                     continue
