@@ -3609,6 +3609,7 @@ export interface FinanceBriefRegime {
 export interface FinanceBriefRisk {
   equity: number;
   cash: number;
+  currency: string;
   day_pnl: number;
   drawdown_pct: number;
   breaker_state: string;

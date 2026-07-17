@@ -271,8 +271,14 @@ function RiskStrip({
             )}
             <Stats
               items={[
-                { label: ft.brief.risk.equity, value: fmtMoney(risk.equity) },
-                { label: ft.brief.risk.cash, value: fmtMoney(risk.cash) },
+                {
+                  label: ft.brief.risk.equity,
+                  value: `${fmtMoney(risk.equity)} ${risk.currency ?? ""}`.trim(),
+                },
+                {
+                  label: ft.brief.risk.cash,
+                  value: `${fmtMoney(risk.cash)} ${risk.currency ?? ""}`.trim(),
+                },
                 {
                   label: ft.brief.risk.dayPnl,
                   value: {
