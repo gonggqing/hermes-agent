@@ -163,7 +163,8 @@ class TestSessionParameterization:
         from datetime import time as _t
         days = trading_days(date(2026, 7, 13), 2)
         series, warmup = build_sim_series(SYMBOLS, days)
-        feed = SimFeed(series); feed.set_day(warmup)
+        feed = SimFeed(series)
+        feed.set_day(warmup)
         ledger = Ledger(url=f"sqlite:///{tmp_path/'hk.db'}")
         clock = MutableClock(now=datetime(2026, 7, 13, 2, tzinfo=timezone.utc))
         loop = DailyLoop(feed, PaperBroker(starting_cash=50_000.0), ledger,
