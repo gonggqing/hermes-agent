@@ -1800,6 +1800,7 @@ class DailyLoop:
                 discovery=self._discovery,
                 currency=self._brief_currency,
             )
+            slot = self.market_id.lower()  # per-market brief slot (us/hk/cn/kr)
             if self.brief_writer is not None:
                 brief.narrative = self.brief_writer.write(
                     brief,
@@ -1810,9 +1811,11 @@ class DailyLoop:
             else:
                 # Intraday monitor refreshes update deterministic evidence but
                 # must not erase the last promised 09:00/21:00 primary-model
-                # brief.  The dedicated brief coordinator explicitly clears
-                # this field before generating the next edition.
-                previous = self.runtime.latest_brief
+                # narrative. Read THIS market's previous brief (not the US slot)
+                # so an HK refresh keeps the HK narrative, never the US one.
+                previous = self.runtime.latest_briefs.get(slot) or (
+                    self.runtime.latest_brief if self.market_id == "US" else None
+                )
                 if (
                     isinstance(previous, dict)
                     and previous.get("narrative") is not None
@@ -1823,10 +1826,14 @@ class DailyLoop:
                         previous["narrative"]
                     )
             dump = brief.model_dump(mode="json")
-            self.runtime.latest_brief = dump
+            # Write the PER-MARKET slot; only US owns the canonical latest_brief
+            # so an HK/CN/KR refresh never clobbers the US brief.
+            self.runtime.latest_briefs[slot] = dump
+            if self.market_id == "US":
+                self.runtime.latest_brief = dump
             from swing_trader.prediction_ledger import persist_brief_artifacts
 
-            persist_brief_artifacts(self.runtime, self.market_id.lower(), dump)
+            persist_brief_artifacts(self.runtime, slot, dump)
         except Exception:  # brief must never break the trading loop
             logger.exception("research brief build failed")
 

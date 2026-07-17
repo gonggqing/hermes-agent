@@ -163,6 +163,7 @@ class RiskView(BaseModel):
 
     equity: float
     cash: float
+    currency: str = "USD"  # the sleeve equity/cash are reported in (HK: HKD)
     day_pnl: float
     drawdown_pct: float
     breaker_state: str
@@ -559,6 +560,7 @@ def _risk_view(
         return RiskView(
             equity=equity,
             cash=cash,
+            currency=currency or snap.base_currency,
             day_pnl=snap.day_pnl,
             drawdown_pct=snap.drawdown_pct,
             breaker_state=snap.breaker_state.value,
@@ -594,6 +596,7 @@ def _risk_view(
             snap.cash_by_currency.get(currency, snap.cash)
             if currency else snap.cash
         ),
+        currency=currency or snap.base_currency,
         day_pnl=snap.day_pnl,
         drawdown_pct=snap.drawdown_pct,
         breaker_state=snap.breaker_state.value,
