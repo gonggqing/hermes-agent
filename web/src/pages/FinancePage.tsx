@@ -540,7 +540,19 @@ function PositionsCard({ view }: { view: FinanceAccountView | null }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">{ft.positions.title}</CardTitle>
+        <div className="flex flex-wrap items-center gap-2">
+          <CardTitle className="text-base">{ft.positions.title}</CardTitle>
+          {view && view.positions.length > 0 && (
+            <Badge tone={view.marks_live ? "success" : "secondary"}>
+              {view.marks_live
+                ? ft.positions.marksLive
+                : ft.positions.marksClose.replace(
+                    "{time}",
+                    view.marks_as_of ? fmtTs(view.marks_as_of) : "—",
+                  )}
+            </Badge>
+          )}
+        </div>
       </CardHeader>
       <CardContent>
         {view === null ? (
@@ -559,6 +571,9 @@ function PositionsCard({ view }: { view: FinanceAccountView | null }) {
                   <th className="text-left py-2 pr-4 font-medium">
                     {ft.positions.symbol}
                   </th>
+                  <th className="text-left py-2 px-4 font-medium">
+                    {ft.positions.market}
+                  </th>
                   <th className="text-right py-2 px-4 font-medium">
                     {ft.positions.qty}
                   </th>
@@ -572,7 +587,7 @@ function PositionsCard({ view }: { view: FinanceAccountView | null }) {
                     {ft.positions.upnl}
                   </th>
                   <th className="text-left py-2 pl-4 font-medium">
-                    {ft.positions.pool}
+                    {ft.positions.role}
                   </th>
                 </tr>
               </thead>
@@ -584,9 +599,9 @@ function PositionsCard({ view }: { view: FinanceAccountView | null }) {
                   >
                     <td className="py-2 pr-4">
                       <span className="font-mono-ui text-xs">{p.symbol}</span>
-                      <span className="ml-2 text-xs text-muted-foreground">
-                        {p.currency}
-                      </span>
+                    </td>
+                    <td className="py-2 px-4">
+                      <Badge tone="outline">{p.market || p.currency}</Badge>
                     </td>
                     <td className="text-right py-2 px-4">{fmtQty(p.qty)}</td>
                     <td className="text-right py-2 px-4">
@@ -598,7 +613,10 @@ function PositionsCard({ view }: { view: FinanceAccountView | null }) {
                     <td
                       className={cn("text-right py-2 px-4", pnlClass(p.upnl))}
                     >
-                      {fmtSigned(p.upnl)}
+                      {fmtSigned(p.upnl)}{" "}
+                      <span className="text-xs text-muted-foreground">
+                        {p.currency}
+                      </span>
                     </td>
                     <td className="py-2 pl-4">
                       <Badge tone="secondary">{p.pool}</Badge>

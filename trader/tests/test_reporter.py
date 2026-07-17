@@ -436,3 +436,28 @@ def test_no_secrets_in_any_output(seeded_ledger: Ledger) -> None:
     ]
     for text in outputs:
         assert not SECRET_PATTERN.search(text)
+
+
+def test_build_account_view_overlays_live_quotes(seeded_ledger: Ledger) -> None:
+    """A live-quote overlay refreshes mkt_px/uPnL for DISPLAY and flags the
+    marks as live+as-of, without the broker being mutated (Loop.md §5.9)."""
+    broker = FakeBroker(make_snapshot(), positions=[make_position()], orders=[])
+    view = build_account_view(
+        broker, seeded_ledger, Mode.PAPER,
+        quotes={"NVDA": 110.0}, price_as_of=T_REPORT,
+    )
+    p = view.positions[0]
+    assert p.mkt_px == 110.0
+    assert p.upnl == pytest.approx(100.0)  # (110-100)*10, recomputed off live
+    assert p.market == "US" and p.price_live is True and p.price_as_of == T_REPORT
+    assert view.marks_live is True and view.marks_as_of == T_REPORT
+
+
+def test_build_account_view_flags_close_marks_when_no_overlay(
+    seeded_ledger: Ledger,
+) -> None:
+    broker = FakeBroker(make_snapshot(), positions=[make_position()], orders=[])
+    view = build_account_view(broker, seeded_ledger, Mode.PAPER)
+    assert view.marks_live is False
+    assert view.positions[0].price_live is False
+    assert view.positions[0].market == "US"

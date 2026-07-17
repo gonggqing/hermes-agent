@@ -38,6 +38,7 @@ from swing_trader.schemas import (
     Position,
     Role,
     Side,
+    market_for_currency,
 )
 
 __all__ = [
@@ -78,11 +79,14 @@ class PositionView(BaseModel):
 
     symbol: str
     currency: str
+    market: str = ""  # US / HK / … derived from currency (clarity vs the role)
     qty: float
     avg_px: float
     mkt_px: Optional[float] = None
     upnl: Optional[float] = None
     pool: Role = Role.ROTATION
+    price_as_of: Optional[datetime] = None  # when mkt_px was observed
+    price_live: bool = False  # True = fresh feed quote; False = last close mark
 
 
 class OpenOrderView(BaseModel):
@@ -137,6 +141,11 @@ class AccountView(BaseModel):
     positions: list[PositionView]
     open_orders: list[OpenOrderView]
     stats: StatsView
+    # Freshness of the position marks the equity/uPnL rest on. When a live feed
+    # overlay is applied for display, marks_live=True and marks_as_of=now;
+    # otherwise the marks are the last daily close (Loop.md §5.9 honesty).
+    marks_live: bool = False
+    marks_as_of: Optional[datetime] = None
 
     @field_validator("ts")
     @classmethod
@@ -221,15 +230,28 @@ def _to_stats_view(stats: TradeStats) -> StatsView:
     )
 
 
-def _to_position_view(pos: Position) -> PositionView:
+def _to_position_view(
+    pos: Position,
+    *,
+    live_px: Optional[float] = None,
+    as_of: Optional[datetime] = None,
+) -> PositionView:
+    """One holding row. When ``live_px`` is given it overrides the broker's
+    last-close mark FOR DISPLAY and uPnL is recomputed off it (the broker's own
+    marks/equity/breaker are untouched)."""
+    mkt = live_px if live_px is not None else pos.mkt_px
+    upnl = (mkt - pos.avg_px) * pos.qty if mkt is not None else pos.upnl
     return PositionView(
         symbol=pos.symbol,
         currency=pos.currency,
+        market=market_for_currency(pos.currency),
         qty=pos.qty,
         avg_px=pos.avg_px,
-        mkt_px=pos.mkt_px,
-        upnl=pos.upnl,
+        mkt_px=mkt,
+        upnl=upnl,
         pool=pos.pool,
+        price_as_of=as_of if live_px is not None else None,
+        price_live=live_px is not None,
     )
 
 
@@ -247,37 +269,79 @@ def _to_order_view(order: Order) -> OpenOrderView:
 
 
 def build_account_view(
-    broker: BrokerInterface, ledger: Ledger, mode: Mode | str
+    broker: BrokerInterface,
+    ledger: Ledger,
+    mode: Mode | str,
+    quotes: Optional[dict[str, float]] = None,
+    price_as_of: Optional[datetime] = None,
 ) -> AccountView:
     """Assemble the account view for one mode (paper/live switch, Loop.md §5.9).
 
-    Read-only: broker supplies live account state, positions and working
-    orders; the ledger supplies cumulative trade statistics. Everything is
-    filtered to ``mode`` so paper and live histories never mix.
+    Read-only: broker supplies account state, positions and working orders; the
+    ledger supplies cumulative trade statistics. Everything is filtered to
+    ``mode`` so paper and live histories never mix.
+
+    ``quotes`` (symbol -> last price) overlays LIVE marks for display only: each
+    position's ``mkt_px``/``upnl`` and the equity/uPnL aggregates are recomputed
+    off the live price, while the broker's own marks, ``day_open_equity`` and
+    breaker stay on the last-close basis. ``marks_live``/``marks_as_of`` tell the
+    UI which basis it is looking at, so a stale close is never shown as current.
     """
     m = Mode(mode)
     snap = broker.get_account()
-    positions = [_to_position_view(p) for p in broker.get_positions()]
+    raw = broker.get_positions()
     open_orders = [
         _to_order_view(o) for o in broker.get_orders(active_only=True) if o.mode is m
     ]
     stats = _to_stats_view(ledger.stats(m))
+
+    if quotes:
+        positions = [
+            _to_position_view(p, live_px=quotes.get(p.symbol), as_of=price_as_of)
+            for p in raw
+        ]
+        fx = snap.fx_to_base
+        # per-currency equity = cash sleeve + Σ qty·live_mark; cash is unchanged
+        equity_by_currency = dict(snap.cash_by_currency)
+        upnl_base = 0.0
+        for p in raw:
+            mark = quotes.get(p.symbol)
+            mark = mark if mark is not None else p.mkt_px
+            if mark is None:
+                continue
+            equity_by_currency[p.currency] = (
+                equity_by_currency.get(p.currency, 0.0) + p.qty * mark
+            )
+            upnl_base += (mark - p.avg_px) * p.qty * fx.get(p.currency, 0.0)
+        equity_base = sum(
+            v * fx.get(c, 0.0) for c, v in equity_by_currency.items()
+        )
+        equity, upnl, equity_by_cur = equity_base, upnl_base, equity_by_currency
+        marks_live, marks_as_of = True, price_as_of
+    else:
+        positions = [_to_position_view(p) for p in raw]
+        equity, upnl = snap.equity, snap.upnl
+        equity_by_cur = snap.equity_by_currency
+        marks_live, marks_as_of = False, snap.ts
+
     return AccountView(
         mode=m,
         ts=snap.ts,
-        equity=snap.equity,
+        equity=equity,
         cash=snap.cash,
-        upnl=snap.upnl,
-        day_pnl=snap.day_pnl,
+        upnl=upnl,
+        day_pnl=snap.day_pnl,  # session metric — keeps the broker's close basis
         drawdown_pct=snap.drawdown_pct,
         breaker_state=snap.breaker_state,
         base_currency=snap.base_currency,
         cash_by_currency=snap.cash_by_currency,
-        equity_by_currency=snap.equity_by_currency,
+        equity_by_currency=equity_by_cur,
         fx_to_base=snap.fx_to_base,
         positions=positions,
         open_orders=open_orders,
         stats=stats,
+        marks_live=marks_live,
+        marks_as_of=marks_as_of,
     )
 
 

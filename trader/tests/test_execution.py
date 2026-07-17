@@ -392,3 +392,32 @@ class TestHKTickGuard:
         report = engine.execute([c], {"0700.HK": 20.05}, lunch)
         assert report.placed == []
         assert "market closed" in report.skipped[0][1]
+
+
+class TestHKExitDuringLunch:
+    """A human-approved HK exit must NOT be dropped during the lunch break —
+    only NEW ENTRIES are gated on trading hours (the exit rests until the
+    session resumes; blocking it would discard the exit intent)."""
+
+    def test_sell_exit_not_dropped_during_lunch(self, tmp_path):
+        broker = PaperBroker(
+            starting_cash_by_currency={"USD": 10_000.0, "HKD": 16_000.0}
+        )
+        ledger = Ledger(url=f"sqlite:///{tmp_path/'hk.db'}")
+        engine = ExecutionEngine(broker, ledger, mode=Mode.PAPER)
+        # open a position in-hours (11:30 HKT), then fill it
+        in_hours = datetime(2026, 7, 15, 3, 30, tzinfo=timezone.utc)
+        buy = record(ledger, candidate(symbol="0700.HK", limit=20.05,
+                                       stop=18.00, tp=25.50, ref_px=20.05))
+        engine.execute([buy], {"0700.HK": 20.05}, in_hours)
+        broker.step({"0700.HK": bar(symbol="0700.HK", o=20.05, h=21.0,
+                                    lo=20.0, c=20.5)})
+        # a discretionary SELL exit revalidated during the 12:30 HKT lunch break
+        lunch = datetime(2026, 7, 15, 4, 30, tzinfo=timezone.utc)
+        sell = record(ledger, candidate(symbol="0700.HK", side=Side.SELL,
+                                        order_type=OrderType.LMT, limit=21.00,
+                                        stop=None, tp=None, ref_px=21.00))
+        report = engine.execute([sell], {"0700.HK": 21.00}, lunch)
+        assert not any(
+            "market closed" in reason for _, reason in report.skipped
+        )

@@ -3263,11 +3263,14 @@ export interface FinanceHealth {
 export interface FinancePosition {
   symbol: string;
   currency: string;
+  market: string;
   qty: number;
   avg_px: number;
   mkt_px: number | null;
   upnl: number | null;
   pool: string;
+  price_as_of: string | null;
+  price_live: boolean;
 }
 
 export interface FinanceOpenOrder {
@@ -3336,6 +3339,8 @@ export interface FinanceAccountView {
   positions: FinancePosition[];
   open_orders: FinanceOpenOrder[];
   stats: FinanceStats;
+  marks_live: boolean;
+  marks_as_of: string | null;
 }
 
 /** Ledger-only fallback when the loop is idle (evenings, weekends). */

@@ -223,7 +223,9 @@ class TestPaperAccountProjection:
             f"/v1/portfolio/accounts/{DEFAULT_PAPER_ACCOUNT_ID}/valuation"
         ).json()
         assert valuation["holdings"][0]["price"] == 170.0
-        assert valuation["holdings"][0]["price_source"] == "live"
+        # No live feed on this runtime → the broker's last-close mark is honestly
+        # labelled "close", not "live"/now (Loop.md §5.9 freshness).
+        assert valuation["holdings"][0]["price_source"] == "close"
 
     def test_system_paper_account_cannot_be_reclassified_live(self, tmp_path):
         url = f"sqlite:///{tmp_path / 'fixed-paper.db'}"

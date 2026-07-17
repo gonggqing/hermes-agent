@@ -252,10 +252,13 @@ class ExecutionEngine:
             )
             if bad:
                 return "HK order off SEHK tick grid: " + "; ".join(bad.values())
-            # SEHK does not accept orders during the lunch break or outside its
-            # sessions; the scheduled 10:30-cutoff flow is always in-hours, so
-            # this only refuses an off-schedule submission fail-closed.
-            if not is_hk_order_acceptable(now):
+            # Gate only NEW ENTRIES on trading hours: SEHK doesn't accept orders
+            # during the lunch break / outside sessions, and the scheduled
+            # 10:30 flow is always in-hours so this just refuses an off-schedule
+            # entry. A human-approved EXIT is never dropped here — blocking it
+            # would discard the exit intent (the protective stop stays either
+            # way); an exit is allowed to rest until the session resumes.
+            if cand.side is Side.BUY and not is_hk_order_acceptable(now):
                 return "HK market closed / lunch break — not accepting orders"
 
         if cand.side is Side.SELL:

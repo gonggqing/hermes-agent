@@ -862,6 +862,10 @@ export const zh: Translations = {
       mktPx: "市价",
       upnl: "浮动盈亏",
       pool: "资金池",
+      market: "市场",
+      role: "角色",
+      marksLive: "实时价",
+      marksClose: "市价为上一收盘价（{time}）",
     },
     orders: {
       title: "未完成订单",
@@ -1175,6 +1179,7 @@ export const zh: Translations = {
         sources: {
           live: "实时",
           csv: "导入",
+          close: "收盘价",
           manual: "手动",
           none: "未知",
         },

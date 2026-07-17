@@ -583,3 +583,33 @@ class TestHKFees:
         b.place_order(make_order(symbol="NVDA", qty=10, limit=100.0))
         b.step({"NVDA": bar(symbol="NVDA", open=100, low=99, high=101, close=100)})
         assert b.get_fills()[0].commission == 1.0  # broker commission only
+
+
+class TestHKFeeReservation:
+    """The HKD sleeve can never over-commit: the BUY reservation includes the
+    statutory fees the fill will deduct, so cash never goes negative."""
+
+    def test_hkd_cash_never_negative_after_near_full_buy(self):
+        b = broker(
+            starting_cash_by_currency={"USD": 100.0, "HKD": 10000.0},
+            fx_to_base={"HKD": 1 / 7.8},
+            apply_hk_fees=True,
+        )
+        # 99 * 100 = 9,900 consideration; with commission + ~HK$13 fees the
+        # reservation is ~9,914 (< 10,000) so it fills, leaving cash >= 0.
+        r = b.place_order(make_order(symbol="0700.HK", qty=99, limit=100.0))
+        assert r.accepted
+        b.step({"0700.HK": bar(symbol="0700.HK", open=100, low=99,
+                               high=101, close=100)})
+        assert b.get_account().cash_by_currency["HKD"] >= 0.0
+
+    def test_reservation_rejects_when_fees_would_overcommit(self):
+        b = broker(
+            starting_cash_by_currency={"HKD": 10000.0},
+            fx_to_base={"HKD": 1 / 7.8},
+            apply_hk_fees=True,
+        )
+        # 100 * 100 = 10,000 leaves nothing for commission + fees -> reject
+        # (previously accepted and drove HKD cash negative).
+        r = b.place_order(make_order(symbol="0700.HK", qty=100, limit=100.0))
+        assert not r.accepted and "HKD" in r.reason

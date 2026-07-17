@@ -275,6 +275,10 @@ export const financeEn: FinanceTranslations = {
     mktPx: "Mkt px",
     upnl: "uPnL",
     pool: "Pool",
+    market: "Market",
+    role: "Role",
+    marksLive: "Live prices",
+    marksClose: "Prices as-of last close ({time})",
   },
   orders: {
     title: "Open orders",
@@ -600,6 +604,7 @@ export const financeEn: FinanceTranslations = {
       sources: {
         live: "Live",
         csv: "Imported",
+        close: "Close",
         manual: "Manual",
         none: "Unknown",
       },

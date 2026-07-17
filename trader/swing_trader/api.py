@@ -263,6 +263,26 @@ class CancelAllRequest(BaseModel):
     surface: Optional[str] = None
 
 
+def _live_quotes_for_positions(runtime: FinanceRuntime) -> dict[str, float]:
+    """Best-effort live (delayed) marks for currently-held symbols, for DISPLAY.
+
+    Empty when there is no feed/broker. Per-symbol failures are skipped so the
+    account view still renders off the last-close mark (build_account_view
+    flags whichever basis it used); the trading broker is never mutated.
+    """
+    if runtime.feed is None or runtime.broker is None:
+        return {}
+    out: dict[str, float] = {}
+    for pos in runtime.broker.get_positions():
+        try:
+            q = runtime.feed.get_quote(pos.symbol)
+        except Exception:  # noqa: BLE001 — display must survive any feed hiccup
+            continue
+        if q is not None and q.last is not None and q.last > 0:
+            out[pos.symbol] = q.last
+    return out
+
+
 def create_app(runtime: FinanceRuntime):
     """Build the FastAPI app (fastapi imported lazily — `service` extra)."""
     from fastapi import FastAPI, Header, HTTPException, Query
@@ -363,7 +383,16 @@ def create_app(runtime: FinanceRuntime):
     def account(mode: Optional[str] = Query(default=None)) -> dict:
         m = _mode(mode)
         if runtime.broker is not None and m is runtime.mode:
-            view = build_account_view(runtime.broker, runtime.ledger, m)
+            # Overlay LIVE (delayed) quotes on held symbols for display so the
+            # positions/uPnL aren't stuck at the last daily close; the broker's
+            # own marks/equity/breaker are untouched. Feed failures fall back to
+            # the close mark per-symbol (build_account_view flags the basis).
+            quotes = _live_quotes_for_positions(runtime)
+            view = build_account_view(
+                runtime.broker, runtime.ledger, m,
+                quotes=quotes or None,
+                price_as_of=runtime.clock() if quotes else None,
+            )
             return view.model_dump(mode="json")
         # Ledger-only fallback (loop idle / other mode): last snapshot + rows.
         snaps = runtime.ledger.get_snapshots(m)
@@ -1263,22 +1292,31 @@ def create_app(runtime: FinanceRuntime):
         return aggregate_holdings([(account, _account_holdings(account)) for account in accounts])
 
     def _valuation_marks(account=None):
-        """Overlay PaperBroker marks without persisting them as manual facts."""
+        """Overlay the paper-broker account's marks for portfolio valuation.
+
+        Prefer a REAL live (delayed) feed quote (source 'live', as-of now);
+        otherwise fall back to the broker's last-close mark labelled 'close'
+        stamped with the snapshot time — so a stale close is never presented as
+        a live/now price (Loop.md §5.9)."""
         marks = _need_portfolio().get_marks()
         if account is None or not _is_default_paper_account(account) or runtime.broker is None:
             return marks
         from swing_trader.portfolio_journal import Mark
 
         now = runtime.clock()
+        live = _live_quotes_for_positions(runtime)
+        snap_ts = runtime.broker.get_account().ts
         for position in runtime.broker.get_positions():
-            if position.mkt_px is not None:
+            quote = live.get(position.symbol)
+            if quote is not None:
                 marks[position.symbol] = Mark(
-                    position.symbol,
-                    position.mkt_px,
-                    account.base_currency,
-                    now,
-                    "live",
-                    "paper-broker",
+                    position.symbol, quote, account.base_currency,
+                    now, "live", "paper-broker",
+                )
+            elif position.mkt_px is not None:
+                marks[position.symbol] = Mark(
+                    position.symbol, position.mkt_px, account.base_currency,
+                    snap_ts, "close", "paper-broker",
                 )
         return marks
 

@@ -278,6 +278,10 @@ export interface FinanceTranslations {
     mktPx: string;
     upnl: string;
     pool: string;
+    market: string;
+    role: string;
+    marksLive: string;
+    marksClose: string;
   };
   orders: {
     title: string;
@@ -607,7 +611,13 @@ export interface FinanceTranslations {
       pnlPct: string; // 盈亏%
       action: string; // update-mark column header
       // price_source tag (live / imported CSV / manual / unpriced).
-      sources: { live: string; csv: string; manual: string; none: string };
+      sources: {
+        live: string;
+        csv: string;
+        close: string;
+        manual: string;
+        none: string;
+      };
       unknown: string; // localized "—" for a null price/value/pnl
       totalMarketValue: string; // 总市值 (incl. cash)
       totalCost: string; // 总成本

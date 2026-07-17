@@ -203,9 +203,23 @@ class PaperBroker(BrokerInterface):
         if remaining <= _EPS:
             self._release_reservation(order.id)
         else:
+            consideration = remaining * self._buy_ref_px[order.id]
             self._reserved[order.id] = (
-                remaining * self._buy_ref_px[order.id] + self.commission_per_order
+                consideration
+                + self.commission_per_order
+                + self._statutory_fees(order.currency, consideration)
             )
+
+    def _statutory_fees(self, currency: str, consideration: float) -> float:
+        """SEHK statutory/exchange fees on an HKD trade, else 0. Used BOTH for
+        the BUY cash reservation (on ref/limit price — conservative, so the
+        reservation always covers the fill's fee) and the fill deduction, so the
+        HKD sleeve can never over-commit (cash < 0)."""
+        if self.apply_hk_fees and currency == "HKD" and consideration > 0:
+            from swing_trader.hk_fees import compute_hk_fees
+
+            return float(compute_hk_fees(consideration).total)
+        return 0.0
 
     def _release_reservation(self, order_id: str) -> None:
         self._reserved.pop(order_id, None)
@@ -257,7 +271,11 @@ class PaperBroker(BrokerInterface):
             ref_px = self._buy_reference_px(stored)
             if ref_px is None:
                 return reject(f"no reference price for {stored.symbol} MOC order")
-            reservation = stored.qty * ref_px + self.commission_per_order
+            reservation = (
+                stored.qty * ref_px
+                + self.commission_per_order
+                + self._statutory_fees(stored.currency, stored.qty * ref_px)
+            )
             currency_cash = self._cash_by_currency.get(stored.currency, 0.0)
             reserved = self._total_reserved(stored.currency)
             if reserved + reservation > currency_cash + _EPS:
@@ -432,14 +450,13 @@ class PaperBroker(BrokerInterface):
         *,
         execution_ts: Optional[datetime] = None,
     ) -> Fill:
-        commission = self.commission_per_order
-        if self.apply_hk_fees and order.currency == "HKD":
-            # SEHK statutory + exchange charges on this fill's consideration,
-            # lumped into the fill commission for the paper sim (broker vs
-            # statutory reconciliation happens once real IBKR fills exist).
-            from swing_trader.hk_fees import compute_hk_fees
-
-            commission += float(compute_hk_fees(qty * px).total)
+        # SEHK statutory + exchange charges on this fill's consideration are
+        # lumped into the fill commission for the paper sim (broker vs statutory
+        # reconciliation happens once real IBKR fills exist). The BUY reservation
+        # covered these on the ref/limit price, so the sleeve never goes negative.
+        commission = self.commission_per_order + self._statutory_fees(
+            order.currency, qty * px
+        )
         fill = Fill(
             # ``bar.ts`` is the bar START (09:30 for a daily Yahoo candle),
             # not the moment the 16:00 close callback executed. Runtime calls
