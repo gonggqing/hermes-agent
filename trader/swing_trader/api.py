@@ -96,6 +96,10 @@ class FinanceRuntime:
     run_research: dict = field(default_factory=dict)
     #: Markets whose research is currently refreshing (background run guard).
     research_running: set = field(default_factory=set)
+    #: Frontend desk keys ("us", "hk", …) that have ORDER authority (not just
+    #: research). Default US only; __main__ adds "hk" when hk_orders_enabled so
+    #: the UI drops the "research only" badge for an order-capable market.
+    order_capable_markets: set = field(default_factory=lambda: {"us"})
     nav_provider: Any = None  # swing_trader.fund_nav.NavProvider — 场外基金 NAV
     gold_provider: Any = None  # swing_trader.sge_gold.GoldProvider — 国内金价 (SGE)
     # Durable per-market brief history and restart source for volatile slots.
@@ -403,6 +407,12 @@ def create_app(runtime: FinanceRuntime):
     @app.get(f"/{API_VERSION}/stats")
     def stats(mode: Optional[str] = Query(default=None)) -> dict:
         return runtime.ledger.stats(_mode(mode)).__dict__
+
+    @app.get(f"/{API_VERSION}/markets")
+    def markets() -> dict:
+        """Which market desks currently have ORDER authority (vs research-only),
+        so the UI can drop the 'research only' badge for an enabled market."""
+        return {"order_capable": sorted(runtime.order_capable_markets)}
 
     @app.get(f"/{API_VERSION}/stats/by-market")
     def stats_by_market(mode: Optional[str] = Query(default=None)) -> list[dict]:

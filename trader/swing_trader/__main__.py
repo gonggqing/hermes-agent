@@ -884,6 +884,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 schedule=HK_TRADING_SCHEDULE,
             )
             runtime.run_research["hk"] = hk_loop.run_research_now
+            runtime.order_capable_markets.add("hk")  # UI drops research-only badge
             logger.info(
                 "hk ORDER-CAPABLE session enabled (paper)",
                 extra={"n_symbols": len(hk_wl.symbols)},

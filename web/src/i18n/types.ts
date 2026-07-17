@@ -257,6 +257,7 @@ export interface FinanceTranslations {
     drawdown: string;
     equityCurve: string;
     notEnoughSnapshots: string;
+    baseTotal: string;
     perMarketTitle: string;
     perMarketHint: string;
     perMarketEmpty: string;

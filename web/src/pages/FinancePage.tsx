@@ -121,6 +121,7 @@ interface AccountNumbers {
   breaker_state: string;
   base_currency: string;
   cash_by_currency: Record<string, number>;
+  equity_by_currency: Record<string, number>;
 }
 
 // ── Account / positions / orders / market / reports sections ──────────
@@ -439,11 +440,45 @@ function AccountSection({
                 : ft.account.empty}
             </p>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-4">
+              {/* Per-currency balances — each sleeve on its own row, never
+                  blended into one base-currency number. */}
+              <div className="flex flex-col gap-2">
+                {Array.from(
+                  new Set([
+                    ...Object.keys(numbers.equity_by_currency ?? {}),
+                    ...Object.keys(numbers.cash_by_currency ?? {}),
+                  ]),
+                )
+                  .sort()
+                  .map((cur) => (
+                    <div
+                      key={cur}
+                      className="flex items-center justify-between gap-4 border-b border-border/40 pb-2 text-sm"
+                    >
+                      <span className="font-mono-ui text-xs text-muted-foreground">
+                        {cur}
+                      </span>
+                      <div className="flex gap-6">
+                        <span className="text-muted-foreground">
+                          {ft.account.equity}{" "}
+                          <span className="text-foreground">
+                            {fmtMoney(numbers.equity_by_currency?.[cur] ?? 0)}
+                          </span>
+                        </span>
+                        <span className="text-muted-foreground">
+                          {ft.account.cash}{" "}
+                          <span className="text-foreground">
+                            {fmtMoney(numbers.cash_by_currency?.[cur] ?? 0)}
+                          </span>
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+              {/* Portfolio-level risk metrics (base-currency aggregate). */}
               <Stats
                 items={[
-                  { label: ft.account.equity, value: fmtMoney(numbers.equity) },
-                  { label: ft.account.cash, value: fmtMoney(numbers.cash) },
                   {
                     label: ft.account.upnl,
                     value: {
@@ -472,14 +507,9 @@ function AccountSection({
                   },
                 ]}
               />
-              <p className="font-mondwest normal-case text-xs text-muted-foreground">
-                {ft.account.cashByCurrency}:{" "}
-                {Object.entries(numbers.cash_by_currency)
-                  .sort(([left], [right]) => left.localeCompare(right))
-                  .map(
-                    ([currency, amount]) => `${currency} ${fmtMoney(amount)}`,
-                  )
-                  .join(" · ")}
+              <p className="font-mondwest normal-case text-xs text-text-tertiary">
+                {ft.account.baseTotal}: {fmtMoney(numbers.equity)}{" "}
+                {numbers.base_currency}
               </p>
             </div>
           )}

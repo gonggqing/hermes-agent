@@ -841,6 +841,7 @@ export const zh: Translations = {
       drawdown: "回撤",
       equityCurve: "净值曲线",
       notEnoughSnapshots: "快照数量不足，暂无法绘制净值曲线。",
+      baseTotal: "总计（基准币种）",
       perMarketTitle: "分市场表现",
       perMarketHint: "各市场按本币独立统计——胜率与盈亏从不混算。",
       perMarketEmpty: "尚无已平仓交易——平仓后才会显示胜率。",

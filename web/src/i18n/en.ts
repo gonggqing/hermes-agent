@@ -254,6 +254,7 @@ export const financeEn: FinanceTranslations = {
     drawdown: "Drawdown",
     equityCurve: "Equity curve",
     notEnoughSnapshots: "Not enough snapshots yet for an equity curve.",
+    baseTotal: "Total (base currency)",
     perMarketTitle: "Performance by market",
     perMarketHint: "Each market in its own currency — win rates and P&L are never blended.",
     perMarketEmpty: "No closed trades yet — win rates appear once trades close.",

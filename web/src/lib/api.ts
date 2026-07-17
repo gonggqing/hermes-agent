@@ -1366,6 +1366,8 @@ export const api = {
     fetchJSON<FinanceMarketPerformance[]>(
       `/api/finance/v1/stats/by-market${financeQuery({ mode })}`,
     ),
+  financeMarkets: () =>
+    fetchJSON<{ order_capable: string[] }>("/api/finance/v1/markets"),
   financeSnapshots: (limit = 90, mode?: FinanceMode) =>
     fetchJSON<FinanceSnapshot[]>(
       `/api/finance/v1/snapshots${financeQuery({ limit, mode })}`,

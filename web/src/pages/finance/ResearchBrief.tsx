@@ -1106,7 +1106,30 @@ export function ResearchBrief({
   researchRunning?: boolean;
 }) {
   const ft = useFinanceT();
-  const researchOnly = market !== "us";
+  // Order authority is backend-driven (the HK desk becomes order-capable when
+  // hk_orders_enabled), so the "research only" badge tracks the live flag
+  // instead of a hard-coded market list. Fall back to "US only" until loaded.
+  const [orderCapableMarkets, setOrderCapableMarkets] = useState<
+    string[] | null
+  >(null);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .financeMarkets()
+      .then((r) => {
+        if (!cancelled) setOrderCapableMarkets(r.order_capable);
+      })
+      .catch(() => {
+        if (!cancelled) setOrderCapableMarkets(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const researchOnly =
+    orderCapableMarkets !== null
+      ? !orderCapableMarkets.includes(market)
+      : market !== "us";
 
   if (brief === null) {
     return (
