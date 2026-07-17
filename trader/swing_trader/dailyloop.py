@@ -678,10 +678,11 @@ class DailyLoop:
             Event.MARKET_CLOSE, _MARKET_CLOSE_TIME
         )
         self._market_label = _MARKET_LABELS.get(self.market_id, self.market_id)
-        # Currency sleeve this market's brief risk/net-value should report (HK →
-        # HKD); None keeps the base-currency total for US.
+        # Currency sleeve this market's brief risk/net-value reports — each
+        # market its OWN sleeve, never the FX-blended base total (US → the USD
+        # sleeve, HK → HKD), so US and HK net values are never conflated.
         self._brief_currency = {
-            "HK": "HKD", "CN": "CNY", "KR": "KRW"
+            "US": "USD", "HK": "HKD", "CN": "CNY", "KR": "KRW"
         }.get(self.market_id)
         # Pre-cutoff nudge = 30 min before the cutoff (11:00 for a 11:30 cutoff).
         self._pre_cutoff_reminder = (
