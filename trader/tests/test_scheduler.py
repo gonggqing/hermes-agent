@@ -439,3 +439,35 @@ class TestDailyLoopRunner:
             runner.run_forever(sleep_fn=stub_sleep, poll_seconds=7.0)
         assert rec.calls == [Event.MORNING_REPORT]  # run_pending ran first
         assert sleeps == [7.0]
+
+
+class TestHKTradingSchedule:
+    """HK order-capable schedule: full six-event day with the independent
+    10:30-11:30 Asia/Hong_Kong confirmation window (Loop.md HK rollout)."""
+
+    def test_confirm_window_is_1030_to_1130_hkt(self):
+        from datetime import datetime, timezone
+        from swing_trader.scheduler import (
+            HK_TRADING_SCHEDULE, HONG_KONG, LoopPhase, phase_at,
+        )
+        # 2026-07-15 is a Wednesday, not an HK holiday.
+        def hkt(hh, mm):
+            return datetime(2026, 7, 15, hh, mm, tzinfo=HONG_KONG).astimezone(
+                timezone.utc
+            )
+        assert phase_at(hkt(10, 29), HK_TRADING_SCHEDULE) is LoopPhase.DECIDING
+        assert phase_at(hkt(10, 30), HK_TRADING_SCHEDULE) is LoopPhase.CONFIRM_WINDOW
+        assert phase_at(hkt(11, 29), HK_TRADING_SCHEDULE) is LoopPhase.CONFIRM_WINDOW
+        assert phase_at(hkt(11, 30), HK_TRADING_SCHEDULE) is LoopPhase.SET_AND_FORGET
+        assert phase_at(hkt(16, 0), HK_TRADING_SCHEDULE) is LoopPhase.AFTER_CLOSE
+
+    def test_full_event_set(self):
+        from swing_trader.scheduler import HK_TRADING_SCHEDULE, Event
+        events = set(HK_TRADING_SCHEDULE.event_times)
+        assert Event.CONFIRM_CUTOFF in events and Event.MARKET_CLOSE in events
+
+    def test_research_hk_schedule_unchanged(self):
+        # enabling HK orders must not add execution events to the research path
+        from swing_trader.scheduler import HK_SCHEDULE, Event
+        assert Event.CONFIRM_CUTOFF not in HK_SCHEDULE.event_times
+        assert Event.MARKET_CLOSE not in HK_SCHEDULE.event_times

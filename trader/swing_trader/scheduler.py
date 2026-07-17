@@ -52,6 +52,7 @@ __all__ = [
     "KR_SCHEDULE",
     "HK_HOLIDAYS_2026",
     "HK_SCHEDULE",
+    "HK_TRADING_SCHEDULE",
     "HONG_KONG",
     "SEOUL",
     "SHANGHAI",
@@ -250,6 +251,27 @@ HK_SCHEDULE = SessionSchedule(
         Event.MONITOR_START: time(9, 30),
         Event.DECIDE_START: time(10, 0),
         Event.PUSH_CANDIDATES: time(10, 30),
+    },
+    holidays=HK_HOLIDAYS_2026,
+)
+
+#: HK ORDER-CAPABLE session (Asia/Hong_Kong): the full six-event day mirroring
+#: US, with the independent **10:30–11:30 Asia/Hong_Kong** human confirmation
+#: window (Loop.md HK rollout). Distinct from the research-only HK_SCHEDULE so
+#: enabling HK orders never changes the research session; used only when
+#: ``hk_orders_enabled``. MARKET_CLOSE 16:00 HKT is after the SEHK lunch break
+#: (12:00–13:00), which the daily 10:30-push / 16:00-close flow does not need to
+#: model intraday (see hk_market_hours for the continuous-session detail).
+HK_TRADING_SCHEDULE = SessionSchedule(
+    market_id="HK",
+    tz=HONG_KONG,
+    event_times={
+        Event.MORNING_REPORT: time(9, 0),
+        Event.MONITOR_START: time(9, 30),
+        Event.DECIDE_START: time(10, 0),
+        Event.PUSH_CANDIDATES: time(10, 30),
+        Event.CONFIRM_CUTOFF: time(11, 30),
+        Event.MARKET_CLOSE: time(16, 0),
     },
     holidays=HK_HOLIDAYS_2026,
 )

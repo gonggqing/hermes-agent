@@ -86,6 +86,12 @@ class Settings(BaseSettings):
     hk_session_enabled: bool = True
     hk_market_tz: str = "Asia/Hong_Kong"
     hk_symbols: str = ""
+    # Upgrade the HK session from research-only to order-capable on the shared
+    # (HKD-funded) PaperBroker. Dark by default: flipping this on wires the full
+    # decide→risk→confirm→execute stack + a 10:30–11:30 Asia/Hong_Kong human
+    # window for HK, behind the SAME §3 authority boundaries as US. Real IBKR HK
+    # is a separate, later gate — this is PaperBroker only.
+    hk_orders_enabled: bool = False
 
     # --- KR (Korea) semiconductor RESEARCH session (Loop.md two-session ext) ---
     # A narrow, semiconductor-only KR read (memory giants + HBM chain): KR semi
