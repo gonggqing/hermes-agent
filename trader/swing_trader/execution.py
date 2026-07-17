@@ -25,6 +25,7 @@ from datetime import datetime
 from swing_trader.interfaces import BrokerInterface
 from swing_trader.ledger import AuditEvent, Ledger
 from swing_trader.log import get_logger
+from swing_trader.hk_market_hours import is_hk_order_acceptable
 from swing_trader.sehk_rules import is_sehk_symbol, off_grid_prices
 from swing_trader.schemas import (
     CandidateOrder,
@@ -251,6 +252,11 @@ class ExecutionEngine:
             )
             if bad:
                 return "HK order off SEHK tick grid: " + "; ".join(bad.values())
+            # SEHK does not accept orders during the lunch break or outside its
+            # sessions; the scheduled 10:30-cutoff flow is always in-hours, so
+            # this only refuses an off-schedule submission fail-closed.
+            if not is_hk_order_acceptable(now):
+                return "HK market closed / lunch break — not accepting orders"
 
         if cand.side is Side.SELL:
             return None  # exits are never blocked on price drift

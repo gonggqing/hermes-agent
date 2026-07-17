@@ -378,5 +378,17 @@ class TestHKTickGuard:
         engine = ExecutionEngine(broker, ledger, mode=Mode.PAPER)
         c = record(ledger, candidate(symbol="0700.HK", limit=20.05,
                                      stop=18.00, tp=25.50, ref_px=20.05))
-        report = engine.execute([c], {"0700.HK": 20.05}, NOW)
+        # 2026-07-15 03:30 UTC = 11:30 HKT (morning continuous) — in-hours
+        now_hk = datetime(2026, 7, 15, 3, 30, tzinfo=timezone.utc)
+        report = engine.execute([c], {"0700.HK": 20.05}, now_hk)
         assert len(report.placed) == 1
+
+    def test_hk_entry_refused_during_lunch_break(self, env):
+        _, ledger, engine = env
+        c = record(ledger, candidate(symbol="0700.HK", limit=20.05,
+                                     stop=18.00, tp=25.50, ref_px=20.05))
+        # 04:30 UTC = 12:30 HKT — SEHK lunch break
+        lunch = datetime(2026, 7, 15, 4, 30, tzinfo=timezone.utc)
+        report = engine.execute([c], {"0700.HK": 20.05}, lunch)
+        assert report.placed == []
+        assert "market closed" in report.skipped[0][1]

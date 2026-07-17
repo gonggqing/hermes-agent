@@ -67,6 +67,7 @@ class PaperBroker(BrokerInterface):
         commission_per_order: float = 1.0,
         slippage_bps: float = 5.0,
         liquidity_fraction: float = 1.0,
+        apply_hk_fees: bool = False,
     ) -> None:
         if starting_cash <= 0:
             raise ValueError("starting_cash must be positive")
@@ -98,6 +99,10 @@ class PaperBroker(BrokerInterface):
         self.commission_per_order = commission_per_order
         self.slippage_bps = slippage_bps
         self.liquidity_fraction = liquidity_fraction
+        # When True, HKD fills also bear the statutory + HKEX charges (stamp
+        # duty, levies, trading fee, CCASS) so paper P&L reflects real HK cost;
+        # off by default keeps the deterministic test oracle's round numbers.
+        self.apply_hk_fees = apply_hk_fees
 
         self._cash_by_currency: dict[str, float] = dict(balances)
         self._day_open_equity: float = sum(
@@ -428,6 +433,13 @@ class PaperBroker(BrokerInterface):
         execution_ts: Optional[datetime] = None,
     ) -> Fill:
         commission = self.commission_per_order
+        if self.apply_hk_fees and order.currency == "HKD":
+            # SEHK statutory + exchange charges on this fill's consideration,
+            # lumped into the fill commission for the paper sim (broker vs
+            # statutory reconciliation happens once real IBKR fills exist).
+            from swing_trader.hk_fees import compute_hk_fees
+
+            commission += float(compute_hk_fees(qty * px).total)
         fill = Fill(
             # ``bar.ts`` is the bar START (09:30 for a daily Yahoo candle),
             # not the moment the 16:00 close callback executed. Runtime calls

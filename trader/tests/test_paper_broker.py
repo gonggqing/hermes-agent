@@ -553,3 +553,33 @@ class TestCopies:
         b = funded_broker(qty=10)
         b.get_positions()[0].qty = 0.0
         assert b.get_positions()[0].qty == 10
+
+
+class TestHKFees:
+    """With apply_hk_fees on, an HKD fill also bears SEHK statutory/exchange
+    charges so paper HK P&L is realistic (off by default keeps round numbers)."""
+
+    def test_hkd_fill_bears_statutory_fees(self):
+        from swing_trader.hk_fees import compute_hk_fees
+        b = broker(
+            starting_cash_by_currency={"USD": 1000.0, "HKD": 16000.0},
+            fx_to_base={"HKD": 1 / 7.8},
+            apply_hk_fees=True,
+        )
+        b.place_order(make_order(symbol="0700.HK", qty=100, limit=100.0))
+        b.step({"0700.HK": bar(symbol="0700.HK", open=100, low=99,
+                               high=101, close=100)})
+        fee = float(compute_hk_fees(100 * 100).total)
+        assert fee > 0
+        account = b.get_account()
+        # 16000 - consideration(10000) - commission(1) - statutory fees
+        assert account.cash_by_currency["HKD"] == pytest.approx(
+            16000 - 10000 - 1 - fee
+        )
+        assert b.get_fills()[0].commission == pytest.approx(1 + fee)
+
+    def test_usd_fill_never_bears_hk_fees(self):
+        b = broker(starting_cash=100_000.0, apply_hk_fees=True)
+        b.place_order(make_order(symbol="NVDA", qty=10, limit=100.0))
+        b.step({"NVDA": bar(symbol="NVDA", open=100, low=99, high=101, close=100)})
+        assert b.get_fills()[0].commission == 1.0  # broker commission only

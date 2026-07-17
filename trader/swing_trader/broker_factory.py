@@ -53,6 +53,9 @@ def build_broker(
         return PaperBroker(
             starting_cash=starting_cash,
             starting_cash_by_currency=balances,
+            # HK paper fills bear real SEHK statutory/exchange charges when the
+            # HK order-capable session is on, for realistic HK paper P&L.
+            apply_hk_fees=settings.hk_orders_enabled,
         )
 
     if backend is BrokerBackend.IBKR:
