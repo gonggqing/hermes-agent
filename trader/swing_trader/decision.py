@@ -236,7 +236,11 @@ class RuleBasedDecisionCore:
                     limit=entry,
                     stop=sl,
                     tp=tp,
-                    tif=TimeInForce.GTC,
+                    # Ordinary entry parent is DAY (Loop.md §5.7): an unfilled
+                    # entry is cancelled at the close and re-researched next day
+                    # rather than resting overnight. Its protective stop/tp
+                    # children remain GTC (attached by the broker on fill).
+                    tif=TimeInForce.DAY,
                     rationale=rationale,
                     confidence=confidence,
                     signal_ids=[sig.id],

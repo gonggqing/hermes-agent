@@ -2,9 +2,11 @@
 
 Translates HUMAN-APPROVED candidates into broker orders:
 
-- entries become GTC BRACKET orders (limit entry + attached protective stop
-  + optional take-profit in an OCA group) — a position can never exist
-  without a resting stop (Loop.md §4);
+- entries become BRACKET orders with a DAY limit-entry parent + attached GTC
+  protective stop + optional GTC take-profit in an OCA group (Loop.md §5.7):
+  the entry is cancelled at the close if unfilled and re-researched next day,
+  while a partial fill keeps GTC protection sized to the filled quantity — a
+  position can never exist without a resting stop (Loop.md §4);
 - discretionary exits pass through as MOC/LOC/LMT/STP;
 - prices are RE-VALIDATED against a fresh quote before send (§5.7): expired
   candidates and adverse drift beyond tolerance are skipped;
@@ -281,7 +283,14 @@ class ExecutionEngine:
                 limit=limit,
                 stop=stop,
                 tp=cand.tp,
-                tif=TimeInForce.GTC,
+                # Entry parent is DAY (Loop.md §5.7): an unfilled entry is
+                # cancelled at the close (broker.end_of_day) and re-researched
+                # next day, never left resting overnight. The broker attaches
+                # the protective stop/tp children as GTC on fill, so a partial
+                # fill keeps GTC protection sized to the filled quantity while
+                # the unfilled remainder expires. The engine enforces DAY here
+                # regardless of the upstream candidate tif.
+                tif=TimeInForce.DAY,
                 broker_ref=f"candidate:{cand.id}",
             )
 

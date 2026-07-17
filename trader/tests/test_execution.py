@@ -173,10 +173,11 @@ class TestTranslation:
         assert len(report.placed) == 1
         order = report.placed[0]
         assert order.order_type is OrderType.BRACKET
-        assert order.tif is TimeInForce.GTC
+        assert order.tif is TimeInForce.DAY  # entry parent is DAY (Loop.md §5.7)
         all_orders = broker.get_orders()
         children = [o for o in all_orders if o.parent_order_id == order.id]
         assert len(children) == 2  # protective stop + take-profit
+        assert all(o.tif is TimeInForce.GTC for o in children)  # protection is GTC
         assert ledger.get_candidates(status=CandidateStatus.PLACED)
         assert order.id == f"candidate-{c.id}"
         assert order.broker_ref == f"candidate:{c.id}"
@@ -309,3 +310,48 @@ class TestSyncFills:
         assert len(closed) == 1
         assert closed[0].pnl < 0  # stopped out at a loss
         assert closed[0].r_multiple is not None
+
+
+class TestDayEntryLifecycle:
+    """Loop.md §5.7 ordinary-order lifecycle: a DAY limit-entry parent with GTC
+    protective children — an unfilled entry is cancelled at the close and a
+    partial fill keeps GTC protection sized to the filled quantity."""
+
+    def test_unfilled_day_entry_expires_at_close_and_voids_protection(self, env):
+        broker, ledger, engine = env
+        parent = engine.execute([record(ledger, candidate(qty=2))],
+                                 {"NVDA": 100.0}, NOW).placed[0]
+        assert parent.tif is TimeInForce.DAY
+
+        # a session where price never trades down to the 99.5 entry limit
+        broker.step({"NVDA": bar(o=100.0, h=101.0, lo=99.8, c=100.5)})
+        broker.end_of_day()
+
+        stored = {o.id: o for o in broker.get_orders()}
+        assert stored[parent.id].status is OrderStatus.EXPIRED
+        children = [o for o in stored.values() if o.parent_order_id == parent.id]
+        assert children and all(o.status is OrderStatus.CANCELLED for o in children)
+        assert broker.get_positions() == []  # unfilled -> no naked position
+
+    def test_partial_fill_keeps_gtc_protection_sized_to_fill(self, env):
+        broker, ledger, engine = env
+        parent = engine.execute([record(ledger, candidate(qty=2))],
+                                 {"NVDA": 100.0}, NOW).placed[0]
+
+        # price reaches the 99.5 limit but only one share of liquidity this bar
+        broker.step({"NVDA": bar(o=100.0, h=101.0, lo=99.0, c=99.5, v=1)})
+        stored = {o.id: o for o in broker.get_orders()}
+        assert stored[parent.id].status is OrderStatus.PARTIALLY_FILLED
+        assert stored[parent.id].filled_qty == 1
+
+        broker.end_of_day()  # cancel the unfilled entry remainder
+        assert next(o for o in broker.get_orders()
+                    if o.id == parent.id).status is OrderStatus.EXPIRED
+
+        # the 1-share position keeps a resting GTC protective stop sized to 1
+        positions = broker.get_positions()
+        assert len(positions) == 1 and positions[0].qty == 1
+        stops = [o for o in broker.get_orders(active_only=True)
+                 if o.side is Side.SELL and o.order_type is OrderType.STP]
+        assert len(stops) == 1
+        assert stops[0].tif is TimeInForce.GTC and stops[0].qty == 1

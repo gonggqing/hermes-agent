@@ -68,7 +68,7 @@ class TestEntries:
         c = out[0]
         assert c.side is Side.BUY
         assert c.order_type is OrderType.BRACKET
-        assert c.tif is TimeInForce.GTC
+        assert c.tif is TimeInForce.DAY  # entry parent is DAY (Loop.md §5.7)
         # last=100: entry = 99.5, ATR$ = 4 -> sl = 99.5-8 = 91.5, tp = 99.5+12 = 111.5
         assert c.limit == pytest.approx(99.5)
         assert c.stop == pytest.approx(91.5)
