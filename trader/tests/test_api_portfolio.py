@@ -426,11 +426,21 @@ class TestSessionTrigger:
         assert r.status_code == 403
 
     def test_run_by_human_ok(self, tmp_path):
+        import time as _t
         client = self._client(tmp_path)
         r = client.post("/v1/session/run", json={"actor": "gongqing", "window_minutes": 90},
                         headers={"X-Finance-Surface": "web"})
-        assert r.status_code == 200
-        assert r.json()["risk_approved"] == 2 and r.json()["actor"] == "gongqing"
+        # background run: returns immediately with "started"
+        assert r.status_code == 200 and r.json()["status"] == "started"
+        assert r.json()["market"] == "us"
+        # poll status until the (instant) background run stores its summary
+        for _ in range(50):
+            s = client.get("/v1/session/status?market=us").json()
+            if not s["running"] and s["summary"] is not None:
+                break
+            _t.sleep(0.02)
+        assert s["summary"]["risk_approved"] == 2
+        assert s["summary"]["actor"] == "gongqing"
 
     def test_finalize_by_human_ok(self, tmp_path):
         client = self._client(tmp_path)

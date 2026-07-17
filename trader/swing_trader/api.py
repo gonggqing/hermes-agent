@@ -89,8 +89,14 @@ class FinanceRuntime:
     # from watchlist.UNIVERSE so adding a symbol cannot affect trading.
     research_watchlists: Any = None  # ResearchWatchlistStore | None
     # Phase 0.9 (missed-session catch-up): manual trading-session trigger.
-    run_session: Any = None  # Callable[[], dict] — loop.run_session_now
+    run_session: Any = None  # Callable[[], dict] — loop.run_session_now (US, legacy)
     finalize_session: Any = None  # Callable[[], dict] — loop.finalize_session_now
+    #: Per-market manual session run/finalize (market key → callable), so the UI
+    #: can catch up US OR HK off-schedule. Run is heavy (monitors) → backgrounded.
+    run_session_by_market: dict = field(default_factory=dict)
+    finalize_session_by_market: dict = field(default_factory=dict)
+    session_running: set = field(default_factory=set)  # markets with an in-flight run
+    last_session_summary: dict = field(default_factory=dict)  # market → last run summary
     # Manual research refresh, keyed by lowercase market_id (cn/kr/…) →
     # Callable[[], dict] (ResearchSession.run_now). Read-only, ungated.
     run_research: dict = field(default_factory=dict)
@@ -248,6 +254,7 @@ class SessionActionRequest(BaseModel):
     actor: str = Field(min_length=1, max_length=200)
     window_minutes: int = Field(default=60, ge=5, le=240)
     surface: Optional[str] = None
+    market: str = Field(default="us", max_length=8)
 
 
 class KillSwitchRequest(BaseModel):
@@ -1891,14 +1898,59 @@ def create_app(runtime: FinanceRuntime):
     ) -> dict:
         """Manually run a full trading session now (monitor→decide→push) into a
         fresh approval window. Does NOT place orders — you still approve each
-        candidate, then call /session/finalize (§3)."""
-        if runtime.run_session is None:
-            raise HTTPException(503, "trading loop not attached")
+        candidate, then call /session/finalize (§3).
+
+        Runs in the BACKGROUND (monitors take far longer than the dashboard
+        proxy's timeout — a synchronous response would 503 and look like a
+        detached loop), returning immediately; poll /session/status for the
+        result and /candidates/pending for the cards."""
+        market = (body.market or "us").lower()
+        run = runtime.run_session_by_market.get(market) or (
+            runtime.run_session if market == "us" else None
+        )
+        if run is None:
+            raise HTTPException(
+                503,
+                f"no order-capable session for market {market!r} "
+                f"(available: {sorted(runtime.run_session_by_market) or ['us']})",
+            )
+        import threading
+
         surface = _human_session(x_finance_surface, body.surface, body.actor)
-        summary = runtime.run_session(window_minutes=body.window_minutes)
-        summary["actor"] = body.actor
-        summary["surface"] = surface
-        return summary
+        if market in runtime.session_running:
+            return {"status": "already_running", "market": market}
+        runtime.session_running.add(market)
+        window = body.window_minutes
+
+        def _run() -> None:
+            try:
+                summary = run(window_minutes=window)
+                summary["actor"] = body.actor
+                summary["surface"] = surface
+                runtime.last_session_summary[market] = summary
+            except Exception:
+                logger.exception("manual session run failed", extra={"market": market})
+                runtime.last_session_summary[market] = {
+                    "error": "session run failed — see service logs", "market": market,
+                }
+            finally:
+                runtime.session_running.discard(market)
+
+        threading.Thread(target=_run, daemon=True).start()
+        return {"status": "started", "market": market,
+                "note": "session running in the background (~1-2 min); "
+                        "approve the cards below when they appear, then finalize"}
+
+    @app.get(f"/{API_VERSION}/session/status")
+    def session_status(market: str = Query(default="us")) -> dict:
+        """Poll a backgrounded manual session run: whether it is still running
+        and the last completed summary."""
+        key = market.lower()
+        return {
+            "market": key,
+            "running": key in runtime.session_running,
+            "summary": runtime.last_session_summary.get(key),
+        }
 
     @app.post(f"/{API_VERSION}/session/finalize")
     def session_finalize(
@@ -1907,10 +1959,14 @@ def create_app(runtime: FinanceRuntime):
     ) -> dict:
         """Place the human-approved candidates from the current manual session
         window and expire the rest (the off-schedule cutoff)."""
-        if runtime.finalize_session is None:
-            raise HTTPException(503, "trading loop not attached")
+        market = (body.market or "us").lower()
+        finalize = runtime.finalize_session_by_market.get(market) or (
+            runtime.finalize_session if market == "us" else None
+        )
+        if finalize is None:
+            raise HTTPException(503, f"no order-capable session for market {market!r}")
         surface = _human_session(x_finance_surface, body.surface, body.actor)
-        summary = runtime.finalize_session()
+        summary = finalize()
         summary["actor"] = body.actor
         summary["surface"] = surface
         return summary

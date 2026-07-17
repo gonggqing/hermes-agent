@@ -1588,28 +1588,38 @@ export const api = {
   financeSessionRun: ({
     actor,
     windowMinutes,
+    market,
   }: {
     actor: string;
     windowMinutes?: number;
+    market?: string;
   }) =>
-    financePortfolioWrite<FinanceSessionRunResult>(
+    financePortfolioWrite<FinanceSessionStartResult>(
       "/api/finance/v1/session/run",
       {
         actor,
         ...(windowMinutes !== undefined
           ? { window_minutes: windowMinutes }
           : {}),
+        ...(market ? { market } : {}),
       },
     ),
+  /** Poll a backgrounded manual session run (running flag + last summary). */
+  financeSessionStatus: (market = "us") =>
+    fetchJSON<{
+      market: string;
+      running: boolean;
+      summary: FinanceSessionRunResult | { error: string } | null;
+    }>(`/api/finance/v1/session/status?market=${encodeURIComponent(market)}`),
   /**
    * Place the human-APPROVED candidates from the current window and expire the
    * rest. Same human-surface/human-actor (403) and loop-attached (503) guards
    * as {@link api.financeSessionRun}.
    */
-  financeSessionFinalize: ({ actor }: { actor: string }) =>
+  financeSessionFinalize: ({ actor, market }: { actor: string; market?: string }) =>
     financePortfolioWrite<FinanceSessionFinalizeResult>(
       "/api/finance/v1/session/finalize",
-      { actor },
+      { actor, ...(market ? { market } : {}) },
     ),
 
   // ── Portfolio (Phase 0.9): real multi-account holdings ──────────────
@@ -3544,6 +3554,13 @@ export interface FinanceActionOutcome {
   message: string;
   version: number | null;
   candidate: FinanceCandidate | null;
+}
+
+/** Immediate response to a backgrounded session run — poll session/status. */
+export interface FinanceSessionStartResult {
+  status: "started" | "already_running";
+  market: string;
+  note?: string;
 }
 
 /**

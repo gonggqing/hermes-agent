@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -23,6 +23,7 @@ import { Badge } from "@nous-research/ui/ui/components/badge";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@nous-research/ui/ui/components/card";
 import { Input } from "@nous-research/ui/ui/components/input";
+import { Segmented } from "@nous-research/ui/ui/components/segmented";
 import { Spinner } from "@nous-research/ui/ui/components/spinner";
 import type { FinanceTranslations } from "@/i18n/types";
 import { useFinanceT } from "./i18n";
@@ -274,6 +275,22 @@ export function SessionControls({
   );
   const [finalizeResult, setFinalizeResult] =
     useState<FinanceSessionFinalizeResult | null>(null);
+  // Which market this session run targets (US default; HK when order-capable).
+  const [market, setMarket] = useState("us");
+  const [orderMarkets, setOrderMarkets] = useState<string[]>(["us"]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .financeMarkets()
+      .then((r) => {
+        if (!cancelled && r.order_capable.length) setOrderMarkets(r.order_capable);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Map a structured (never-throws) 403/503 outcome to a localized message.
   const outcomeError = (status: number, error: string): string => {
@@ -282,22 +299,46 @@ export function SessionControls({
     return s.errFailed.replace("{error}", error || String(status));
   };
 
+  // The run is backgrounded (monitors are slow); poll session/status until the
+  // summary lands, then surface it and refresh the queue.
+  const pollUntilDone = async () => {
+    for (let i = 0; i < 90; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      let st;
+      try {
+        st = await api.financeSessionStatus(market);
+      } catch {
+        continue;
+      }
+      if (!st.running) {
+        const sum = st.summary;
+        if (sum && "risk_approved" in sum) {
+          setRunResult(sum);
+          showToast(
+            s.runResult
+              .replace("{pushed}", String(sum.pushed))
+              .replace("{approved}", String(sum.risk_approved))
+              .replace("{cutoff}", sum.cutoff_et),
+            "success",
+          );
+          onRan();
+        } else if (sum && "error" in sum) {
+          showToast(s.errFailed.replace("{error}", sum.error), "error");
+        }
+        return;
+      }
+    }
+  };
+
   const runSession = async () => {
     setRunning(true);
     try {
-      const res = await api.financeSessionRun({ actor: FINANCE_ACTOR });
+      const res = await api.financeSessionRun({ actor: FINANCE_ACTOR, market });
       if (res.ok && res.data !== null) {
-        const r = res.data;
-        setRunResult(r);
-        showToast(
-          s.runResult
-            .replace("{pushed}", String(r.pushed))
-            .replace("{approved}", String(r.risk_approved))
-            .replace("{cutoff}", r.cutoff_et),
-          "success",
-        );
-        // Pushed candidates now await confirmation — refetch the queue.
-        onRan();
+        if (res.data.status === "already_running") {
+          showToast(s.running, "success");
+        }
+        await pollUntilDone();
       } else {
         showToast(outcomeError(res.status, res.error), "error");
       }
@@ -312,7 +353,7 @@ export function SessionControls({
     setFinalizing(true);
     setConfirmFinalize(false);
     try {
-      const res = await api.financeSessionFinalize({ actor: FINANCE_ACTOR });
+      const res = await api.financeSessionFinalize({ actor: FINANCE_ACTOR, market });
       if (res.ok && res.data !== null) {
         const r = res.data;
         setFinalizeResult(r);
@@ -339,9 +380,21 @@ export function SessionControls({
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Zap className="h-5 w-5 text-muted-foreground" />
           <CardTitle className="text-base">{s.title}</CardTitle>
+          {orderMarkets.length > 1 && (
+            <div className="ml-auto">
+              <Segmented<string>
+                value={market}
+                onChange={setMarket}
+                options={orderMarkets.map((m) => ({
+                  value: m,
+                  label: m.toUpperCase(),
+                }))}
+              />
+            </div>
+          )}
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">

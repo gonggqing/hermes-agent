@@ -766,6 +766,8 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     # run + finalize so /v1/session/* can trigger them on demand (human-gated).
     runtime.run_session = loop.run_session_now
     runtime.finalize_session = loop.finalize_session_now
+    runtime.run_session_by_market["us"] = loop.run_session_now
+    runtime.finalize_session_by_market["us"] = loop.finalize_session_now
     runtime.execution = loop.execution  # Phase 0.95: /orders/cancel-all
     runtime.run_research["us"] = loop.run_research_now
 
@@ -889,6 +891,8 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 schedule=HK_TRADING_SCHEDULE,
             )
             runtime.run_research["hk"] = hk_loop.run_research_now
+            runtime.run_session_by_market["hk"] = hk_loop.run_session_now
+            runtime.finalize_session_by_market["hk"] = hk_loop.finalize_session_now
             runtime.order_capable_markets.add("hk")  # UI drops research-only badge
             logger.info(
                 "hk ORDER-CAPABLE session enabled (paper)",
