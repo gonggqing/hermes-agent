@@ -891,6 +891,9 @@ class DailyLoop:
         )
         if self.runtime is not None:
             self.runtime.confirmation = self._confirmation
+            self.runtime.confirmation_by_market[self.market_id.lower()] = (
+                self._confirmation
+            )
         self._publish_brief()  # refresh with today's signals/candidates
         logger.info(
             "decide complete",
@@ -1011,6 +1014,9 @@ class DailyLoop:
         )
         if self.runtime is not None:
             self.runtime.confirmation = self._confirmation
+            self.runtime.confirmation_by_market[self.market_id.lower()] = (
+                self._confirmation
+            )
         self.on_push()  # publishes into the now-anchored window
 
         halted = self._health is not None and not self._health.entries_allowed
@@ -1118,6 +1124,7 @@ class DailyLoop:
         self._confirmation = service
         if self.runtime is not None:
             self.runtime.confirmation = service
+            self.runtime.confirmation_by_market[self.market_id.lower()] = service
         if self.telegram is not None:
             self.telegram.restore_cards(restored, service=service)
         return restored

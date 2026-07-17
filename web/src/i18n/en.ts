@@ -148,10 +148,12 @@ export const financeEn: FinanceTranslations = {
     collapse: "Hide approval queue",
     approvalTitle: "Approval queue",
     noPending:
-      "No candidates awaiting confirmation. Risk-approved candidates are published at 11:30 ET and expire at 12:30 ET.",
+      "No candidates awaiting confirmation. Risk-approved candidates are pushed during each market's confirmation window and expire when it closes.",
     windowClosed: "window closed",
     windowClosedHint:
-      "Actions are only allowed during the 11:30–12:30 ET confirmation window",
+      "Actions are only allowed during the {push}–{cutoff} {tz} confirmation window",
+    windowClosedHintGeneric:
+      "Actions are only allowed during this market's confirmation window",
     confidenceVersion: "confidence {pct}% · v{version}",
     noRationale: "No rationale provided.",
     riskNote: "Risk: {note}",

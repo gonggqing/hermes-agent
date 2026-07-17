@@ -44,6 +44,31 @@ function draftFrom(c: FinanceCandidate): EditDraft {
   };
 }
 
+/** Short display label for a market's confirmation-window timezone. */
+const TZ_LABELS: Record<string, string> = {
+  "America/New_York": "ET",
+  "Asia/Hong_Kong": "HKT",
+  "Asia/Shanghai": "CST",
+  "Asia/Seoul": "KST",
+};
+
+/**
+ * The confirmation-window hint for a pending candidate, using ITS market's real
+ * times (US ET vs HK HKT). Falls back to a market-neutral sentence when the
+ * server did not supply a window (older payloads).
+ */
+function windowHint(
+  ft: FinanceTranslations,
+  window?: FinancePendingCandidate["window"],
+): string {
+  if (!window) return ft.queue.windowClosedHintGeneric;
+  const tz = TZ_LABELS[window.tz] ?? window.tz;
+  return ft.queue.windowClosedHint
+    .replace("{push}", window.push)
+    .replace("{cutoff}", window.cutoff)
+    .replace("{tz}", tz);
+}
+
 /** Parse the draft into an edits payload; returns a localized error on bad input. */
 function parseDraft(
   draft: EditDraft,
@@ -95,7 +120,7 @@ function CandidateCard({
   const [draft, setDraft] = useState<EditDraft>(() => draftFrom(c));
   const [draftError, setDraftError] = useState<string | null>(null);
   const disabled = busy || !windowOpen;
-  const windowClosedHint = ft.queue.windowClosedHint;
+  const windowClosedHint = windowHint(ft, pending.window);
   const disabledHint = !windowOpen ? windowClosedHint : undefined;
 
   const saveAndApprove = () => {
@@ -530,7 +555,7 @@ export function ApprovalQueue({
         ...(edits ? { edits } : {}),
       });
       keysRef.current.delete(actionKey);
-      renderOutcome(c, action, outcome);
+      renderOutcome(c, action, outcome, pc.window);
     } catch (err) {
       // Network/proxy failure — keep the key so a retry replays safely.
       showToast(
@@ -548,6 +573,7 @@ export function ApprovalQueue({
     c: FinanceCandidate,
     action: "approve" | "reject" | "edit",
     outcome: FinanceActionOutcome,
+    window?: FinancePendingCandidate["window"],
   ) => {
     const o = ft.queue.outcome;
     const verb =
@@ -572,7 +598,7 @@ export function ApprovalQueue({
         showToast(
           o.windowClosed
             .replace("{symbol}", c.symbol)
-            .replace("{hint}", ft.queue.windowClosedHint),
+            .replace("{hint}", windowHint(ft, window)),
           "error",
         );
         onActed();

@@ -595,6 +595,67 @@ class TestPendingAndActions:
         assert client.post("/v1/orders", json={}).status_code == 405
 
 
+class TestMultiMarketConfirmation:
+    """Two order-capable markets share one runtime. Before the per-market
+    registry, ``runtime.confirmation`` was a single slot each loop overwrote,
+    so the web dashboard could only ever SEE and ACT on the market whose loop
+    assigned last (HK at startup). These tests pin the aggregation + routing.
+    """
+
+    def _two_market_client(self, tmp_path):
+        ledger = Ledger(url=f"sqlite:///{tmp_path/'mm.db'}")
+        us = ConfirmationService(ledger, mode=Mode.PAPER, market_tz="America/New_York")
+        hk = ConfirmationService(ledger, mode=Mode.PAPER, market_tz="Asia/Hong_Kong")
+        # 10:45 in each market's own local time → a valid publish window there.
+        us_at = datetime(2026, 7, 13, 14, 45, tzinfo=timezone.utc)  # 10:45 EDT
+        hk_at = datetime(2026, 7, 13, 2, 45, tzinfo=timezone.utc)  # 10:45 HKT
+        us_c = candidate(symbol="NVDA", market="US")
+        hk_c = candidate(symbol="0700.HK", market="HK")
+        ledger.record_candidate(us_c, Mode.PAPER)
+        ledger.record_candidate(hk_c, Mode.PAPER)
+        us.publish([us_c], us_at)
+        hk.publish([hk_c], hk_at)
+        # NOTE: legacy single slot deliberately left None — routing must work
+        # off the per-market registry alone.
+        runtime = FinanceRuntime(ledger=ledger, clock=lambda: us_at)
+        runtime.confirmation_by_market = {"us": us, "hk": hk}
+        return runtime, TestClient(create_app(runtime)), us_c, hk_c
+
+    def test_pending_lists_every_market(self, tmp_path):
+        _, client, us_c, hk_c = self._two_market_client(tmp_path)
+        rows = client.get("/v1/candidates/pending").json()
+        by_id = {r["candidate"]["id"]: r for r in rows}
+        assert us_c.id in by_id and hk_c.id in by_id  # neither market vanishes
+        # each row carries ITS market's real window, not a hard-coded US clock
+        assert by_id[us_c.id]["window"]["tz"] == "America/New_York"
+        assert by_id[us_c.id]["window"] == {
+            "push": "10:30", "cutoff": "11:30",
+            "tz": "America/New_York", "market": "US",
+        }
+        assert by_id[hk_c.id]["window"]["tz"] == "Asia/Hong_Kong"
+        # clock sits in the US window → US open, HK closed, both still listed
+        assert by_id[us_c.id]["window_open"] is True
+        assert by_id[hk_c.id]["window_open"] is False
+
+    def test_act_routes_to_owning_market(self, tmp_path):
+        # runtime.confirmation is None; only the registry can locate candidates.
+        _, client, us_c, hk_c = self._two_market_client(tmp_path)
+        ok = client.post(
+            f"/v1/candidates/{us_c.id}/action",
+            json={"action": "approve", "actor": "gongqing", "idempotency_key": "u1"},
+            headers={"X-Finance-Surface": "web"},
+        )
+        assert ok.status_code == 200 and ok.json()["code"] == "applied"
+        # HK candidate is found in the HK service (not 404/503); its own window
+        # is closed at this instant, so the gate refuses — proving it routed.
+        hk = client.post(
+            f"/v1/candidates/{hk_c.id}/action",
+            json={"action": "approve", "actor": "gongqing", "idempotency_key": "h1"},
+            headers={"X-Finance-Surface": "web"},
+        )
+        assert hk.status_code == 403 and hk.json()["code"] == "window_closed"
+
+
 class TestByMarketStats:
     def test_stats_by_market_never_blends_currencies(self, env):
         from datetime import timedelta

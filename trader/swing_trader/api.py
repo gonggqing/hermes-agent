@@ -64,6 +64,11 @@ class FinanceRuntime:
     mode: Mode = Mode.PAPER
     broker: Optional[BrokerInterface] = None
     confirmation: Optional[ConfirmationService] = None
+    #: One confirmation service per order-capable market (``us``/``hk``/...).
+    #: ``confirmation`` above is a single slot the last loop to run would clobber,
+    #: so the web endpoints must aggregate over THIS registry to see every
+    #: market's pending candidates (Telegram already routes per-candidate).
+    confirmation_by_market: dict = field(default_factory=dict)
     market: dict = field(default_factory=dict)  # latest MarketSnapshot dump
     market_cn: dict = field(default_factory=dict)  # latest CN MarketSnapshot dump
     market_snapshots: dict = field(default_factory=dict)  # cn/hk/kr independent
@@ -268,6 +273,27 @@ class CancelAllRequest(BaseModel):
     #: Cancel resting protective stops too (leaves positions naked — explicit).
     include_protection: bool = True
     surface: Optional[str] = None
+
+
+def _confirmation_services(runtime: FinanceRuntime) -> list[ConfirmationService]:
+    """Every active confirmation service, one per order-capable market.
+
+    Prefers the per-market registry; falls back to the legacy single slot so
+    older single-market runtimes (and tests) keep working.
+    """
+    if runtime.confirmation_by_market:
+        return list(runtime.confirmation_by_market.values())
+    return [runtime.confirmation] if runtime.confirmation is not None else []
+
+
+def _service_for_candidate(
+    runtime: FinanceRuntime, candidate_id: str
+) -> Optional[ConfirmationService]:
+    """The confirmation service that owns ``candidate_id`` (any status)."""
+    for svc in _confirmation_services(runtime):
+        if svc.get(candidate_id) is not None:
+            return svc
+    return None
 
 
 def _live_quotes_for_positions(runtime: FinanceRuntime) -> dict[str, float]:
@@ -1101,18 +1127,27 @@ def create_app(runtime: FinanceRuntime):
 
     @app.get(f"/{API_VERSION}/candidates/pending")
     def pending() -> list[dict]:
-        svc = runtime.confirmation
-        if svc is None:
+        services = _confirmation_services(runtime)
+        if not services:
             return []
         now = runtime.clock()
-        return [
-            {
-                "candidate": c.model_dump(mode="json"),
-                "version": v,
-                "window_open": svc.in_window(now),
-            }
-            for c, v in svc.pending()
-        ]
+        out: list[dict] = []
+        for svc in services:
+            info = svc.window_info()
+            open_now = svc.in_window(now)
+            for c, v in svc.pending():
+                out.append(
+                    {
+                        "candidate": c.model_dump(mode="json"),
+                        "version": v,
+                        "window_open": open_now,
+                        # The OWNING service's real window, so the dashboard
+                        # renders each market's true clock (US ET vs HK HKT)
+                        # instead of a hard-coded US string.
+                        "window": {**info, "market": c.market},
+                    }
+                )
+        return out
 
     @app.get(f"/{API_VERSION}/audit")
     def audit(
@@ -1130,11 +1165,18 @@ def create_app(runtime: FinanceRuntime):
         body: ActionRequest,
         x_finance_surface: Optional[str] = Header(default=None),
     ):
-        svc = runtime.confirmation
+        svc = _service_for_candidate(runtime, candidate_id)
         if svc is None:
-            raise HTTPException(
-                503, "confirmation service not active (no candidates published today)"
-            )
+            # Fall back to any active service so a genuinely-unknown id still
+            # gets the service's structured "unknown_candidate" result rather
+            # than a bare 503.
+            services = _confirmation_services(runtime)
+            if not services:
+                raise HTTPException(
+                    503,
+                    "confirmation service not active (no candidates published today)",
+                )
+            svc = services[0]
         raw_surface = x_finance_surface or body.surface or "web"
         try:
             surface = Surface(raw_surface)

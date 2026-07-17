@@ -1558,7 +1558,7 @@ export const en: Translations = {
     modeSwitchTo: mode => `Switch to ${mode}`,
     queue: {
       empty:
-        'No pending candidates. The queue fills when the daily loop publishes risk-approved candidates (11:30 ET) and empties at the 12:30 ET cutoff.',
+        "No pending candidates. Risk-approved candidates are pushed during each market's confirmation window and clear when it closes.",
       selectPrompt: 'Select a candidate to review and approve, edit, or reject.',
       rowMeta: (side, qty) => `${side} · ${qty}`,
       approve: 'Approve',
@@ -1576,7 +1576,7 @@ export const en: Translations = {
       pool: pool => `pool ${pool}`,
       validUntil: ts => `valid until ${ts}`,
       proposedAt: ts => `proposed ${ts}`,
-      windowClosed: 'Confirmation window is closed (11:30–12:30 ET) — actions are disabled.',
+      windowClosed: 'Confirmation window is closed — actions are disabled.',
       actionFailed: (action, symbol) => `Failed to ${action} ${symbol}`,
       actionDone: (symbol, action, code) => `${symbol}: ${action} ${code}`,
       editTitle: 'Edit candidate',
@@ -1594,7 +1594,7 @@ export const en: Translations = {
       saveApprove: 'Save & approve',
       sessionTitle: 'Trading session',
       sessionHint:
-        'Run monitor → decide → push now to put risk-approved candidates into a fresh approval window, then approve them below (also catches up a missed 11:30 ET session). Running does not place orders.',
+        'Run monitor → decide → push now to put risk-approved candidates into a fresh approval window, then approve them below (also catches up a missed session). Running does not place orders.',
       sessionRun: 'Run Session',
       sessionRunning: 'Running…',
       sessionFinalize: 'Finalize & place approved',

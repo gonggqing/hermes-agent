@@ -739,9 +739,10 @@ export const zh: Translations = {
       collapse: "收起确认队列",
       approvalTitle: "确认队列",
       noPending:
-        "暂无待确认的候选订单。风控通过的候选订单于美东时间 11:30 发布，并在 12:30 过期。",
+        "暂无待确认的候选订单。风控通过的候选订单会在各自市场的确认窗口内推送，窗口关闭后自动过期。",
       windowClosed: "窗口已关闭",
-      windowClosedHint: "仅允许在美东时间 11:30–12:30 的确认窗口内操作",
+      windowClosedHint: "仅允许在确认窗口 {push}–{cutoff}（{tz}）内操作",
+      windowClosedHintGeneric: "仅允许在该市场的确认窗口内操作",
       confidenceVersion: "置信度 {pct}% · v{version}",
       noRationale: "未提供理由。",
       riskNote: "风险：{note}",

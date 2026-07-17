@@ -49,8 +49,9 @@ import {
 } from './lib'
 import { FinanceCard, FinancePill, FinanceSectionLabel, QuerySection } from './primitives'
 
-// Candidates land at 11:30 ET and expire at 12:30 ET (Loop.md §4) with no push
-// signal to this surface, so poll while the tab is mounted.
+// Candidates land at the push time and expire at the cutoff (US 10:30→11:30 ET;
+// each market runs its own window) with no push signal to this surface, so poll
+// while the tab is mounted.
 const PENDING_POLL_MS = 15_000
 
 export const PENDING_QUERY_KEY = financeKey('candidates', 'pending')

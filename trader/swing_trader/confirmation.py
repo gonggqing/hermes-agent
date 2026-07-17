@@ -132,6 +132,19 @@ class ConfirmationService:
             raise ValueError("now_utc must be timezone-aware")
         return now_utc.astimezone(self._tz).time() >= self._cutoff
 
+    def window_info(self) -> dict[str, str]:
+        """The confirmation window this service enforces, for display.
+
+        Each market runs its own service with its own timezone (US in
+        America/New_York, HK in Asia/Hong_Kong), so the dashboard must render
+        the owning service's real times rather than a hard-coded US clock.
+        """
+        return {
+            "push": self._push_time.strftime("%H:%M"),
+            "cutoff": self._cutoff.strftime("%H:%M"),
+            "tz": str(self._tz),
+        }
+
     # ------------------------------------------------------------- publish
 
     def publish(

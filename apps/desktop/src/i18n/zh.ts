@@ -1734,7 +1734,7 @@ export const zh: Translations = {
     modeOverridden: '手动覆盖',
     modeSwitchTo: mode => `切换到${mode}`,
     queue: {
-      empty: '暂无待处理候选单。每日循环在 11:30（美东）发布风控通过的候选单后队列填充，12:30（美东）截止后清空。',
+      empty: '暂无待处理候选单。风控通过的候选单会在各自市场的确认窗口内推送，窗口关闭后清空。',
       selectPrompt: '选择一个候选单以查看并批准、编辑或拒绝。',
       rowMeta: (side, qty) => `${side} · ${qty}`,
       approve: '批准',
@@ -1752,7 +1752,7 @@ export const zh: Translations = {
       pool: pool => `资金池 ${pool}`,
       validUntil: ts => `有效至 ${ts}`,
       proposedAt: ts => `提议于 ${ts}`,
-      windowClosed: '确认窗口已关闭（美东 11:30–12:30）— 操作已禁用。',
+      windowClosed: '确认窗口已关闭 — 操作已禁用。',
       actionFailed: (action, symbol) => `${symbol} ${action}失败`,
       actionDone: (symbol, action, code) => `${symbol}：${action} ${code}`,
       editTitle: '编辑候选单',
@@ -1769,7 +1769,7 @@ export const zh: Translations = {
       saveApprove: '保存并批准',
       sessionTitle: '交易 Session',
       sessionHint:
-        '立即运行 监控 → 决策 → 推送，将风控通过的候选单推入新的审批窗口，然后在下方批准（也可用于补跑错过的 11:30 美东 Session）。运行不会下单。',
+        '立即运行 监控 → 决策 → 推送，将风控通过的候选单推入新的审批窗口，然后在下方批准（也可用于补跑错过的 Session）。运行不会下单。',
       sessionRun: 'Run Session',
       sessionRunning: '运行中…',
       sessionFinalize: '结算并下单',

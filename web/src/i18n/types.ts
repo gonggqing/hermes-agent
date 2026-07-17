@@ -158,7 +158,8 @@ export interface FinanceTranslations {
     approvalTitle: string;
     noPending: string;
     windowClosed: string; // badge
-    windowClosedHint: string;
+    windowClosedHint: string; // "{push}–{cutoff} {tz}" placeholders
+    windowClosedHintGeneric: string; // fallback when the window is unknown
     confidenceVersion: string; // "confidence {pct}% · v{version}"
     noRationale: string;
     riskNote: string; // "Risk: {note}"

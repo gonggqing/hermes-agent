@@ -3506,6 +3506,13 @@ export interface FinancePendingCandidate {
   candidate: FinanceCandidate;
   version: number;
   window_open: boolean;
+  /** The owning market's real confirmation window, for display. */
+  window?: {
+    push: string; // "HH:MM" in the market's own timezone
+    cutoff: string; // "HH:MM"
+    tz: string; // IANA key, e.g. "America/New_York"
+    market: string; // "us" | "hk" | ...
+  };
 }
 
 export interface FinanceAuditEvent {
