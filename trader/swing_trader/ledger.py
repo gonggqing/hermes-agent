@@ -136,6 +136,7 @@ class CandidateRow(SQLModel, table=True):
     id: str = Field(primary_key=True)
     ts: str
     mode: str = Field(index=True)
+    market: str = Field(default="", index=True)  # owning session (US/HK/...)
     symbol: str = Field(index=True)
     currency: str = "USD"
     side: str
@@ -318,6 +319,7 @@ def _candidate_to_row(c: CandidateOrder, mode: Mode | str) -> CandidateRow:
         id=c.id,
         ts=_to_iso(c.ts),
         mode=_mode_value(mode),
+        market=c.market,
         symbol=c.symbol,
         currency=c.currency,
         side=c.side.value,
@@ -345,6 +347,7 @@ def _candidate_from_row(row: CandidateRow) -> CandidateOrder:
         ts=_from_iso(row.ts),
         symbol=row.symbol,
         currency=row.currency,
+        market=row.market,
         side=Side(row.side),
         qty=row.qty,
         order_type=OrderType(row.order_type),
@@ -624,7 +627,10 @@ class Ledger:
     def _migrate_currency_columns(self) -> None:
         """Additive catch-up for ledgers created before multi-currency audit."""
         additions = {
-            "candidates": {"currency": "VARCHAR NOT NULL DEFAULT 'USD'"},
+            "candidates": {
+                "currency": "VARCHAR NOT NULL DEFAULT 'USD'",
+                "market": "VARCHAR NOT NULL DEFAULT ''",
+            },
             "orders": {"currency": "VARCHAR NOT NULL DEFAULT 'USD'"},
             "fills": {"currency": "VARCHAR NOT NULL DEFAULT 'USD'"},
             "snapshots": {
@@ -659,6 +665,14 @@ class Ledger:
                                   ELSE currency
                                 END'''
                         )
+                    )
+                if table_name == "candidates":
+                    # Every pre-existing candidate is a US execution candidate
+                    # (HK ordering did not exist), so backfill the new market
+                    # discriminator to 'US'. Going forward each loop stamps its
+                    # own market, keeping US and HK candidates from colliding.
+                    connection.execute(
+                        text("UPDATE candidates SET market = 'US' WHERE market = ''")
                     )
 
     # ------------------------------------------------------------- signals
@@ -709,6 +723,7 @@ class Ledger:
         self,
         mode: Mode | str | None = None,
         status: CandidateStatus | str | None = None,
+        market: str | None = None,
     ) -> list[CandidateOrder]:
         with Session(self._engine) as session:
             stmt = select(CandidateRow)
@@ -716,6 +731,8 @@ class Ledger:
                 stmt = stmt.where(CandidateRow.mode == _mode_value(mode))
             if status is not None:
                 stmt = stmt.where(CandidateRow.status == CandidateStatus(status).value)
+            if market is not None:
+                stmt = stmt.where(CandidateRow.market == market)
             rows = session.exec(stmt).all()
         out = [_candidate_from_row(r) for r in rows]
         out.sort(key=lambda c: c.ts)

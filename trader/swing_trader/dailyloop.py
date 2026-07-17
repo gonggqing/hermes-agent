@@ -601,6 +601,7 @@ class DailyLoop:
         broker: BrokerInterface,
         ledger: Ledger,
         mode: Mode = Mode.PAPER,
+        market_id: str = "US",
         live_orders_allowed: bool = False,
         risk_params: RiskParams | None = None,
         symbols: list[str] | None = None,
@@ -624,6 +625,11 @@ class DailyLoop:
         self.broker = broker
         self.ledger = ledger
         self.mode = mode
+        # Owning market/session ("US", "HK", ...). Scopes every candidate this
+        # loop creates and queries, so a concurrent US and HK loop sharing a
+        # paper `mode` never cross-expire or cross-execute (see get_candidates
+        # market filter). Default "US" preserves single-session behaviour.
+        self.market_id = market_id
         self.clock = clock
         self.risk_params = risk_params or RiskParams()
         self.symbols = symbols or watchlist_mod.enabled_symbols()
@@ -786,6 +792,11 @@ class DailyLoop:
             earnings_symbols={e.symbol for e in self._earnings
                               if getattr(e, "imminent", False)},
         )
+        # Stamp every candidate with this loop's market so it is scoped away
+        # from any other concurrent session sharing the same paper `mode`.
+        candidates = [
+            c.model_copy(update={"market": self.market_id}) for c in candidates
+        ]
 
         self._risk_approved = []
         entries_seen = 0
@@ -993,7 +1004,9 @@ class DailyLoop:
     def _candidates(self, *statuses: CandidateStatus) -> list[CandidateOrder]:
         wanted = set(statuses)
         return [
-            candidate for candidate in self.ledger.get_candidates(mode=self.mode)
+            candidate for candidate in self.ledger.get_candidates(
+                mode=self.mode, market=self.market_id
+            )
             if candidate.status in wanted
         ]
 
@@ -1465,7 +1478,8 @@ class DailyLoop:
         action: str,
     ) -> bool:
         current = next(
-            (row for row in self.ledger.get_candidates(mode=self.mode)
+            (row for row in self.ledger.get_candidates(
+                mode=self.mode, market=self.market_id)
              if row.id == candidate.id),
             None,
         )

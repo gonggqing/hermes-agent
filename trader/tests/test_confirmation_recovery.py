@@ -47,7 +47,7 @@ def _candidate(feed, clock, day, *, status=CandidateStatus.RISK_APPROVED):
     clock.set_et(day, 10, 0)
     last = feed.get_quote("NVDA").last
     return CandidateOrder(
-        ts=clock(), symbol="NVDA", side=Side.BUY, qty=1,
+        ts=clock(), symbol="NVDA", market="US", side=Side.BUY, qty=1,
         order_type=OrderType.BRACKET, limit=last * 0.995,
         stop=last * 0.92, tp=last * 1.10, rationale="restart test",
         confidence=0.7, ref_px=last, status=status,

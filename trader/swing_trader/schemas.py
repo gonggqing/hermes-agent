@@ -339,6 +339,10 @@ class CandidateOrder(_TsModel):
     id: str = Field(default_factory=new_id)
     symbol: str
     currency: str = ""
+    # Owning trading session/market ("US", "HK", ...). Scopes the candidate so
+    # two order-capable loops sharing a paper `mode` never cross-expire or
+    # cross-execute each other's candidates. Empty = legacy/US (backfilled).
+    market: str = ""
     side: Side
     qty: float = Field(gt=0)
     order_type: OrderType

@@ -716,3 +716,27 @@ def test_stats_drawdown_zero_with_single_snapshot(ledger: Ledger) -> None:
     ledger.record_snapshot(make_snapshot(equity=100.0))
     st = ledger.stats(Mode.PAPER)
     assert st.max_drawdown_pct == 0.0
+
+
+class TestCandidateMarketDiscriminator:
+    """A candidate carries an owning market so two order-capable sessions
+    sharing one paper `mode` never cross-expire or cross-execute (arch fix)."""
+
+    def test_market_filter_isolates_sessions(self, tmp_path):
+        led = Ledger(url=f"sqlite:///{tmp_path/'m.db'}")
+        us = make_candidate(symbol="NVDA", market="US")
+        hk = make_candidate(symbol="0700.HK", currency="HKD", market="HK")
+        led.record_candidate(us, Mode.PAPER)
+        led.record_candidate(hk, Mode.PAPER)
+
+        us_only = led.get_candidates(mode=Mode.PAPER, market="US")
+        hk_only = led.get_candidates(mode=Mode.PAPER, market="HK")
+        assert [c.symbol for c in us_only] == ["NVDA"]
+        assert [c.symbol for c in hk_only] == ["0700.HK"]
+        # no market filter still returns both (back-compat)
+        assert len(led.get_candidates(mode=Mode.PAPER)) == 2
+
+    def test_market_round_trips(self, tmp_path):
+        led = Ledger(url=f"sqlite:///{tmp_path/'m2.db'}")
+        led.record_candidate(make_candidate(market="HK"), Mode.PAPER)
+        assert led.get_candidates(mode=Mode.PAPER)[0].market == "HK"
