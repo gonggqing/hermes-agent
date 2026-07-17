@@ -122,6 +122,9 @@ interface AccountNumbers {
   base_currency: string;
   cash_by_currency: Record<string, number>;
   equity_by_currency: Record<string, number>;
+  ts?: string;
+  marks_live?: boolean;
+  marks_as_of?: string | null;
 }
 
 // ── Account / positions / orders / market / reports sections ──────────
@@ -133,49 +136,58 @@ interface AccountNumbers {
 type CurvePoint = { ts: string; value: number };
 
 // Per-currency equity: different currencies are different units/scales, so they
-// are shown as SMALL MULTIPLES (one chart each in its own scale) — never one
-// FX-blended base line and never a dual-axis chart (dataviz non-negotiables).
-function EquityCurve({ snapshots }: { snapshots: FinanceSnapshot[] }) {
+// are shown ONE AT A TIME behind a US/HK toggle (different currencies are
+// different units — never one FX-blended base line, never a dual-axis chart).
+// The live account value is appended as the latest point so the curve ends at
+// the CURRENT (live-overlaid) equity, aligned with the account panel — not at
+// the last daily-close snapshot.
+function EquityCurve({
+  snapshots,
+  live,
+}: {
+  snapshots: FinanceSnapshot[];
+  live: AccountNumbers | null;
+}) {
   const ft = useFinanceT();
-  if (snapshots.length < 2) {
-    return (
-      <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
-        {ft.account.notEnoughSnapshots}
-      </p>
-    );
-  }
   const currencies = Array.from(
-    new Set(snapshots.flatMap((s) => Object.keys(s.equity_by_currency ?? {}))),
+    new Set([
+      ...snapshots.flatMap((s) => Object.keys(s.equity_by_currency ?? {})),
+      ...Object.keys(live?.equity_by_currency ?? {}),
+    ]),
   ).sort();
-  const series =
-    currencies.length > 0
-      ? currencies.map((cur) => ({
-          currency: cur,
-          market: marketForCurrency(cur),
-          points: snapshots.map((s) => ({
-            ts: s.ts,
-            value: s.equity_by_currency?.[cur] ?? 0,
-          })),
-        }))
-      : [
-          {
-            currency: snapshots[0].base_currency,
-            market: marketForCurrency(snapshots[0].base_currency),
-            points: snapshots.map((s) => ({ ts: s.ts, value: s.equity })),
-          },
-        ];
+  const options = (currencies.length > 0 ? currencies : ["USD"]).map((c) => ({
+    value: c,
+    label: `${marketForCurrency(c)} · ${c}`,
+  }));
+  const [sel, setSel] = useState(options[0].value);
+  const cur = options.some((o) => o.value === sel) ? sel : options[0].value;
+
+  const points: CurvePoint[] = snapshots.map((s) => ({
+    ts: s.ts,
+    value:
+      currencies.length > 0 ? (s.equity_by_currency?.[cur] ?? 0) : s.equity,
+  }));
+  // append the live "now" point so the curve ends at the CURRENT value (aligned
+  // with the account panel), only when a live overlay is actually active — when
+  // the loop is idle the latest snapshot is already the last point.
+  const liveVal = live?.equity_by_currency?.[cur];
+  const liveTs = live?.marks_as_of ?? live?.ts;
+  if (live?.marks_live && liveVal != null && liveTs) {
+    points.push({ ts: liveTs, value: liveVal });
+  }
+
   return (
-    <div className="flex flex-col gap-5">
-      {series.map((s) => (
-        <div key={s.currency} className="flex flex-col gap-1">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Badge tone="outline">{s.market}</Badge>
-            <span className="font-mono-ui">{s.currency}</span>
-            <span>· {ft.account.equity}</span>
-          </div>
-          <CurveChart points={s.points} currency={s.currency} />
-        </div>
-      ))}
+    <div className="flex flex-col gap-2">
+      {options.length > 1 && (
+        <Segmented<string> value={cur} onChange={setSel} options={options} />
+      )}
+      {points.length < 2 ? (
+        <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
+          {ft.account.notEnoughSnapshots}
+        </p>
+      ) : (
+        <CurveChart points={points} currency={cur} />
+      )}
     </div>
   );
 }
@@ -584,7 +596,7 @@ function AccountSection({
           </div>
         </CardHeader>
         <CardContent>
-          <EquityCurve snapshots={snapshots} />
+          <EquityCurve snapshots={snapshots} live={numbers} />
         </CardContent>
       </Card>
     </div>
