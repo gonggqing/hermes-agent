@@ -184,3 +184,22 @@ class TestSessionParameterization:
         from swing_trader.scheduler import ET
         assert loop.market_id == "US"
         assert loop._tz is ET
+
+
+class TestHKOrderCapableWiring:
+    def test_hk_loop_exposes_execution_callbacks(self, tmp_path):
+        """An order-capable HK loop wires CONFIRM_CUTOFF + MARKET_CLOSE (the
+        research session deliberately lacks them)."""
+        from swing_trader.scheduler import HK_TRADING_SCHEDULE, Event
+        days = trading_days(date(2026, 7, 13), 2)
+        series, warmup = build_sim_series(SYMBOLS, days)
+        feed = SimFeed(series)
+        feed.set_day(warmup)
+        ledger = Ledger(url=f"sqlite:///{tmp_path/'hk.db'}")
+        clock = MutableClock(now=datetime(2026, 7, 13, 2, tzinfo=timezone.utc))
+        loop = DailyLoop(feed, PaperBroker(starting_cash=50_000.0), ledger,
+                         symbols=SYMBOLS, clock=clock,
+                         schedule=HK_TRADING_SCHEDULE, notify=lambda _t: None)
+        cbs = loop.callbacks()
+        assert Event.CONFIRM_CUTOFF in cbs and Event.MARKET_CLOSE in cbs
+        assert Event.PUSH_CANDIDATES in cbs
