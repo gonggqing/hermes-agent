@@ -130,11 +130,13 @@ interface AccountNumbers {
 // real x (time) / y (value) axes, recessive gridlines and a hover readout.
 // Hand-rolled SVG in the house style (currentColor driven by text-* classes,
 // uniform viewBox scaling — no preserveAspectRatio distortion).
+type CurvePoint = { ts: string; value: number };
+
+// Per-currency equity: different currencies are different units/scales, so they
+// are shown as SMALL MULTIPLES (one chart each in its own scale) — never one
+// FX-blended base line and never a dual-axis chart (dataviz non-negotiables).
 function EquityCurve({ snapshots }: { snapshots: FinanceSnapshot[] }) {
   const ft = useFinanceT();
-  const svgRef = useRef<SVGSVGElement>(null);
-  const [hover, setHover] = useState<number | null>(null);
-
   if (snapshots.length < 2) {
     return (
       <p className="font-mondwest normal-case py-4 text-sm text-muted-foreground">
@@ -142,14 +144,67 @@ function EquityCurve({ snapshots }: { snapshots: FinanceSnapshot[] }) {
       </p>
     );
   }
+  const currencies = Array.from(
+    new Set(snapshots.flatMap((s) => Object.keys(s.equity_by_currency ?? {}))),
+  ).sort();
+  const series =
+    currencies.length > 0
+      ? currencies.map((cur) => ({
+          currency: cur,
+          market: marketForCurrency(cur),
+          points: snapshots.map((s) => ({
+            ts: s.ts,
+            value: s.equity_by_currency?.[cur] ?? 0,
+          })),
+        }))
+      : [
+          {
+            currency: snapshots[0].base_currency,
+            market: marketForCurrency(snapshots[0].base_currency),
+            points: snapshots.map((s) => ({ ts: s.ts, value: s.equity })),
+          },
+        ];
+  return (
+    <div className="flex flex-col gap-5">
+      {series.map((s) => (
+        <div key={s.currency} className="flex flex-col gap-1">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Badge tone="outline">{s.market}</Badge>
+            <span className="font-mono-ui">{s.currency}</span>
+            <span>· {ft.account.equity}</span>
+          </div>
+          <CurveChart points={s.points} currency={s.currency} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Client-side mirror of the backend currency→market map (kept tiny + local).
+function marketForCurrency(currency: string): string {
+  return (
+    { USD: "US", HKD: "HK", CNY: "CN", KRW: "KR" }[currency] ?? currency
+  );
+}
+
+function CurveChart({
+  points,
+  currency,
+}: {
+  points: CurvePoint[];
+  currency: string;
+}) {
+  const ft = useFinanceT();
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [hover, setHover] = useState<number | null>(null);
 
   const W = 720;
-  const H = 240;
+  const H = 200;
   const M = { top: 16, right: 16, bottom: 30, left: 64 };
   const innerW = W - M.left - M.right;
   const innerH = H - M.top - M.bottom;
 
-  const values = snapshots.map((s) => s.equity);
+  const values = points.map((p) => p.value);
   const rawMin = Math.min(...values);
   const rawMax = Math.max(...values);
   // pad the value range so the line never glues to the top/bottom edge.
@@ -190,7 +245,8 @@ function EquityCurve({ snapshots }: { snapshots: FinanceSnapshot[] }) {
     setHover(idx);
   };
 
-  const hv = hover !== null ? snapshots[hover] : null;
+  const hv = hover !== null ? points[hover] : null;
+  const fillId = `equity-fill-${currency}`;
 
   return (
     <div className="flex flex-col gap-2">
@@ -200,12 +256,12 @@ function EquityCurve({ snapshots }: { snapshots: FinanceSnapshot[] }) {
         className="w-full text-primary"
         style={{ aspectRatio: `${W} / ${H}` }}
         role="img"
-        aria-label={ft.account.equityCurve}
+        aria-label={`${ft.account.equityCurve} · ${currency}`}
         onMouseMove={onMove}
         onMouseLeave={() => setHover(null)}
       >
         <defs>
-          <linearGradient id="equity-fill" x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="currentColor" stopOpacity="0.16" />
             <stop offset="100%" stopColor="currentColor" stopOpacity="0" />
           </linearGradient>
@@ -249,12 +305,12 @@ function EquityCurve({ snapshots }: { snapshots: FinanceSnapshot[] }) {
             className="font-mondwest text-muted-foreground"
             fontSize={11}
           >
-            {fmtTs(snapshots[i].ts)}
+            {fmtTs(points[i].ts)}
           </text>
         ))}
 
         {/* area + equity line */}
-        <polygon points={areaPts} fill="url(#equity-fill)" stroke="none" />
+        <polygon points={areaPts} fill={`url(#${fillId})`} stroke="none" />
         <polyline
           points={linePts}
           fill="none"
@@ -278,9 +334,9 @@ function EquityCurve({ snapshots }: { snapshots: FinanceSnapshot[] }) {
               strokeWidth={1}
               vectorEffect="non-scaling-stroke"
             />
-            <circle cx={px(hover)} cy={py(hv.equity)} r={5} fill="none"
+            <circle cx={px(hover)} cy={py(hv.value)} r={5} fill="none"
               stroke="currentColor" strokeWidth={2} />
-            <circle cx={px(hover)} cy={py(hv.equity)} r={2} fill="currentColor" />
+            <circle cx={px(hover)} cy={py(hv.value)} r={2} fill="currentColor" />
           </g>
         )}
       </svg>
@@ -291,14 +347,16 @@ function EquityCurve({ snapshots }: { snapshots: FinanceSnapshot[] }) {
           <>
             <span>{fmtTs(hv.ts)}</span>
             <span className="text-foreground">
-              {ft.account.equity}: {fmtMoney(hv.equity)}
+              {ft.account.equity}: {fmtMoney(hv.value)} {currency}
             </span>
           </>
         ) : (
           <>
-            <span>{fmtTs(snapshots[0].ts)}</span>
-            <span className={pnlClass(delta)}>{fmtSigned(delta)}</span>
-            <span>{fmtTs(snapshots[last].ts)}</span>
+            <span>{fmtTs(points[0].ts)}</span>
+            <span className={pnlClass(delta)}>
+              {fmtSigned(delta)} {currency}
+            </span>
+            <span>{fmtTs(points[last].ts)}</span>
           </>
         )}
       </div>
