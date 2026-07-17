@@ -536,16 +536,29 @@ def _risk_view(
     mode: Mode,
     stats: dict[str, float],
     unknowns: list[str],
+    currency: Optional[str] = None,
 ) -> Optional[RiskView]:
-    """RiskView from the monitor, else the ledger's last account snapshot."""
+    """RiskView from the monitor, else the ledger's last account snapshot.
+
+    ``currency`` scopes equity/cash to ONE market's sleeve (e.g. "HKD" for HK)
+    so a per-market brief shows that market's net value, not the FX-blended base
+    total."""
     if risk_status is not None:
         snap = risk_status.snapshot
         warnings = list(risk_status.warnings)
         if snap.breaker_state is BreakerState.TRIPPED:
             warnings.append(_BREAKER_WARNING)
+        equity = (
+            snap.equity_by_currency.get(currency, snap.equity)
+            if currency else snap.equity
+        )
+        cash = (
+            snap.cash_by_currency.get(currency, snap.cash)
+            if currency else snap.cash
+        )
         return RiskView(
-            equity=snap.equity,
-            cash=snap.cash,
+            equity=equity,
+            cash=cash,
             day_pnl=snap.day_pnl,
             drawdown_pct=snap.drawdown_pct,
             breaker_state=snap.breaker_state.value,
@@ -573,8 +586,14 @@ def _risk_view(
     if snap.breaker_state is BreakerState.TRIPPED:
         warnings.append(_BREAKER_WARNING)
     return RiskView(
-        equity=snap.equity,
-        cash=snap.cash,
+        equity=(
+            snap.equity_by_currency.get(currency, snap.equity)
+            if currency else snap.equity
+        ),
+        cash=(
+            snap.cash_by_currency.get(currency, snap.cash)
+            if currency else snap.cash
+        ),
         day_pnl=snap.day_pnl,
         drawdown_pct=snap.drawdown_pct,
         breaker_state=snap.breaker_state.value,
@@ -760,6 +779,7 @@ def build_research_brief(
     extra_uncertainty: Optional[list[str]] = None,
     earnings: Optional[list] = None,
     discovery: Optional[DiscoveryPool] = None,
+    currency: Optional[str] = None,
 ) -> ResearchBrief:
     """Build the daily Investment Research brief (Loop.md §7 Phase 0.5).
 
@@ -797,7 +817,7 @@ def build_research_brief(
             {},
             unknowns,
         )
-        risk = _risk_view(risk_status, ledger, mode, stats, unknowns)
+        risk = _risk_view(risk_status, ledger, mode, stats, unknowns, currency)
     else:
         risk = None  # research-only session: no account/positions to report
 

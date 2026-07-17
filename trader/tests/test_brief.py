@@ -565,3 +565,25 @@ class TestSerialization:
         a = build_full(ledger)
         b = build_full(ledger)
         assert a == b
+
+
+def test_brief_risk_scoped_to_currency_sleeve(ledger):
+    """A per-market brief reports that market's own currency sleeve, not the
+    FX-blended base total (Loop.md §5.10)."""
+    from swing_trader.brief import build_research_brief
+    snap = AccountSnapshot(
+        ts=TODAY_TS, mode=Mode.PAPER, equity=4047.98, cash=3887.78,
+        day_pnl=0.0, drawdown_pct=0.0, breaker_state=BreakerState.NORMAL,
+        base_currency="USD",
+        cash_by_currency={"USD": 1836.5, "HKD": 16000.0},
+        equity_by_currency={"USD": 1996.7, "HKD": 16000.0},
+    )
+    risk = RiskStatus(ts=TODAY_TS, snapshot=snap, per_pool_exposure_pct={},
+                      warnings=[])
+    hk = build_research_brief(ledger, Mode.PAPER, risk_status=risk,
+                              now=TODAY_TS, currency="HKD")
+    assert hk.risk is not None
+    assert hk.risk.equity == 16000.0 and hk.risk.cash == 16000.0  # HKD sleeve
+    us = build_research_brief(ledger, Mode.PAPER, risk_status=risk,
+                              now=TODAY_TS)  # no currency → base total
+    assert us.risk.equity == 4047.98

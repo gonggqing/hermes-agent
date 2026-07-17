@@ -860,6 +860,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 live_orders_allowed=settings.live_orders_allowed,
                 risk_params=portfolio_risk_params,
                 symbols=hk_wl.symbols,
+                # HK-native market regime: Hang Seng indices + HK volatility
+                # index, not the US SPY/QQQ/^VIX tape.
+                index_symbols=list(HK_INDEX_SYMBOLS),
+                anchor_symbol="^HSI",
+                vix_symbol="^VHSI",
                 runtime=runtime,
                 telegram=telegram,
                 notify=notify,

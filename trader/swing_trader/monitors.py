@@ -359,10 +359,17 @@ class MarketMonitor(_BaseMonitor):
         breadth_symbols: Sequence[str] | None = None,
         sink: SnapshotSink | None = None,
         clock: Callable[[], datetime] = utcnow,
+        anchor_symbol: str = "SPY",
+        vix_symbol: str = VIX_SYMBOL,
     ) -> None:
         super().__init__(sink, clock)
         self._feed = feed
         self._index_symbols = list(index_symbols)
+        # The index whose trend drives risk-on/off + the volatility index — both
+        # per-market (US: SPY/^VIX; HK: ^HSI/^VHSI) so a non-US session's regime
+        # is computed from ITS market, not the US tape.
+        self._anchor_symbol = anchor_symbol
+        self._vix_symbol = vix_symbol
         self._breadth_symbols = (
             list(breadth_symbols)
             if breadth_symbols is not None
@@ -394,7 +401,7 @@ class MarketMonitor(_BaseMonitor):
                 (last - sma50) / sma50 * 100.0 if sma50 not in (None, 0.0) else None
             )
             indices[symbol] = {"last": last, "sma50_dist_pct": dist}
-            if symbol == "SPY":
+            if symbol == self._anchor_symbol:
                 spy_last = last
                 spy_sma50 = sma50
                 sma200 = _sma(closes, 200) if len(closes) >= 200 else None
@@ -402,7 +409,7 @@ class MarketMonitor(_BaseMonitor):
 
         vix: Optional[float] = None
         try:
-            vix = self._feed.get_quote(VIX_SYMBOL).last
+            vix = self._feed.get_quote(self._vix_symbol).last
         except DataFeedError as exc:
             logger.warning("VIX quote unavailable", extra={"error": str(exc)})
 

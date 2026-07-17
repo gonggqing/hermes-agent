@@ -24,7 +24,7 @@ import uuid
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 
 from swing_trader.analysis import (
     DebateAgent,
@@ -44,6 +44,7 @@ from swing_trader.interfaces import BrokerInterface, DataFeed, NewsItem
 from swing_trader.ledger import AuditEvent, Ledger
 from swing_trader.log import get_logger
 from swing_trader.monitors import (
+    DEFAULT_INDEX_SYMBOLS,
     AccountRiskMonitor,
     MarketMonitor,
     NewsMonitor,
@@ -638,6 +639,9 @@ class DailyLoop:
         live_orders_allowed: bool = False,
         risk_params: RiskParams | None = None,
         symbols: list[str] | None = None,
+        index_symbols: Sequence[str] | None = None,  # regime indices (per market)
+        anchor_symbol: str = "SPY",  # trend anchor (HK: ^HSI)
+        vix_symbol: str = "^VIX",  # volatility index (HK: ^VHSI)
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         runtime: FinanceRuntime | None = None,
         telegram: TelegramSurfaceAdapter | None = None,
@@ -674,6 +678,11 @@ class DailyLoop:
             Event.MARKET_CLOSE, _MARKET_CLOSE_TIME
         )
         self._market_label = _MARKET_LABELS.get(self.market_id, self.market_id)
+        # Currency sleeve this market's brief risk/net-value should report (HK →
+        # HKD); None keeps the base-currency total for US.
+        self._brief_currency = {
+            "HK": "HKD", "CN": "CNY", "KR": "KRW"
+        }.get(self.market_id)
         # Pre-cutoff nudge = 30 min before the cutoff (11:00 for a 11:30 cutoff).
         self._pre_cutoff_reminder = (
             datetime.combine(date(2000, 1, 1), self._cutoff_time)
@@ -697,8 +706,17 @@ class DailyLoop:
         )
         # Stamp snapshots with the loop's clock so Phase 0.8 health-freshness is
         # consistent with ``self.clock()`` under the simulator/backtester too.
-        self.market_monitor = MarketMonitor(feed, breadth_symbols=self.symbols,
-                                            clock=self.clock)
+        self.market_monitor = MarketMonitor(
+            feed,
+            index_symbols=(
+                list(index_symbols) if index_symbols is not None
+                else list(DEFAULT_INDEX_SYMBOLS)
+            ),
+            breadth_symbols=self.symbols,
+            clock=self.clock,
+            anchor_symbol=anchor_symbol,
+            vix_symbol=vix_symbol,
+        )
         self.portfolio_monitor = PortfolioMonitor(feed, broker, symbols=self.symbols,
                                                   clock=self.clock)
         self.news_monitor = NewsMonitor(feed, clock=self.clock)
@@ -1780,6 +1798,7 @@ class DailyLoop:
                 earnings=(self._earnings
                           if self.earnings_provider is not None else None),
                 discovery=self._discovery,
+                currency=self._brief_currency,
             )
             if self.brief_writer is not None:
                 brief.narrative = self.brief_writer.write(
