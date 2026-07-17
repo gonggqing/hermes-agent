@@ -1782,6 +1782,41 @@ class DailyLoop:
                 bars[symbol] = candles[-1]
         return bars
 
+    def _live_risk_status(self):
+        """Account risk snapshot with LIVE marks overlaid on the per-currency
+        equity, so the brief's net value matches the live account view instead
+        of the last close. Falls back to the close snapshot when the feed has no
+        quote (cash is unchanged — marks don't move cash)."""
+        status = self.account_monitor.poll()
+        positions = self.broker.get_positions()
+        if not positions:
+            return status
+        quotes: dict[str, float] = {}
+        for pos in positions:
+            try:
+                q = self.feed.get_quote(pos.symbol)
+            except Exception:  # noqa: BLE001 — the brief must survive a feed hiccup
+                continue
+            if q is not None and q.last and q.last > 0:
+                quotes[pos.symbol] = q.last
+        if not quotes:
+            return status
+        snap = status.snapshot
+        fx = snap.fx_to_base
+        equity_by_currency = dict(snap.cash_by_currency)
+        for pos in positions:
+            mark = quotes.get(pos.symbol, pos.mkt_px)
+            if mark is None:
+                continue
+            equity_by_currency[pos.currency] = (
+                equity_by_currency.get(pos.currency, 0.0) + pos.qty * mark
+            )
+        equity = sum(v * fx.get(c, 0.0) for c, v in equity_by_currency.items())
+        live_snap = snap.model_copy(
+            update={"equity": equity, "equity_by_currency": equity_by_currency}
+        )
+        return status.model_copy(update={"snapshot": live_snap})
+
     def _publish_brief(self) -> None:
         """Build the Investment Research brief and expose it via the runtime
         (Loop.md Phase 0.5: research first — the tab reads /research/brief)."""
@@ -1794,6 +1829,7 @@ class DailyLoop:
                 self.ledger, self.mode,
                 market=self._market, portfolio=self._portfolio,
                 news=self._news,
+                risk_status=self._live_risk_status(),
                 llm_enabled=self.llm_analyst is not None,
                 now=self.clock(),
                 earnings=(self._earnings
