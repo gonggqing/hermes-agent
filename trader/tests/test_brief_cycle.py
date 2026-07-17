@@ -106,6 +106,34 @@ def test_failed_primary_synthesis_is_visible_and_never_template_replaced(tmp_pat
     assert "没有使用模板或弱模型替代" in sent[0]
 
 
+def test_failed_synthesis_preserves_last_good_narrative(tmp_path):
+    """Regression: a flaky completion must not blank a market that already had
+    prose. The prior edition's complete brief (evidence+narrative) is kept."""
+    runtime = _runtime(tmp_path)
+    # First edition succeeds → US gets a real narrative.
+    BriefCycleCoordinator(
+        runtime, _Writer(), notify=[].append, markets=("us",)
+    ).run_cycle("morning")
+    good_headline = runtime.latest_brief["narrative"]["headline"]
+    assert good_headline
+
+    class _FailingWriter:
+        def write(self, *_args, **_kwargs):
+            return None
+
+    sent: list[str] = []
+    result = BriefCycleCoordinator(
+        runtime, _FailingWriter(), notify=sent.append, markets=("us",)
+    ).run_cycle("evening")
+
+    assert result["failed"] == ["us"]
+    # last-good prose is retained rather than wiped to None
+    assert runtime.latest_brief["narrative"] is not None
+    assert runtime.latest_brief["narrative"]["headline"] == good_headline
+    assert runtime.brief_store.get_latest("us")["narrative"] is not None
+    assert "已保留上一版完整简报" in sent[0]
+
+
 def test_latest_due_slot_uses_beijing_wall_clock():
     assert latest_due_brief_slot(NOW) == ("evening", NOW)
     before_morning = datetime(2026, 7, 16, 0, 30, tzinfo=timezone.utc)

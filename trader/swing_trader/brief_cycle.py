@@ -14,6 +14,7 @@ approval polling or the US order state machine.
 
 from __future__ import annotations
 
+import copy
 import threading
 from datetime import datetime, timedelta
 from typing import Callable, Optional
@@ -136,6 +137,15 @@ class BriefCycleCoordinator:
             if refresh is None:
                 result["skipped"].append(market)
                 continue
+            # Snapshot the last-good brief BEFORE refresh() overwrites the slot.
+            # If the primary model then fails, we restore this consistent
+            # evidence+prose pair instead of blanking a market that previously
+            # had a narrative — the recurring "简报消失" bug, where one flaky
+            # completion wiped a whole market's prose until the next edition.
+            previous = copy.deepcopy(self._payload(market))
+            prev_had_narrative = (
+                isinstance(previous, dict) and previous.get("narrative") is not None
+            )
             try:
                 refresh()
                 payload = self._payload(market)
@@ -152,14 +162,24 @@ class BriefCycleCoordinator:
                     language="zh-CN",
                 )
                 if narrative is None:
-                    brief.uncertainty.append(
-                        f"{_EDITION_LABELS[edition]}：主模型简报生成失败，等待安全重试"
-                    )
-                    self._store(market, brief.model_dump(mode="json"))
-                    self._notify(
-                        f"⚠️ {_LABELS[market]} {_EDITION_LABELS[edition]}生成失败；"
-                        "结构化证据已保存，没有使用模板或弱模型替代。"
-                    )
+                    if prev_had_narrative:
+                        # Keep the last-good complete brief so the market does
+                        # not vanish from the dashboard. Its own freshness stamp
+                        # honestly shows it is the previous edition.
+                        self._store(market, previous)
+                        self._notify(
+                            f"⚠️ {_LABELS[market]} {_EDITION_LABELS[edition]}生成失败；"
+                            "已保留上一版完整简报（证据+叙述），未用模板或弱模型替代。"
+                        )
+                    else:
+                        brief.uncertainty.append(
+                            f"{_EDITION_LABELS[edition]}：主模型简报生成失败，等待安全重试"
+                        )
+                        self._store(market, brief.model_dump(mode="json"))
+                        self._notify(
+                            f"⚠️ {_LABELS[market]} {_EDITION_LABELS[edition]}生成失败；"
+                            "结构化证据已保存，没有使用模板或弱模型替代。"
+                        )
                     result["failed"].append(market)
                     continue
                 narrative = narrative.model_copy(
@@ -179,6 +199,13 @@ class BriefCycleCoordinator:
                     "brief cycle market failed",
                     extra={"edition": edition, "market": market},
                 )
+                # A mid-cycle failure (refresh/validate/store) may have left the
+                # slot with fresh-but-narrative-less evidence or a half write.
+                # Restore the last-good brief so the market keeps its prose.
+                if prev_had_narrative:
+                    current = self._payload(market)
+                    if not (isinstance(current, dict) and current.get("narrative")):
+                        self._store(market, previous)
                 result["failed"].append(market)
         logger.info("brief cycle complete", extra=result)
         return result
