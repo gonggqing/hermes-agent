@@ -152,3 +152,34 @@ class TestResearchRefresh:
         assert result["market"] == "US"
         assert result["brief_ready"] is True
         assert decided == []
+
+
+class TestSessionParameterization:
+    """A DailyLoop built with HK_TRADING_SCHEDULE runs on HK time and market
+    scoping, while the US default is unchanged (session parameterization)."""
+
+    def test_hk_loop_derives_hk_tz_and_window(self, tmp_path):
+        from swing_trader.scheduler import HK_TRADING_SCHEDULE, HONG_KONG
+        from datetime import time as _t
+        days = trading_days(date(2026, 7, 13), 2)
+        series, warmup = build_sim_series(SYMBOLS, days)
+        feed = SimFeed(series); feed.set_day(warmup)
+        ledger = Ledger(url=f"sqlite:///{tmp_path/'hk.db'}")
+        clock = MutableClock(now=datetime(2026, 7, 13, 2, tzinfo=timezone.utc))
+        loop = DailyLoop(feed, PaperBroker(starting_cash=50_000.0), ledger,
+                         symbols=SYMBOLS, clock=clock,
+                         schedule=HK_TRADING_SCHEDULE, notify=lambda _t: None)
+        assert loop.market_id == "HK"
+        assert loop._tz is HONG_KONG
+        assert loop._tz_name == "Asia/Hong_Kong"
+        assert loop._push_time == _t(10, 30)
+        assert loop._cutoff_time == _t(11, 30)   # 10:30-11:30 HKT window
+        assert loop._market_close_time == _t(16, 0)
+        assert loop._pre_cutoff_reminder == _t(11, 0)
+        assert loop._market_label == "Hong Kong"
+
+    def test_us_default_unchanged(self, loop_env):
+        loop, _, _, _ = loop_env
+        from swing_trader.scheduler import ET
+        assert loop.market_id == "US"
+        assert loop._tz is ET

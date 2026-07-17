@@ -52,7 +52,7 @@ from swing_trader.monitors import (
 from swing_trader.reconcile import reconcile_broker_ledger
 from swing_trader.reporter import morning_summary, push_window_preamble
 from swing_trader.risk import RiskEngine, RiskParams
-from swing_trader.scheduler import Event
+from swing_trader.scheduler import US_SCHEDULE, Event, SessionSchedule
 from swing_trader.schemas import (
     CandidateOrder,
     CandidateStatus,
@@ -81,6 +81,14 @@ _PRE_CUTOFF_REMINDER = time(11, 0)
 _CUTOFF_TIME = time(11, 30)
 _MARKET_CLOSE_TIME = time(16, 0)
 _EXECUTION_RETRY_INTERVAL = timedelta(minutes=5)
+
+#: Human-facing market labels for the research brief (per DailyLoop.market_id).
+_MARKET_LABELS = {
+    "US": "United States",
+    "HK": "Hong Kong",
+    "CN": "China",
+    "KR": "Korea",
+}
 _REVIEW_RETRY_DELAYS = (
     timedelta(minutes=1),
     timedelta(minutes=5),
@@ -601,7 +609,8 @@ class DailyLoop:
         broker: BrokerInterface,
         ledger: Ledger,
         mode: Mode = Mode.PAPER,
-        market_id: str = "US",
+        market_id: str = "",
+        schedule: SessionSchedule = US_SCHEDULE,
         live_orders_allowed: bool = False,
         risk_params: RiskParams | None = None,
         symbols: list[str] | None = None,
@@ -625,11 +634,27 @@ class DailyLoop:
         self.broker = broker
         self.ledger = ledger
         self.mode = mode
-        # Owning market/session ("US", "HK", ...). Scopes every candidate this
-        # loop creates and queries, so a concurrent US and HK loop sharing a
-        # paper `mode` never cross-expire or cross-execute (see get_candidates
-        # market filter). Default "US" preserves single-session behaviour.
-        self.market_id = market_id
+        # Session identity + timing (default US_SCHEDULE → unchanged single-loop
+        # behaviour). ``market_id`` scopes every candidate this loop creates and
+        # queries, so a concurrent US and HK loop sharing a paper `mode` never
+        # cross-expire or cross-execute (see get_candidates market filter). The
+        # window/close wall-times and timezone come from the session schedule so
+        # HK runs its own 10:30–11:30 Asia/Hong_Kong window and 16:00 close.
+        self._schedule = schedule
+        self.market_id = market_id or schedule.market_id
+        self._tz = schedule.tz
+        self._tz_name = schedule.tz.key
+        self._push_time = schedule.event_times.get(Event.PUSH_CANDIDATES, _PUSH_TIME)
+        self._cutoff_time = schedule.event_times.get(Event.CONFIRM_CUTOFF, _CUTOFF_TIME)
+        self._market_close_time = schedule.event_times.get(
+            Event.MARKET_CLOSE, _MARKET_CLOSE_TIME
+        )
+        self._market_label = _MARKET_LABELS.get(self.market_id, self.market_id)
+        # Pre-cutoff nudge = 30 min before the cutoff (11:00 for a 11:30 cutoff).
+        self._pre_cutoff_reminder = (
+            datetime.combine(date(2000, 1, 1), self._cutoff_time)
+            - timedelta(minutes=30)
+        ).time()
         self.clock = clock
         self.risk_params = risk_params or RiskParams()
         self.symbols = symbols or watchlist_mod.enabled_symbols()
@@ -725,7 +750,7 @@ class DailyLoop:
         self._market = self.market_monitor.poll()
         if self.discovery_scanner is not None:
             try:
-                self._discovery = self.discovery_scanner.scan("US")
+                self._discovery = self.discovery_scanner.scan(self.market_id)
             except Exception:
                 logger.exception("US discovery scan failed")
                 self._discovery = None
@@ -817,7 +842,9 @@ class DailyLoop:
                 self._risk_approved.append(decision.candidate)
 
         self._confirmation = ConfirmationService(
-            self.ledger, mode=self.mode, revalidate=self._revalidate_edit
+            self.ledger, mode=self.mode, push_time_et=self._push_time,
+            cutoff_et=self._cutoff_time, market_tz=self._tz_name,
+            revalidate=self._revalidate_edit,
         )
         if self.runtime is not None:
             self.runtime.confirmation = self._confirmation
@@ -927,7 +954,7 @@ class DailyLoop:
 
         # Anchor the confirmation window to NOW; clamp so it never wraps past
         # the ET midnight (the window is compared as a time-of-day).
-        et_now = now.astimezone(ZoneInfo("America/New_York"))
+        et_now = now.astimezone(self._tz)
         push_t = et_now.time()
         end_of_day = et_now.replace(hour=23, minute=59, second=0, microsecond=0)
         cutoff_dt = min(et_now + timedelta(minutes=max(5, window_minutes)), end_of_day)
@@ -937,7 +964,7 @@ class DailyLoop:
 
         self._confirmation = ConfirmationService(
             self.ledger, mode=self.mode, push_time_et=push_t, cutoff_et=cutoff_t,
-            market_tz="America/New_York", revalidate=self._revalidate_edit,
+            market_tz=self._tz_name, revalidate=self._revalidate_edit,
         )
         if self.runtime is not None:
             self.runtime.confirmation = self._confirmation
@@ -997,9 +1024,9 @@ class DailyLoop:
 
     # ------------------------------------------ durable confirmation recovery
 
-    @staticmethod
-    def _et_date(candidate: CandidateOrder) -> date:
-        return candidate.ts.astimezone(_ET).date()
+    def _et_date(self, candidate: CandidateOrder) -> date:
+        """The candidate's trading date in this session's timezone."""
+        return candidate.ts.astimezone(self._tz).date()
 
     def _candidates(self, *statuses: CandidateStatus) -> list[CandidateOrder]:
         wanted = set(statuses)
@@ -1019,7 +1046,7 @@ class DailyLoop:
         ]
 
     def _approved_candidates(self, now: datetime) -> list[CandidateOrder]:
-        trading_date = now.astimezone(_ET).date()
+        trading_date = now.astimezone(self._tz).date()
         return self._candidates_for_date(
             trading_date, CandidateStatus.APPROVED, CandidateStatus.EDITED
         )
@@ -1028,7 +1055,7 @@ class DailyLoop:
         return len(self._approved_candidates(now))
 
     def _restore_current_confirmation(self, now: datetime) -> list[CandidateOrder]:
-        trading_date = now.astimezone(_ET).date()
+        trading_date = now.astimezone(self._tz).date()
         candidates = self._candidates_for_date(
             trading_date,
             CandidateStatus.PUSHED,
@@ -1037,7 +1064,9 @@ class DailyLoop:
             CandidateStatus.REJECTED,
         )
         service = ConfirmationService(
-            self.ledger, mode=self.mode, revalidate=self._revalidate_edit
+            self.ledger, mode=self.mode, push_time_et=self._push_time,
+            cutoff_et=self._cutoff_time, market_tz=self._tz_name,
+            revalidate=self._revalidate_edit,
         )
         restored = service.restore(candidates)
         self._confirmation = service
@@ -1062,12 +1091,12 @@ class DailyLoop:
         if not self._confirmation_recovery_lock.acquire(blocking=False):
             return {"status": "already_running"}
         try:
-            et_now = now.astimezone(_ET)
+            et_now = now.astimezone(self._tz)
             today = et_now.date()
             expired = self._expire_unexecuted_through(
                 now,
                 reason="missed execution: service recovered after the trading session",
-                include_current=et_now.time() >= _MARKET_CLOSE_TIME,
+                include_current=et_now.time() >= self._market_close_time,
             )
             risk_approved = self._candidates_for_date(
                 today, CandidateStatus.RISK_APPROVED
@@ -1078,12 +1107,12 @@ class DailyLoop:
             # Build the confirmation service before the publish window too.
             # A restart at 10:20 ET must leave the scheduled 10:30 callback a
             # live service to publish into; publish() still enforces the window.
-            if et_now.time() < _MARKET_CLOSE_TIME:
+            if et_now.time() < self._market_close_time:
                 restored = self._restore_current_confirmation(now)
 
-            if et_now.time() < _CUTOFF_TIME:
+            if et_now.time() < self._cutoff_time:
                 self._risk_approved = risk_approved
-                if risk_approved and et_now.time() >= _PUSH_TIME:
+                if risk_approved and et_now.time() >= self._push_time:
                     self.on_push()  # missed 10:30 event: publish inside window
             else:
                 for candidate in risk_approved:
@@ -1094,7 +1123,7 @@ class DailyLoop:
                     )
                 if self._confirmation is not None:
                     self._confirmation.expire(now)
-                if et_now.time() < _MARKET_CLOSE_TIME:
+                if et_now.time() < self._market_close_time:
                     report = self._execute_approved(
                         now, trigger="restart_recovery", rerisk=True
                     )
@@ -1284,13 +1313,13 @@ class DailyLoop:
                 self._review_inflight.discard(candidate.id)
 
     def _watch_confirmation_window(self, now: datetime) -> None:
-        et_now = now.astimezone(_ET)
+        et_now = now.astimezone(self._tz)
         approved = self._approved_candidates(now)
         if approved and self.order_review_required:
             self._launch_post_approval_reviews(approved)
         if (
             approved
-            and _PRE_CUTOFF_REMINDER <= et_now.time() < _CUTOFF_TIME
+            and self._pre_cutoff_reminder <= et_now.time() < self._cutoff_time
             and et_now.date() not in self._pre_cutoff_alerted
         ):
             self._pre_cutoff_alerted.add(et_now.date())
@@ -1302,14 +1331,14 @@ class DailyLoop:
                     "11:30 自动复核并提交。"
                 )
 
-        if approved and _CUTOFF_TIME <= et_now.time() < _MARKET_CLOSE_TIME:
+        if approved and self._cutoff_time <= et_now.time() < self._market_close_time:
             due = (
                 self._last_execution_retry is None
                 or now - self._last_execution_retry >= _EXECUTION_RETRY_INTERVAL
             )
             if due:
                 self._execute_approved(now, trigger="watchdog_retry", rerisk=True)
-        elif et_now.time() >= _MARKET_CLOSE_TIME:
+        elif et_now.time() >= self._market_close_time:
             self._expire_unexecuted_through(
                 now, reason="missed execution: market closed without an order"
             )
@@ -1435,7 +1464,7 @@ class DailyLoop:
         *,
         include_current: bool = True,
     ) -> int:
-        et_now = now.astimezone(_ET)
+        et_now = now.astimezone(self._tz)
         expired: list[CandidateOrder] = []
         candidates = self._candidates(
             CandidateStatus.RISK_APPROVED,
@@ -1718,8 +1747,8 @@ class DailyLoop:
             if self.brief_writer is not None:
                 brief.narrative = self.brief_writer.write(
                     brief,
-                    market_id="US",
-                    market_label="United States",
+                    market_id=self.market_id,
+                    market_label=self._market_label,
                     language="zh-CN",
                 )
             else:
@@ -1741,7 +1770,7 @@ class DailyLoop:
             self.runtime.latest_brief = dump
             from swing_trader.prediction_ledger import persist_brief_artifacts
 
-            persist_brief_artifacts(self.runtime, "us", dump)
+            persist_brief_artifacts(self.runtime, self.market_id.lower(), dump)
         except Exception:  # brief must never break the trading loop
             logger.exception("research brief build failed")
 
