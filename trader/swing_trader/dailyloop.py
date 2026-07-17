@@ -1391,14 +1391,24 @@ class DailyLoop:
             return report
 
         if self.order_review_required:
+            review_expired: list[CandidateOrder] = []
             for candidate in list(candidates):
                 if not self._post_approval_review_complete(candidate.id):
-                    self._expire_candidate(
+                    if self._expire_candidate(
                         candidate,
                         now,
                         "post-approval LLM/fresh-market review incomplete before cutoff",
                         action="expire_post_approval_review_missing",
-                    )
+                    ):
+                        review_expired.append(candidate)
+            # Never drop a human-approved order silently: tell the operator the
+            # approved single(s) expired because the fresh-market review did not
+            # finish before the cutoff (fail-closed — no order was placed).
+            if review_expired and self.telegram is not None:
+                syms = "、".join(c.symbol for c in review_expired)
+                self.telegram.push_recovery_notice(
+                    f"⚠️ {syms}：主模型复核未在截止前完成，已批准单据已过期，未挂单、未成交。"
+                )
             candidates = self._approved_candidates(now)
             if not candidates:
                 self._last_execution_retry = now

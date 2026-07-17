@@ -1097,8 +1097,16 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         print("check done — report sent; Finance tab now has live data.", flush=True)
 
     def _poll_extra() -> None:
-        # inside the confirmation window, poll Telegram callbacks frequently
+        # Poll Telegram callbacks frequently AND drive each order-capable loop's
+        # confirmation window. EVERY order-capable loop must run its own
+        # on_confirm_poll so its post-approval review is launched and its window
+        # is watched — otherwise its approved candidates expire unreviewed at
+        # cutoff and never place (the shared adapter offset makes the concurrent
+        # polls safe; the per-candidate service registry routes callbacks to the
+        # owning market).
         loop.on_confirm_poll()
+        if hk_loop is not None:
+            hk_loop.on_confirm_poll()
 
     import time as _time
 
