@@ -696,6 +696,38 @@ def create_app(runtime: FinanceRuntime):
             ),
         }
 
+    _MARKET_CCY = {"us": "USD", "hk": "HKD", "cn": "CNY", "kr": "KRW"}
+
+    def _overlay_live_risk(market_key: str, brief: dict) -> dict:
+        """Overlay LIVE net-value/cash on the brief's risk at READ time so it
+        matches the account panel (the brief itself is a close snapshot). Reuses
+        the on-demand quote overlay, so it never competes with the brief build's
+        own fetches; falls back to the brief's stored value when unavailable."""
+        if runtime.broker is None or not isinstance(brief, dict):
+            return brief
+        risk = brief.get("risk")
+        if not isinstance(risk, dict):
+            return brief
+        cur = _MARKET_CCY.get(market_key) or risk.get("currency")
+        quotes = _live_quotes_for_positions(runtime)
+        if not cur or not quotes:
+            return brief
+        view = build_account_view(
+            runtime.broker, runtime.ledger, runtime.mode,
+            quotes=quotes, price_as_of=runtime.clock(),
+        )
+        eq = view.equity_by_currency.get(cur)
+        if eq is None:
+            return brief
+        return {
+            **brief,
+            "risk": {
+                **risk, "equity": eq,
+                "cash": view.cash_by_currency.get(cur, risk.get("cash")),
+                "currency": cur,
+            },
+        }
+
     @app.get(f"/{API_VERSION}/research/brief")
     def research_brief(market: Optional[str] = Query(default=None)) -> dict:
         """Investment Research brief (Loop.md Phase 0.5). ``market=cn`` /
@@ -711,13 +743,13 @@ def create_app(runtime: FinanceRuntime):
                 runtime.latest_brief_cn if key == "cn" else None
             )
             if cached:
-                return _with_cn_hk_synthesis(key, cached)
+                return _overlay_live_risk(key, _with_cn_hk_synthesis(key, cached))
             archived = _archived_brief(key)
             if archived:
                 runtime.latest_briefs[key] = archived
                 if key == "cn":
                     runtime.latest_brief_cn = archived
-                return _with_cn_hk_synthesis(key, archived)
+                return _overlay_live_risk(key, _with_cn_hk_synthesis(key, archived))
             from zoneinfo import ZoneInfo
 
             tz_name, label = _RESEARCH_MARKETS[key]
@@ -737,13 +769,13 @@ def create_app(runtime: FinanceRuntime):
             return _with_cn_hk_synthesis(key, brief.model_dump(mode="json"))
 
         if runtime.latest_brief:
-            return runtime.latest_brief
+            return _overlay_live_risk("us", runtime.latest_brief)
         archived = _archived_brief("us")
         if archived:
             runtime.latest_brief = archived
-            return archived
+            return _overlay_live_risk("us", archived)
         brief = build_research_brief(runtime.ledger, runtime.mode, now=runtime.clock())
-        return brief.model_dump(mode="json")
+        return _overlay_live_risk("us", brief.model_dump(mode="json"))
 
     @app.post(f"/{API_VERSION}/research/run")
     def research_run(market: str = Query(min_length=2, max_length=8)) -> dict:
