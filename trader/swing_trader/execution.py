@@ -25,6 +25,7 @@ from datetime import datetime
 from swing_trader.interfaces import BrokerInterface
 from swing_trader.ledger import AuditEvent, Ledger
 from swing_trader.log import get_logger
+from swing_trader.sehk_rules import is_sehk_symbol, off_grid_prices
 from swing_trader.schemas import (
     CandidateOrder,
     CandidateStatus,
@@ -239,6 +240,17 @@ class ExecutionEngine:
                 cand.id, CandidateStatus.EXPIRED, risk_note="expired before execution"
             )
             return "validity window passed"
+
+        # HK microstructure: an SEHK limit/stop/tp must sit on the exchange tick
+        # grid. Normalization happens once BEFORE approval so the card is valid;
+        # here — after a human has approved — we must NOT silently round (rollout
+        # doc), so an off-grid HK order is refused fail-closed and re-proposed.
+        if is_sehk_symbol(cand.symbol):
+            bad = off_grid_prices(
+                {"limit": cand.limit, "stop": cand.stop, "tp": cand.tp}
+            )
+            if bad:
+                return "HK order off SEHK tick grid: " + "; ".join(bad.values())
 
         if cand.side is Side.SELL:
             return None  # exits are never blocked on price drift

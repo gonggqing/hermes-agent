@@ -26,6 +26,7 @@ from typing import Iterable, Protocol
 
 from swing_trader.log import get_logger
 from swing_trader.risk import RiskParams
+from swing_trader.sehk_rules import SEHKPriceError, is_sehk_symbol, round_to_tick
 from swing_trader.schemas import (
     AccountSnapshot,
     CandidateOrder,
@@ -215,6 +216,19 @@ class RuleBasedDecisionCore:
             atr_dollars = view.last * view.atr_pct / 100.0
             sl = round(entry - p.sl_atr_mult * atr_dollars, 2)
             tp = round(entry + p.tp_atr_mult * atr_dollars, 2)
+            if is_sehk_symbol(sig.symbol):
+                # SEHK orders must sit on the exchange tick grid; snap each price
+                # BEFORE approval (rollout doc) and away from the entry so the
+                # bid never overpays, the stop never tightens and the target
+                # never undersells. An unquotable price -> skip (never propose an
+                # HK order the exchange would reject). Size uses the snapped
+                # prices so per-trade risk matches what will be submitted.
+                try:
+                    entry = float(round_to_tick(entry, direction="down"))
+                    sl = float(round_to_tick(sl, direction="down"))
+                    tp = float(round_to_tick(tp, direction="up"))
+                except SEHKPriceError:
+                    continue
             if sl <= 0 or sl >= entry:
                 continue
             qty = self._size(entry, sl, account)

@@ -355,3 +355,28 @@ class TestDayEntryLifecycle:
                  if o.side is Side.SELL and o.order_type is OrderType.STP]
         assert len(stops) == 1
         assert stops[0].tif is TimeInForce.GTC and stops[0].qty == 1
+
+
+class TestHKTickGuard:
+    """Loop.md §5.7 / rollout doc: a human-approved SEHK order is refused
+    fail-closed if any price is off the exchange tick grid — never silently
+    rounded after approval."""
+
+    def test_offgrid_hk_entry_is_refused_not_rounded(self, env):
+        _, ledger, engine = env
+        c = record(ledger, candidate(symbol="0700.HK", limit=20.03,
+                                     stop=18.00, tp=25.50, ref_px=20.0))
+        report = engine.execute([c], {"0700.HK": 20.0}, NOW)
+        assert report.placed == []
+        assert "SEHK tick grid" in report.skipped[0][1]
+
+    def test_ongrid_hk_entry_passes_tick_guard(self, tmp_path):
+        broker = PaperBroker(
+            starting_cash_by_currency={"USD": 10_000.0, "HKD": 16_000.0}
+        )
+        ledger = Ledger(url=f"sqlite:///{tmp_path/'hk.db'}")
+        engine = ExecutionEngine(broker, ledger, mode=Mode.PAPER)
+        c = record(ledger, candidate(symbol="0700.HK", limit=20.05,
+                                     stop=18.00, tp=25.50, ref_px=20.05))
+        report = engine.execute([c], {"0700.HK": 20.05}, NOW)
+        assert len(report.placed) == 1

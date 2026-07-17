@@ -97,3 +97,27 @@ class TestRoundToTick:
     def test_out_of_range_raises(self):
         with pytest.raises(SEHKPriceError):
             round_to_tick("0.001")
+
+
+class TestSymbolAndOffGrid:
+    def test_is_sehk_symbol(self):
+        from swing_trader.sehk_rules import is_sehk_symbol
+        assert is_sehk_symbol("0700.HK") is True
+        assert is_sehk_symbol("0981.hk") is True
+        assert is_sehk_symbol("NVDA") is False
+        assert is_sehk_symbol("600519.SS") is False
+
+    def test_off_grid_prices_flags_only_bad_and_skips_none(self):
+        from swing_trader.sehk_rules import off_grid_prices
+        bad = off_grid_prices({"limit": 20.05, "stop": 20.03, "tp": None})
+        assert set(bad) == {"stop"}          # 20.03 off the 0.05 grid
+        assert "tick grid" in bad["stop"]
+
+    def test_off_grid_prices_flags_out_of_range(self):
+        from swing_trader.sehk_rules import off_grid_prices
+        bad = off_grid_prices({"limit": 0.001})
+        assert "limit" in bad and "range" in bad["limit"]
+
+    def test_off_grid_prices_empty_when_all_on_grid(self):
+        from swing_trader.sehk_rules import off_grid_prices
+        assert off_grid_prices({"limit": 20.05, "stop": 18.00, "tp": 25.50}) == {}

@@ -30,6 +30,8 @@ __all__ = [
     "sehk_tick_size",
     "is_on_tick",
     "round_to_tick",
+    "is_sehk_symbol",
+    "off_grid_prices",
 ]
 
 
@@ -143,3 +145,32 @@ def round_to_tick(
     # quantize to the tick's own scale so the result reads as a clean quote
     # (20.00, not 2E+1) and carries the band's decimal places.
     return (stepped * tick).quantize(tick)
+
+
+def is_sehk_symbol(symbol: str) -> bool:
+    """True for a Hong Kong SEHK ticker (``0700.HK``), matching the broker
+    adapter's convention (``symbol.upper().endswith('.HK')``)."""
+    return symbol.upper().endswith(".HK")
+
+
+def off_grid_prices(prices: dict[str, float | None]) -> dict[str, str]:
+    """Return ``{label: reason}`` for each named price that is NOT a valid SEHK
+    quote (off the tick grid or outside the quotable range). ``None`` prices are
+    skipped. An empty result means every supplied price is submittable as-is.
+
+    This is a fail-closed *check*, not a normalizer: after a human has approved
+    a candidate its prices must never be silently rounded (rollout doc), so the
+    submission path uses this to refuse an off-grid HK order rather than adjust
+    it. Normalization happens once, BEFORE approval, so the card is on-grid.
+    """
+    bad: dict[str, str] = {}
+    for label, price in prices.items():
+        if price is None:
+            continue
+        try:
+            if not is_on_tick(price):
+                tick = sehk_tick_size(price)
+                bad[label] = f"{label} {price:g} is off the SEHK {tick} tick grid"
+        except SEHKPriceError as exc:
+            bad[label] = str(exc)
+    return bad
