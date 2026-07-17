@@ -217,12 +217,10 @@ function CurveChart({
   const innerH = H - M.top - M.bottom;
 
   const values = points.map((p) => p.value);
-  const rawMin = Math.min(...values);
-  const rawMax = Math.max(...values);
-  // pad the value range so the line never glues to the top/bottom edge.
-  const pad = (rawMax - rawMin || Math.abs(rawMax) || 1) * 0.08;
-  const yMin = rawMin - pad;
-  const yMax = rawMax + pad;
+  const rawMax = Math.max(...values, 0);
+  // y-axis anchored at 0 for absolute perspective; headroom above the peak.
+  const yMin = Math.min(0, ...values);
+  const yMax = rawMax + (rawMax || 1) * 0.08;
   const yRange = yMax - yMin || 1;
 
   const px = (i: number) => M.left + (i / (values.length - 1)) * innerW;
