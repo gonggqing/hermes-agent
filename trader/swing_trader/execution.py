@@ -76,6 +76,11 @@ class ExecutionEngine:
         # to compute r_multiple when entry fills are written to the ledger.
         self._stop_by_order: dict[str, float] = {}
         self._synced_fill_ids: set[str] = set()
+        # symbol -> protective STPs cleared to place a discretionary exit. If the
+        # exit later rests unfilled (and expires as a DAY order at the close),
+        # reprotect_positions() re-establishes the stop so the position is never
+        # left naked (Loop.md §4). Cleared when the position goes flat / re-armed.
+        self._cleared_protection: dict[str, list[Order]] = {}
 
     # ------------------------------------------------------------------ api
 
@@ -152,6 +157,14 @@ class ExecutionEngine:
             stop_px = cand.stop if cand.stop is not None else cand.sl
             if cand.side is Side.BUY and stop_px is not None:
                 self._stop_by_order[result.order.id] = stop_px
+            # A SELL exit stripped protection to place: remember the stops so the
+            # close-time safety net can re-arm them if the exit rests unfilled
+            # (a MOC exit fills at close and leaves nothing to re-protect).
+            protective_cleared = [
+                o for o in cleared if o.order_type is OrderType.STP
+            ]
+            if protective_cleared:
+                self._cleared_protection[cand.symbol] = protective_cleared
             self.ledger.update_candidate(cand.id, CandidateStatus.PLACED)
             self._audit_once(
                 cand, "execute", cand.status, CandidateStatus.PLACED, now,
@@ -347,7 +360,10 @@ class ExecutionEngine:
         marker = f"candidate:{cand.id}"
         order_id = f"candidate-{cand.id}"
         seen: dict[str, Order] = {}
-        for order in [*self.broker.get_orders(), *self.ledger.get_orders(self.mode)]:
+        # Broker state is AUTHORITATIVE — list it LAST so its copy wins over any
+        # stale ledger row (the ledger lags the broker between end_of_day and the
+        # next sync, so a broker-EXPIRED order must not read as still-live here).
+        for order in [*self.ledger.get_orders(self.mode), *self.broker.get_orders()]:
             seen[order.id] = order
         return next(
             (order for order in seen.values()
@@ -434,3 +450,53 @@ class ExecutionEngine:
                     "POSITION MAY BE UNPROTECTED: could not restore stop",
                     extra={"symbol": symbol, "reason": result.reason},
                 )
+
+    def reprotect_positions(self, now: datetime) -> list[Order]:
+        """Close-time safety net (Loop.md §4): re-arm a protective stop for any
+        long position a discretionary exit stripped protection from but that is
+        still open (the exit rested unfilled / expired as a DAY order). A MOC
+        exit closes the position at the close, so there is nothing to re-protect;
+        this only fires for a resting exit that did not fill. Returns re-placed
+        stops. Call AFTER the close fills + broker.end_of_day()."""
+        restored: list[Order] = []
+        if not self._cleared_protection:
+            return restored
+        positions = {p.symbol: p for p in self.broker.get_positions() if p.qty > 0}
+        active = self.broker.get_orders(active_only=True)
+        for symbol, stops in list(self._cleared_protection.items()):
+            pos = positions.get(symbol)
+            if pos is None:  # exit closed the position — nothing to protect
+                self._cleared_protection.pop(symbol, None)
+                continue
+            if any(
+                o.symbol == symbol and o.side is Side.SELL
+                and o.order_type is OrderType.STP for o in active
+            ):
+                self._cleared_protection.pop(symbol, None)  # already protected
+                continue
+            reserved = sum(
+                o.qty - o.filled_qty for o in active
+                if o.symbol == symbol and o.side is Side.SELL
+            )
+            unreserved = pos.qty - reserved
+            stop_px = next((s.stop for s in stops if s.stop is not None), None)
+            if unreserved <= 0 or stop_px is None:
+                continue  # still committed to a resting exit — retry next close
+            result = self.broker.place_order(Order(
+                mode=self.mode, symbol=symbol, side=Side.SELL, qty=unreserved,
+                order_type=OrderType.STP, stop=stop_px, tif=TimeInForce.GTC,
+            ))
+            if result.accepted:
+                self.ledger.record_order(result.order)
+                restored.append(result.order)
+                self._cleared_protection.pop(symbol, None)
+                logger.warning(
+                    "protective stop re-armed for unfilled discretionary exit",
+                    extra={"symbol": symbol, "qty": unreserved, "stop": stop_px},
+                )
+            else:
+                logger.error(
+                    "POSITION MAY BE UNPROTECTED: could not re-arm stop",
+                    extra={"symbol": symbol, "reason": result.reason},
+                )
+        return restored

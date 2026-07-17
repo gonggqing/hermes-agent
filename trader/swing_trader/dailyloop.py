@@ -1038,6 +1038,9 @@ class DailyLoop:
             self.broker.step(bars, execution_ts=now)
         self.execution.sync_fills()
         self.broker.end_of_day()
+        # §4 safety net: re-arm protection for any position a discretionary exit
+        # stripped but that is still open (the exit rested unfilled and expired).
+        self.execution.reprotect_positions(now)
         self._expire_unexecuted_through(
             self.clock(), reason="missed execution: market closed without an order"
         )

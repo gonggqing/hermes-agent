@@ -421,3 +421,56 @@ class TestHKExitDuringLunch:
         assert not any(
             "market closed" in reason for _, reason in report.skipped
         )
+
+
+class TestExistingOrderBrokerAuthoritative:
+    """Broker state wins over a stale ledger row in _existing_order (the ledger
+    lags between end_of_day and the next sync)."""
+
+    def test_broker_expired_beats_stale_ledger_submitted(self, tmp_path):
+        from swing_trader.schemas import Order
+        ledger = Ledger(url=f"sqlite:///{tmp_path/'x.db'}")
+        cid = "c-1"
+        oid = f"candidate-{cid}"
+        # ledger still shows SUBMITTED (stale); broker shows EXPIRED (truth)
+        ledger.record_order(Order(id=oid, mode=Mode.PAPER, symbol="NVDA",
+                                  side=Side.BUY, qty=2, order_type=OrderType.LMT,
+                                  limit=100.0, status=OrderStatus.SUBMITTED,
+                                  broker_ref=f"candidate:{cid}"))
+        expired = Order(id=oid, mode=Mode.PAPER, symbol="NVDA", side=Side.BUY,
+                        qty=2, order_type=OrderType.LMT, limit=100.0,
+                        status=OrderStatus.EXPIRED, broker_ref=f"candidate:{cid}")
+        engine = ExecutionEngine(_StubBroker([expired]), ledger, mode=Mode.PAPER)
+        assert engine._existing_order(candidate(id=cid)) is None
+
+
+class TestReprotectAfterUnfilledExit:
+    """A discretionary exit that strips protection then rests unfilled must not
+    leave the position naked — the close-time safety net re-arms the stop."""
+
+    def test_stop_rearmed_when_limit_exit_expires_unfilled(self, tmp_path):
+        broker = PaperBroker(starting_cash=10_000.0)
+        ledger = Ledger(url=f"sqlite:///{tmp_path/'rp.db'}")
+        engine = ExecutionEngine(broker, ledger, mode=Mode.PAPER)
+        # 1) enter + fill a bracket so a protective STP is resting
+        buy = record(ledger, candidate())
+        engine.execute([buy], {"NVDA": 100.0}, NOW)
+        broker.step({"NVDA": bar(o=99.0, h=101.0, lo=98.0, c=100.0)})
+        assert any(o.order_type is OrderType.STP and o.side is Side.SELL
+                   for o in broker.get_orders(active_only=True))
+        # 2) a discretionary LMT exit far above market strips protection, rests
+        sell = record(ledger, candidate(id="exit-1", side=Side.SELL,
+                                        order_type=OrderType.LMT, limit=120.0,
+                                        stop=None, tp=None,
+                                        tif=TimeInForce.DAY, qty=2))
+        engine.execute([sell], {"NVDA": 100.0}, NOW)
+        assert not any(o.order_type is OrderType.STP
+                       for o in broker.get_orders(active_only=True))  # naked
+        # 3) close: exit doesn't reach 120, DAY-expires; safety net re-arms stop
+        broker.step({"NVDA": bar(o=100.0, h=105.0, lo=99.0, c=104.0)})
+        broker.end_of_day()
+        restored = engine.reprotect_positions(NOW)
+        assert len(restored) == 1
+        stops = [o for o in broker.get_orders(active_only=True)
+                 if o.order_type is OrderType.STP and o.side is Side.SELL]
+        assert len(stops) == 1 and stops[0].stop == 91.5 and stops[0].qty == 2
