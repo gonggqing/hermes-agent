@@ -998,6 +998,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         from swing_trader.brief_cycle import BriefCycleCoordinator
 
         brief_cycle = BriefCycleCoordinator(runtime, brief_writer, notify=notify)
+        runtime.brief_coordinator = brief_cycle  # for the manual regenerate endpoint
         brief_runner = DailyLoopRunner(
             {
                 Event.MORNING_BRIEF: lambda: brief_cycle.trigger("morning"),

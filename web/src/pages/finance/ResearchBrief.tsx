@@ -1137,6 +1137,58 @@ export function ResearchBrief({
       ? !orderCapableMarkets.includes(market)
       : market !== "us";
 
+  // Self-contained "regenerate this brief" — forces the prose narrative to
+  // rebuild now (the recovery path for a market the twice-daily cycle missed).
+  // Background + poll-driven, so no prop drilling from the page is needed.
+  const [regenerating, setRegenerating] = useState(false);
+  const [regenNote, setRegenNote] = useState<string | null>(null);
+  const handleRegenerate = async () => {
+    setRegenerating(true);
+    setRegenNote(null);
+    try {
+      await api.financeRegenerateBrief(market);
+      setRegenNote(ft.brief.regenerateStarted);
+    } catch (err) {
+      setRegenNote(ft.brief.regenerateFailed.replace("{error}", String(err)));
+    } finally {
+      setRegenerating(false);
+    }
+  };
+  const headerActions = (
+    <div className="ml-auto flex items-center gap-2">
+      {regenNote && (
+        <span className="font-mondwest normal-case text-xs text-muted-foreground">
+          {regenNote}
+        </span>
+      )}
+      {onRunResearch && (
+        <Button
+          disabled={researchRunning}
+          onClick={onRunResearch}
+          size="sm"
+          type="button"
+        >
+          <RefreshCw
+            className={cn("h-3.5 w-3.5", researchRunning && "animate-spin")}
+          />
+          {researchRunning ? ft.layout.runningResearch : ft.layout.runResearch}
+        </Button>
+      )}
+      <Button
+        outlined
+        disabled={regenerating}
+        onClick={handleRegenerate}
+        size="sm"
+        type="button"
+      >
+        <RefreshCw
+          className={cn("h-3.5 w-3.5", regenerating && "animate-spin")}
+        />
+        {regenerating ? ft.brief.regenerating : ft.brief.regenerate}
+      </Button>
+    </div>
+  );
+
   if (brief === null) {
     return (
       <Card>
@@ -1154,25 +1206,7 @@ export function ResearchBrief({
                 ft={ft}
               />
             )}
-            {onRunResearch && (
-              <Button
-                className="ml-auto"
-                disabled={researchRunning}
-                onClick={onRunResearch}
-                size="sm"
-                type="button"
-              >
-                <RefreshCw
-                  className={cn(
-                    "h-3.5 w-3.5",
-                    researchRunning && "animate-spin",
-                  )}
-                />
-                {researchRunning
-                  ? ft.layout.runningResearch
-                  : ft.layout.runResearch}
-              </Button>
-            )}
+            {headerActions}
           </div>
         </CardHeader>
         <CardContent>
@@ -1217,22 +1251,7 @@ export function ResearchBrief({
             ft={ft}
           />
         )}
-        {onRunResearch && (
-          <Button
-            className="ml-auto"
-            disabled={researchRunning}
-            onClick={onRunResearch}
-            size="sm"
-            type="button"
-          >
-            <RefreshCw
-              className={cn("h-3.5 w-3.5", researchRunning && "animate-spin")}
-            />
-            {researchRunning
-              ? ft.layout.runningResearch
-              : ft.layout.runResearch}
-          </Button>
-        )}
+        {headerActions}
       </div>
 
       {/* Stale-data banner: any stale source or freshness warning. */}

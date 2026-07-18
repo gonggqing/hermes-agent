@@ -134,6 +134,43 @@ def test_failed_synthesis_preserves_last_good_narrative(tmp_path):
     assert "已保留上一版完整简报" in sent[0]
 
 
+def test_fresh_same_edition_market_is_skipped_on_restart(tmp_path):
+    """A market already holding THIS edition's brief (<4h old) is not
+    regenerated when catch-up re-runs the cycle for another stale market —
+    stops the duplicate reports a container restart otherwise produced."""
+    runtime = _runtime(tmp_path)
+    writer = _Writer()
+    # First run populates all four with an 'evening' narrative at NOW.
+    BriefCycleCoordinator(runtime, writer, notify=[].append).run_cycle("evening")
+
+    # Simulate a restart 1h later: CN went missing, the rest are still fresh.
+    runtime.clock = lambda: datetime(2026, 7, 16, 14, 0, tzinfo=timezone.utc)
+    runtime.latest_briefs["cn"] = _brief("cn")  # narrative-less again
+    writer2 = _Writer()
+    sent: list[str] = []
+    result = BriefCycleCoordinator(runtime, writer2, notify=sent.append).run_cycle(
+        "evening"
+    )
+
+    # only CN regenerated; us/hk/kr skipped (fresh) → no duplicate notify
+    assert writer2.calls == ["cn"]
+    assert set(result["skipped"]) == {"us", "hk", "kr"}
+    assert result["completed"] == ["cn"]
+    assert len(sent) == 1
+
+
+def test_force_bypasses_freshness_guard(tmp_path):
+    runtime = _runtime(tmp_path)
+    BriefCycleCoordinator(runtime, _Writer(), notify=[].append).run_cycle("evening")
+    writer2 = _Writer()
+    # force=True + only=('us',) → regenerate even though us is fresh
+    result = BriefCycleCoordinator(runtime, writer2, notify=[].append).run_cycle(
+        "evening", force=True, only=("us",)
+    )
+    assert writer2.calls == ["us"]
+    assert result["completed"] == ["us"]
+
+
 def test_latest_due_slot_uses_beijing_wall_clock():
     assert latest_due_brief_slot(NOW) == ("evening", NOW)
     before_morning = datetime(2026, 7, 16, 0, 30, tzinfo=timezone.utc)

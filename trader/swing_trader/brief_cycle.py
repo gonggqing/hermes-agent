@@ -87,8 +87,18 @@ class BriefCycleCoordinator:
         self._state_lock = threading.Lock()
         self._running = False
 
-    def trigger(self, edition: str) -> bool:
-        """Start one daemon cycle and return immediately; coalesce overlap."""
+    def trigger(
+        self,
+        edition: str,
+        *,
+        force: bool = False,
+        only: Optional[tuple[str, ...]] = None,
+    ) -> bool:
+        """Start one daemon cycle and return immediately; coalesce overlap.
+
+        ``force`` bypasses the freshness guard (the manual "regenerate now"
+        path); ``only`` limits the run to specific markets.
+        """
 
         with self._state_lock:
             if self._running:
@@ -98,10 +108,16 @@ class BriefCycleCoordinator:
         threading.Thread(
             target=self._run_guarded,
             args=(edition,),
+            kwargs={"force": force, "only": only},
             daemon=True,
             name=f"finance-{edition}-brief",
         ).start()
         return True
+
+    def regenerate_market(self, market: str) -> bool:
+        """Force one market's brief to regenerate now (manual refresh)."""
+        edition, _ = latest_due_brief_slot(self.runtime.clock())
+        return self.trigger(edition, force=True, only=(market.lower(),))
 
     def catch_up_if_due(self) -> bool:
         """After restart, run the latest missed 09:00/21:00 edition once."""
@@ -119,22 +135,63 @@ class BriefCycleCoordinator:
                 return self.trigger(edition)
         return False
 
-    def _run_guarded(self, edition: str) -> None:
+    def _run_guarded(
+        self,
+        edition: str,
+        *,
+        force: bool = False,
+        only: Optional[tuple[str, ...]] = None,
+    ) -> None:
         try:
-            self.run_cycle(edition)
+            self.run_cycle(edition, force=force, only=only)
         finally:
             with self._state_lock:
                 self._running = False
 
-    def run_cycle(self, edition: str) -> dict:
-        """Run synchronously (used by the worker and deterministic tests)."""
+    _FRESH_WINDOW = timedelta(hours=4)
+
+    def _is_fresh(self, payload: Optional[dict], edition: str, now: datetime) -> bool:
+        """True if this market already holds a narrative for THIS edition,
+        generated within the last 4 hours — so a restart that catches up a
+        different market never needlessly regenerates (and re-notifies /
+        re-archives) the ones that are already current."""
+        if not isinstance(payload, dict):
+            return False
+        narrative = payload.get("narrative")
+        if not isinstance(narrative, dict) or narrative.get("edition") != edition:
+            return False
+        generated = _parse_ts(narrative.get("generated_at"))
+        if generated is None:
+            return False
+        return now - generated <= self._FRESH_WINDOW
+
+    def run_cycle(
+        self,
+        edition: str,
+        *,
+        force: bool = False,
+        only: Optional[tuple[str, ...]] = None,
+    ) -> dict:
+        """Run synchronously (used by the worker and deterministic tests).
+
+        ``force`` skips the freshness guard; ``only`` restricts to a subset of
+        markets (single-market manual regeneration)."""
 
         if edition not in _EDITION_LABELS:
             raise ValueError(f"unknown brief edition {edition!r}")
+        now = self.runtime.clock()
+        markets = only if only is not None else self.markets
         result = {"edition": edition, "completed": [], "failed": [], "skipped": []}
-        for market in self.markets:
+        for market in markets:
             refresh = self.runtime.run_research.get(market)
             if refresh is None:
+                result["skipped"].append(market)
+                continue
+            if not force and self._is_fresh(self._payload(market), edition, now):
+                logger.info(
+                    "brief already fresh; skipping regeneration",
+                    extra={"market": market, "edition": edition},
+                )
                 result["skipped"].append(market)
                 continue
             # Snapshot the last-good brief BEFORE refresh() overwrites the slot.

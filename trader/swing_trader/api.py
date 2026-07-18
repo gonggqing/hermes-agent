@@ -78,6 +78,8 @@ class FinanceRuntime:
     # Per-market research briefs keyed by lowercase market_id (cn/kr/…). The US
     # brief stays on latest_brief; CN mirrors here AND on latest_brief_cn.
     latest_briefs: dict = field(default_factory=dict)
+    #: BriefCycleCoordinator — powers the manual per-market regenerate endpoint.
+    brief_coordinator: Any = None
     knowledge: Any = None  # FinanceKnowledge (Phase 0.5)
     knowledge_index: Any = None  # KnowledgeIndex | None (fail-closed)
     # Phase 0.75 (thrust B): on-demand analysis for the conversational agent.
@@ -846,6 +848,32 @@ def create_app(runtime: FinanceRuntime):
             "status": "started",
             "market": key,
             "note": "research refreshing in the background (~1 min)",
+        }
+
+    @app.post(f"/{API_VERSION}/briefs/regenerate")
+    def briefs_regenerate(market: str = Query(min_length=2, max_length=8)) -> dict:
+        """Force ONE market's investment brief (prose narrative) to regenerate
+        now — the manual recovery button for a market the twice-daily cycle
+        missed. Read-only research output (no orders), so NOT human-gated.
+        Runs in the BACKGROUND on the brief worker; the tab's poll picks up the
+        new narrative when it lands (~1-3 min). Unlike /research/run this also
+        rewrites the LLM narrative, and it bypasses the 4h freshness guard so a
+        deliberate click always regenerates. 503 if the brief worker is off."""
+        coordinator = runtime.brief_coordinator
+        if coordinator is None:
+            raise HTTPException(503, "brief worker not configured (no primary LLM)")
+        key = market.lower()
+        if key not in runtime.run_research:
+            raise HTTPException(
+                404,
+                f"no research session for market {market!r} "
+                f"(available: {sorted(runtime.run_research) or 'none'})",
+            )
+        started = coordinator.regenerate_market(key)
+        return {
+            "status": "started" if started else "already_running",
+            "market": key,
+            "note": "regenerating brief in the background (~1-3 min)",
         }
 
     @app.get(f"/{API_VERSION}/research/synthesis")

@@ -48,6 +48,10 @@ export interface FinanceTranslations {
     tradingDate: string;
     asOf: string; // "as of {time}"
     unavailable: string;
+    regenerate: string;
+    regenerating: string;
+    regenerateStarted: string;
+    regenerateFailed: string; // "{error}"
     staleWarningsTitle: string;
     summary: {
       title: string;

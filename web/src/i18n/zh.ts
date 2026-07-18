@@ -624,6 +624,10 @@ export const zh: Translations = {
       tradingDate: "交易日",
       asOf: "数据截至 {time}",
       unavailable: "研究简报不可用 —— 研究端点没有响应。",
+      regenerate: "重新生成",
+      regenerating: "生成中…",
+      regenerateStarted: "已触发重新生成，约 1-3 分钟后自动刷新。",
+      regenerateFailed: "重新生成失败：{error}",
       staleWarningsTitle: "数据新鲜度警告",
       summary: {
         title: "简报",

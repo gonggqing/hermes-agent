@@ -29,6 +29,10 @@ export const financeEn: FinanceTranslations = {
     asOf: "as of {time}",
     unavailable:
       "Research brief unavailable — the research endpoint did not answer.",
+    regenerate: "Regenerate",
+    regenerating: "Regenerating…",
+    regenerateStarted: "Regeneration started — this brief refreshes in ~1-3 min.",
+    regenerateFailed: "Regeneration failed: {error}",
     staleWarningsTitle: "Data freshness warnings",
     summary: {
       title: "Brief",

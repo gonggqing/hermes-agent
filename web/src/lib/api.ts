@@ -1477,6 +1477,18 @@ export const api = {
       { method: "POST" },
     ),
   /**
+   * Force ONE market's investment-brief PROSE to regenerate now (the manual
+   * recovery button for a brief the twice-daily cycle missed). Unlike
+   * {@link financeRunResearch} this rewrites the LLM narrative, and bypasses
+   * the 4h freshness guard. Read-only (no orders); regenerates in the
+   * background — poll the brief afterward. 503 if the brief worker is off.
+   */
+  financeRegenerateBrief: (market: FinanceResearchMarket) =>
+    fetchJSON<FinanceRunResearchResult>(
+      `/api/finance/v1/briefs/regenerate?market=${market}`,
+      { method: "POST" },
+    ),
+  /**
    * Source-linked semantic research search (Loop.md §5.10). The service
    * fails closed with 503 when the vector index is down; that case is
    * rethrown as {@link FinanceKnowledgeOfflineError} so the UI can render
