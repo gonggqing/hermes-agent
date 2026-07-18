@@ -124,6 +124,39 @@ class BriefStore:
             row = s.get(BriefSnapshotRow, snapshot_id)
             return json.loads(row.payload_json) if row else None
 
+    def prune_duplicates(self) -> int:
+        """Collapse snapshots to one row per (market, trading_date, edition),
+        keeping the NEWEST (same ordering as ``get_latest``). Edition comes from
+        each payload's narrative; a missing narrative groups under ''. Two
+        legitimate editions (morning/evening) on one day are both kept — only
+        repeats of the SAME edition (e.g. from container restarts) collapse.
+        Returns the number of rows deleted."""
+        deleted = 0
+        with Session(self._engine) as s:
+            rows = list(s.exec(select(BriefSnapshotRow)).all())
+            groups: dict[tuple[str, str, str], list[BriefSnapshotRow]] = {}
+            for r in rows:
+                edition = ""
+                try:
+                    narrative = json.loads(r.payload_json).get("narrative")
+                    if isinstance(narrative, dict):
+                        edition = str(narrative.get("edition") or "")
+                except (ValueError, AttributeError):
+                    pass
+                groups.setdefault((r.market, r.trading_date, edition), []).append(r)
+            for group in groups.values():
+                if len(group) <= 1:
+                    continue
+                group.sort(
+                    key=lambda r: (r.generated_at, r.created_at), reverse=True
+                )
+                for stale in group[1:]:  # keep newest, drop the rest
+                    s.delete(stale)
+                    deleted += 1
+            if deleted:
+                s.commit()
+        return deleted
+
     def get_by_date(self, market: str, trading_date: str) -> Optional[dict]:
         """The latest snapshot for a market on a given trading date, or None."""
         with Session(self._engine) as s:

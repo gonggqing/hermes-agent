@@ -105,6 +105,35 @@ def test_unknown_snapshot_id_returns_none(tmp_path):
     assert _store(tmp_path).get("does-not-exist") is None
 
 
+def _brief_with_edition(edition, *, as_of, trading_date="2026-07-14"):
+    b = _kr_brief(as_of=as_of, trading_date=trading_date)
+    b["narrative"] = {"edition": edition, "generated_at": as_of, "headline": "h"}
+    return b
+
+
+def test_prune_duplicates_keeps_newest_per_market_date_edition(tmp_path):
+    st = _store(tmp_path)
+    # three 'evening' repeats (restart artifacts) for the same day + market
+    st.save("cn", _brief_with_edition("evening", as_of="2026-07-14T13:00:00Z"))
+    st.save("cn", _brief_with_edition("evening", as_of="2026-07-14T13:30:00Z"))
+    newest = st.save("cn", _brief_with_edition("evening", as_of="2026-07-14T14:00:00Z"))
+    # a genuinely different edition + a different market must survive untouched
+    st.save("cn", _brief_with_edition("morning", as_of="2026-07-14T01:00:00Z"))
+    st.save("us", _brief_with_edition("evening", as_of="2026-07-14T13:00:00Z"))
+
+    deleted = st.prune_duplicates()
+
+    assert deleted == 2  # only the two older CN 'evening' repeats
+    cn_evening = [
+        r for r in st.list_snapshots("cn")
+        if st.get(r["id"])["narrative"]["edition"] == "evening"
+    ]
+    assert len(cn_evening) == 1 and cn_evening[0]["id"] == newest
+    assert len(st.list_snapshots("cn")) == 2  # evening (newest) + morning
+    assert len(st.list_snapshots("us")) == 1
+    assert st.prune_duplicates() == 0  # idempotent
+
+
 def test_iter_snapshots_returns_full_payload_oldest_first(tmp_path):
     store = _store(tmp_path)
     first = store.save("kr", _kr_brief(as_of="2026-07-13T09:00:00Z"))
