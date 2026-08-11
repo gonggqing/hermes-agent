@@ -2756,8 +2756,8 @@ export function postFinanceSessionFinalize(payload: { actor: string }): Promise<
 }
 
 // Research market accepted by both the persisted brief and manual refresh
-// endpoints. Non-US desks are research-only; US shares the trading loop's
-// research session but can still be refreshed explicitly.
+// endpoints. Order authority is runtime-driven; a regional desk may expose a
+// full paper loop while another remains research-only.
 export type FinanceResearchMarket = 'us' | 'cn' | 'hk' | 'kr'
 
 export interface FinancePredictionMetrics {

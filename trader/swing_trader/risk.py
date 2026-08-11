@@ -46,6 +46,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Mapping
 
+from swing_trader.cn_market import is_cn_symbol, normalize_cn_buy_qty
 from swing_trader.constants import (
     DAILY_DRAWDOWN_BREAKER_PCT,
     HARD_MAX_PER_TRADE_RISK_PCT,
@@ -301,15 +302,29 @@ class RiskEngine:
                 )
 
         # -- 9. Per-trade risk (the 1.6% HARD cap, re-clamped at use time) --------
+        # Establish the local cash sleeve before attempting any conversion.
+        # Missing local cash is the primary failure; no implicit FX is allowed.
+        spendable_cash = account.cash_by_currency.get(candidate.currency)
+        if spendable_cash is None:
+            return veto(
+                f"entry vetoed: no settled {candidate.currency} cash sleeve "
+                "(cross-currency spending requires a separately confirmed FX conversion)"
+            )
+        fx = account.fx_to_base.get(candidate.currency)
+        if fx is None or fx <= 0:
+            return veto(
+                f"entry vetoed: no {candidate.currency}->{account.base_currency} FX mark "
+                "for risk and portfolio controls"
+            )
         effective_per_trade = params.effective_per_trade_risk_pct
-        risk_per_share = entry - stop  # > 0 (guaranteed by step 6)
+        risk_per_share = (entry - stop) * fx  # base-currency risk/share
         max_risk_dollars = effective_per_trade / 100.0 * account.equity
         allowed = math.floor(max_risk_dollars / risk_per_share)
         if allowed <= 0:
             return veto(
                 f"entry vetoed: per-trade risk cap {effective_per_trade:.2f}% of "
                 f"equity ({max_risk_dollars:.2f}) allows zero shares at "
-                f"{risk_per_share:.2f} risk/share"
+                f"{risk_per_share:.2f} {account.base_currency} risk/share"
             )
         if qty > allowed:
             reasons.append(
@@ -320,12 +335,6 @@ class RiskEngine:
             shrunk = True
 
         # -- 10. Currency sleeve cash: no implicit FX and no cross-currency spend --
-        spendable_cash = account.cash_by_currency.get(candidate.currency)
-        if spendable_cash is None:
-            return veto(
-                f"entry vetoed: no settled {candidate.currency} cash sleeve "
-                "(cross-currency spending requires a separately confirmed FX conversion)"
-            )
         if qty * entry + params.est_commission > spendable_cash:
             new_qty = float(math.floor((spendable_cash - params.est_commission) / entry))
             if new_qty <= 0:
@@ -342,13 +351,6 @@ class RiskEngine:
             shrunk = True
 
         # -- 11. Portfolio, agent-sleeve and single-position allocation caps ------
-        fx = account.fx_to_base.get(candidate.currency)
-        if fx is None or fx <= 0:
-            return veto(
-                f"entry vetoed: no {candidate.currency}->{account.base_currency} FX mark "
-                "for portfolio allocation controls"
-            )
-
         def base_value(pos: Position) -> float | None:
             pos_fx = account.fx_to_base.get(pos.currency)
             if pos_fx is None or pos_fx <= 0:
@@ -424,6 +426,24 @@ class RiskEngine:
             )
             qty = new_qty
             shrunk = True
+
+        # Mainland entries remain valid exchange lots after every shrink.  The
+        # decision core already normalizes before approval; this second gate is
+        # authoritative and also covers human edits/restart re-risking.
+        if is_cn_symbol(candidate.symbol):
+            normalized = float(normalize_cn_buy_qty(qty))
+            if normalized <= 0:
+                return veto(
+                    "entry vetoed: risk/cash limits leave less than one "
+                    "100-share mainland board lot"
+                )
+            if normalized < qty:
+                reasons.append(
+                    f"shrunk {qty:g} -> {normalized:g} to preserve the "
+                    "100-share mainland board lot"
+                )
+                qty = normalized
+                shrunk = True
 
         verdict = RiskVerdict.SHRUNK if shrunk else RiskVerdict.APPROVED
         return self._decision(candidate, verdict, qty, reasons)

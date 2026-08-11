@@ -168,6 +168,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     from dotenv import load_dotenv
 
     from swing_trader.api import FinanceRuntime, create_app
+    from swing_trader.config import BrokerBackend, Mode
     from swing_trader.dailyloop import DailyLoop, TelegramSurfaceAdapter
     from swing_trader.datafeed import RetryingFeed, YFinanceFeed
     from swing_trader.ledger import Ledger
@@ -185,6 +186,8 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     # values take precedence over any optional local trader/.env overrides.
     load_dotenv(Path.home() / ".hermes" / ".env", override=False)
     settings = load_settings()
+    if args.cn_paper and args.starting_cash_cny <= 0:
+        raise SystemExit("--starting-cash-cny must be positive when --cn-paper is enabled")
 
     from swing_trader.broker_factory import build_broker
     from swing_trader.rehydrate import rehydrate_from_ledger
@@ -197,10 +200,16 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     # port under an un-gated config — so a partial config fails closed here, not
     # at order time. Live *orders* stay separately gated in the ExecutionEngine.
     try:
+        if args.cn_paper and settings.broker is not BrokerBackend.PAPER:
+            raise SystemExit(
+                "--cn-paper is an isolated simulation and currently requires BROKER=paper"
+            )
         broker = build_broker(
             settings,
             starting_cash=args.starting_cash,
             starting_cash_hkd=16_000.0,
+            starting_cash_cny=args.starting_cash_cny if args.cn_paper else 0.0,
+            apply_cn_fees=args.cn_paper,
         )
     except ImportError as exc:  # ib_async not installed (pip install '.[ibkr]')
         raise SystemExit(
@@ -400,6 +409,15 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             allowed_users=allowed,
             candidate_account_label=(
                 "IBHK Paper（模拟盘）" if settings.mode.value == "paper" else "IBKR（实盘）"
+            ),
+            candidate_account_labels=(
+                {
+                    "us": "IBHK Paper · USD（模拟盘）",
+                    "hk": "IBHK Paper · HKD（模拟盘）",
+                    "cn": "Hermes A股 Paper · CNY（模拟盘）",
+                }
+                if settings.mode.value == "paper"
+                else {}
             ),
         )
         # Let tapped draft cards confirm/reject real-holdings drafts IN Telegram
@@ -750,9 +768,12 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             )
             return []
 
+    from swing_trader.broker_view import CurrencyBrokerView
+
+    us_broker = CurrencyBrokerView(broker, "USD")
     loop = DailyLoop(
         feed,
-        broker,
+        us_broker,
         ledger,
         mode=settings.mode,
         live_orders_allowed=settings.live_orders_allowed,
@@ -780,10 +801,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         ),
         holdings_provider=_research_holdings,
     )
-    runtime.apply_portfolio_controls = loop.apply_portfolio_controls
     if rehydration.performed:
         loop.execution.seed_synced_fills(rehydration.fill_ids)
-        loop.execution.seed_protective_stops(broker.get_orders(active_only=True))
+        loop.execution.seed_protective_stops(us_broker.get_orders(active_only=True))
     runner = DailyLoopRunner(loop.callbacks(), clock=runtime.clock)
     # Manual missed-session catch-up (Loop.md §4b): expose the trading session's
     # run + finalize so /v1/session/* can trigger them on demand (human-gated).
@@ -791,16 +811,27 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     runtime.finalize_session = loop.finalize_session_now
     runtime.run_session_by_market["us"] = loop.run_session_now
     runtime.finalize_session_by_market["us"] = loop.finalize_session_now
-    runtime.execution = loop.execution  # Phase 0.95: /orders/cancel-all
+    # The operator kill-switch is account-wide.  Keep its cancellation engine
+    # on the raw multi-currency broker rather than the USD execution view, or a
+    # global cancel-all would silently leave HKD/CNY orders working.
+    from swing_trader.execution import ExecutionEngine
+
+    runtime.execution = ExecutionEngine(
+        broker,
+        ledger,
+        mode=settings.mode,
+        live_orders_allowed=settings.live_orders_allowed,
+    )
     runtime.run_research["us"] = loop.run_research_now
 
-    # CN MORNING research session (Loop.md two-session extension): a lighter,
-    # technology-focused research brief on the China/HK market, on the CN
-    # calendar/clock. Report-only — NO orders — so it never touches the broker,
-    # confirmation service, or ledger; it just publishes a brief the REPORTER
-    # bot sends and the Finance tab shows (?market=cn).
+    # Mainland China runs either the legacy research-only session or the full
+    # CNY-funded PAPER loop selected by --cn-paper.  The latter is deliberately
+    # not connected to IBKR/live authority: A-share simulation gets its own
+    # currency sleeve, local clock/calendar, risk/confirmation/recovery state,
+    # T+1/lot/tick guards and conservative post-submission hourly fills.
     cn_runner = None
     cn_session = None
+    cn_loop = None
     if settings.cn_session_enabled:
         from zoneinfo import ZoneInfo
 
@@ -809,54 +840,108 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             build_mainland_watchlist,
         )
         from swing_trader.research_session import ResearchSession
-        from swing_trader.scheduler import CN_SCHEDULE
+        from swing_trader.scheduler import CN_SCHEDULE, CN_TRADING_SCHEDULE
 
         cn_wl = build_mainland_watchlist(settings.cn_symbols)
         cn_feed = RetryingFeed(YFinanceFeed())
-        cn_session = ResearchSession(
-            market_id="CN",
-            market_label="Mainland China",
-            feed=cn_feed,
-            ledger=ledger,  # never read (research-only); satisfies brief signature
-            symbols=cn_wl.symbols,
-            watchlist_lookup=cn_wl.lookup,
-            trading_tz=ZoneInfo(settings.cn_market_tz),
-            index_symbols=list(CN_MAINLAND_INDEX_SYMBOLS),
-            anchor_symbol="000001.SS",
-            vix_symbol="",  # US VIX is not an A-share regime input
-            mode=settings.mode,
-            runtime=runtime,
-            notify=notify,  # REPORTER bot (outbound-only)
-            llm_analyst=(LLMAnalyst(search_llm_settings) if search_llm_settings else None),
-            knowledge=knowledge,
-            knowledge_index=knowledge_index,
-            focus_note="",
-            lang="zh",
+        cn_discovery = MarketDiscoveryScanner(
+            cn_feed,
+            discovery_universe,
+            benchmark_symbol="000001.SS",
+            min_adv=10_000_000,
+            min_score=38.0,
             clock=runtime.clock,
-            discovery_scanner=MarketDiscoveryScanner(
+        )
+        if args.cn_paper:
+            cn_broker = CurrencyBrokerView(broker, "CNY")
+            cn_loop = DailyLoop(
                 cn_feed,
-                discovery_universe,
-                benchmark_symbol="000001.SS",
-                min_adv=10_000_000,
-                min_score=38.0,
+                cn_broker,
+                ledger,
+                mode=Mode.PAPER,
+                market_id="CN",
+                schedule=CN_TRADING_SCHEDULE,
+                live_orders_allowed=False,
+                risk_params=portfolio_risk_params,
+                symbols=cn_wl.symbols,
+                watchlist_lookup=cn_wl.lookup,
+                index_symbols=list(CN_MAINLAND_INDEX_SYMBOLS),
+                anchor_symbol="000001.SS",
+                vix_symbol="",
+                runtime=runtime,
+                telegram=telegram,
+                notify=notify,
+                fundamentals=fundamentals,
+                earnings_provider=earnings_provider,
+                llm_analyst=llm_analyst,
+                order_reviewer=order_reviewer,
+                order_review_required=True,
+                knowledge=knowledge,
+                knowledge_index=knowledge_index,
+                kill_switch=kill_switch,
+                discovery_scanner=cn_discovery,
+                holdings_provider=_research_holdings,
+                close_timeframe="1h",
+            )
+            if rehydration.performed:
+                cn_loop.execution.seed_synced_fills(rehydration.fill_ids)
+                cn_loop.execution.seed_protective_stops(
+                    cn_broker.get_orders(active_only=True)
+                )
+            cn_runner = DailyLoopRunner(
+                cn_loop.callbacks(), clock=runtime.clock, schedule=CN_TRADING_SCHEDULE
+            )
+            runtime.run_research["cn"] = cn_loop.run_research_now
+            runtime.run_session_by_market["cn"] = cn_loop.run_session_now
+            runtime.finalize_session_by_market["cn"] = cn_loop.finalize_session_now
+            runtime.order_capable_markets.add("cn")
+            logger.info(
+                "cn ORDER-CAPABLE session enabled (CNY paper only)",
+                extra={"n_symbols": len(cn_wl.symbols), "starting_cash_cny": args.starting_cash_cny},
+            )
+        else:
+            cn_session = ResearchSession(
+                market_id="CN",
+                market_label="Mainland China",
+                feed=cn_feed,
+                ledger=ledger,
+                symbols=cn_wl.symbols,
+                watchlist_lookup=cn_wl.lookup,
+                trading_tz=ZoneInfo(settings.cn_market_tz),
+                index_symbols=list(CN_MAINLAND_INDEX_SYMBOLS),
+                anchor_symbol="000001.SS",
+                vix_symbol="",
+                mode=settings.mode,
+                runtime=runtime,
+                notify=notify,
+                llm_analyst=(
+                    LLMAnalyst(search_llm_settings) if search_llm_settings else None
+                ),
+                knowledge=knowledge,
+                knowledge_index=knowledge_index,
+                focus_note="",
+                lang="zh",
                 clock=runtime.clock,
-            ),
-            holdings_provider=_research_holdings,
-        )
-        cn_runner = DailyLoopRunner(
-            {
-                event: callback
-                for event, callback in cn_session.callbacks().items()
-                if event is not Event.PUSH_CANDIDATES
-            },
-            clock=runtime.clock,
-            schedule=CN_SCHEDULE,
-        )
-        runtime.run_research["cn"] = cn_session.run_now  # manual refresh button
-        logger.info("cn research session enabled", extra={"n_symbols": len(cn_wl.symbols)})
+                discovery_scanner=cn_discovery,
+                holdings_provider=_research_holdings,
+            )
+            cn_runner = DailyLoopRunner(
+                {
+                    event: callback
+                    for event, callback in cn_session.callbacks().items()
+                    if event is not Event.PUSH_CANDIDATES
+                },
+                clock=runtime.clock,
+                schedule=CN_SCHEDULE,
+            )
+            runtime.run_research["cn"] = cn_session.run_now
+            logger.info(
+                "cn research session enabled", extra={"n_symbols": len(cn_wl.symbols)}
+            )
 
     # HK is independent from mainland CN: own universe, indices, calendar,
-    # freshness and persisted brief. It remains research-only.
+    # freshness and persisted brief. It is order-capable only when the existing
+    # HK execution config gate is enabled; otherwise it remains research-only.
     hk_runner = None
     hk_session = None
     hk_loop = None
@@ -870,6 +955,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         hk_wl = build_hk_watchlist(settings.hk_symbols)
         hk_feed = RetryingFeed(YFinanceFeed())
         if settings.hk_orders_enabled:
+            hk_broker = CurrencyBrokerView(broker, "HKD")
             # ORDER-CAPABLE HK session on the SHARED (HKD-funded) broker + ledger,
             # behind the SAME §3 boundaries as US: RiskEngine authoritative,
             # human confirms, DAY-entry fill-chain lifecycle, SEHK tick/lot/fee
@@ -879,7 +965,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             # the market discriminator keeps US and HK candidates from colliding.
             hk_loop = DailyLoop(
                 hk_feed,
-                broker,
+                hk_broker,
                 ledger,
                 mode=settings.mode,
                 market_id="HK",
@@ -921,6 +1007,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             runtime.run_session_by_market["hk"] = hk_loop.run_session_now
             runtime.finalize_session_by_market["hk"] = hk_loop.finalize_session_now
             runtime.order_capable_markets.add("hk")  # UI drops research-only badge
+            if rehydration.performed:
+                hk_loop.execution.seed_synced_fills(rehydration.fill_ids)
+                hk_loop.execution.seed_protective_stops(
+                    hk_broker.get_orders(active_only=True)
+                )
             logger.info(
                 "hk ORDER-CAPABLE session enabled (paper)",
                 extra={"n_symbols": len(hk_wl.symbols)},
@@ -1043,6 +1134,18 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     else:
         logger.warning("all-market brief schedule disabled: primary LLM unavailable")
 
+    # Portfolio controls are one operator policy shared by every order-capable
+    # market.  Refresh each loop atomically from the same persisted settings so
+    # the finance portal cannot update US limits while CN/HK keep stale ones.
+    def _apply_portfolio_controls(controls) -> None:
+        loop.apply_portfolio_controls(controls)
+        if cn_loop is not None:
+            cn_loop.apply_portfolio_controls(controls)
+        if hk_loop is not None:
+            hk_loop.apply_portfolio_controls(controls)
+
+    runtime.apply_portfolio_controls = _apply_portfolio_controls
+
     app = create_app(runtime)
     server = uvicorn.Server(
         uvicorn.Config(app, host=args.host, port=args.port, log_level="warning")
@@ -1083,6 +1186,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 loop.recover_confirmation_state()
             except Exception:
                 logger.exception("startup confirmation recovery failed")
+            if cn_loop is not None:
+                try:
+                    cn_loop.recover_confirmation_state()
+                except Exception:
+                    logger.exception("startup CN confirmation recovery failed")
             if hk_loop is not None:
                 try:
                     hk_loop.recover_confirmation_state()
@@ -1125,6 +1233,8 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             # spam the chat.
             cn_session.on_monitor()
             cn_session.on_research()
+        elif cn_loop is not None:
+            cn_loop.run_research_now()
         if kr_session is not None:
             # Populate the KR semiconductor brief (?market=kr) for the tab; the
             # scheduled 15:00 KST send handles the group push.
@@ -1144,6 +1254,8 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         # polls safe; the per-candidate service registry routes callbacks to the
         # owning market).
         loop.on_confirm_poll()
+        if cn_loop is not None:
+            cn_loop.on_confirm_poll()
         if hk_loop is not None:
             hk_loop.on_confirm_poll()
 
@@ -1279,6 +1391,17 @@ def main() -> None:
     p_serve.add_argument("--port", type=int, default=9319)
     p_serve.add_argument("--db", default=None)
     p_serve.add_argument("--starting-cash", type=float, default=2_000.0)
+    p_serve.add_argument(
+        "--cn-paper",
+        action="store_true",
+        help="enable the independent CNY-funded mainland PAPER trading session",
+    )
+    p_serve.add_argument(
+        "--starting-cash-cny",
+        type=float,
+        default=100_000.0,
+        help="fresh-ledger opening CNY sleeve used by --cn-paper (default: 100000)",
+    )
     p_serve.add_argument(
         "--check-now", action="store_true", help="run monitors + morning report once at startup"
     )

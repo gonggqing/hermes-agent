@@ -1,11 +1,12 @@
 """China/HK research universe for the CN morning session (Loop.md two-session
 extension).
 
-The CN morning session is **research-only** (no orders).  Production mainland
-research uses liquid broad/sector ETFs as stable market anchors and adds a
-dynamic, cross-industry company universe on every run.  The older mixed CN/HK
-catalog remains available for compatibility, but it no longer defines the
-production A-share stock-picking universe.
+Production mainland research uses liquid broad/sector ETFs as stable market
+anchors and adds a dynamic, cross-industry company universe on every run. The
+same universe can feed the isolated CN paper loop; execution eligibility still
+passes the independent tick/lot/T+1/risk/confirmation gates. The older mixed
+CN/HK catalog remains available for compatibility, but it no longer defines
+the production A-share stock-picking universe.
 
 The universe is **config-editable**: ``FINANCE_CN_SYMBOLS`` (or ``Settings.
 cn_symbols``) is a comma-separated override. Symbols already known here keep

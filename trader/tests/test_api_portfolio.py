@@ -227,6 +227,39 @@ class TestPaperAccountProjection:
         # labelled "close", not "live"/now (Loop.md §5.9 freshness).
         assert valuation["holdings"][0]["price_source"] == "close"
 
+    def test_default_account_preserves_each_execution_currency(self, tmp_path):
+        url = f"sqlite:///{tmp_path / 'paper-multi.db'}"
+        journal = PortfolioJournal(url=url)
+        journal.ensure_default_paper_account()
+        broker = PaperBroker(
+            starting_cash_by_currency={"USD": 2_000, "CNY": 100_000}
+        )
+        broker.restore_state(
+            {"USD": 1_500, "CNY": 90_000},
+            [
+                Position(symbol="VST", currency="USD", qty=3, avg_px=165),
+                Position(
+                    symbol="510300.SS", currency="CNY", qty=1_000, avg_px=4.2
+                ),
+            ],
+            [],
+        )
+        runtime = FinanceRuntime(ledger=Ledger(url=url), broker=broker, clock=lambda: NOW)
+        runtime.portfolio = journal
+        paper_client = TestClient(create_app(runtime))
+
+        holdings = paper_client.get(
+            f"/v1/portfolio/accounts/{DEFAULT_PAPER_ACCOUNT_ID}/holdings"
+        ).json()
+        assert {row["symbol"]: row["currency"] for row in holdings["holdings"]} == {
+            "VST": "USD",
+            "510300.SS": "CNY",
+        }
+        assert holdings["cash"] == [
+            {"currency": "CNY", "amount": 90_000.0, "known": True},
+            {"currency": "USD", "amount": 1_500.0, "known": True},
+        ]
+
     def test_system_paper_account_cannot_be_reclassified_live(self, tmp_path):
         url = f"sqlite:///{tmp_path / 'fixed-paper.db'}"
         journal = PortfolioJournal(url=url)

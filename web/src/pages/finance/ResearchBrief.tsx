@@ -1380,7 +1380,7 @@ export function ResearchBrief({
       {!researchOnly && <RiskStrip risk={brief.risk} ft={ft} />}
       <RegimeChips regime={brief.regime} ft={ft} />
       <DiscoveryCard pool={brief.discovery} ft={ft} />
-      {researchOnly && (
+      {market !== "us" && (
         <SynthesisCard synthesis={brief.cross_market_synthesis} ft={ft} />
       )}
 

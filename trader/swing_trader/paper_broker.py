@@ -29,7 +29,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
+from zoneinfo import ZoneInfo
 
+from swing_trader.cn_market import is_cn_symbol, is_listed_fund, quantity_violation
 from swing_trader.config import Mode
 from swing_trader.interfaces import Bar, BrokerInterface, PlaceResult
 from swing_trader.log import get_logger
@@ -68,6 +70,7 @@ class PaperBroker(BrokerInterface):
         slippage_bps: float = 5.0,
         liquidity_fraction: float = 1.0,
         apply_hk_fees: bool = False,
+        apply_cn_fees: bool = False,
     ) -> None:
         if starting_cash <= 0:
             raise ValueError("starting_cash must be positive")
@@ -103,6 +106,10 @@ class PaperBroker(BrokerInterface):
         # duty, levies, trading fee, CCASS) so paper P&L reflects real HK cost;
         # off by default keeps the deterministic test oracle's round numbers.
         self.apply_hk_fees = apply_hk_fees
+        # Estimated mainland retail costs for PAPER attribution only: 0.025%
+        # commission with a CNY 5 minimum, plus 0.05% sell stamp duty on stocks
+        # (listed funds are exempt). A real broker fill remains authoritative.
+        self.apply_cn_fees = apply_cn_fees
 
         self._cash_by_currency: dict[str, float] = dict(balances)
         self._day_open_equity: float = sum(
@@ -206,20 +213,53 @@ class PaperBroker(BrokerInterface):
             consideration = remaining * self._buy_ref_px[order.id]
             self._reserved[order.id] = (
                 consideration
-                + self.commission_per_order
-                + self._statutory_fees(order.currency, consideration)
+                + self._fees(order.currency, consideration, Side.BUY, order.symbol)
             )
 
-    def _statutory_fees(self, currency: str, consideration: float) -> float:
-        """SEHK statutory/exchange fees on an HKD trade, else 0. Used BOTH for
+    def _fees(
+        self, currency: str, consideration: float, side: Side, symbol: str
+    ) -> float:
+        """Estimated commission/statutory fees, also used for BUY reservation.
+
+        SEHK charges supplement the configured flat commission. Mainland paper
+        trades use an explicit local-currency estimate instead of interpreting
+        the default ``1.0`` as one US dollar.
+
+        Used BOTH for
         the BUY cash reservation (on ref/limit price — conservative, so the
         reservation always covers the fill's fee) and the fill deduction, so the
-        HKD sleeve can never over-commit (cash < 0)."""
+        currency sleeve can never over-commit (cash < 0)."""
+        if consideration <= 0:
+            return 0.0
+        if self.apply_cn_fees and currency == "CNY":
+            broker_commission = max(5.0, consideration * 0.00025)
+            stamp = (
+                consideration * 0.0005
+                if side is Side.SELL and not is_listed_fund(symbol)
+                else 0.0
+            )
+            return broker_commission + stamp
         if self.apply_hk_fees and currency == "HKD" and consideration > 0:
             from swing_trader.hk_fees import compute_hk_fees
 
-            return float(compute_hk_fees(consideration).total)
-        return 0.0
+            return self.commission_per_order + float(compute_hk_fees(consideration).total)
+        return self.commission_per_order
+
+    def _cn_bought_today(self, symbol: str, at: datetime) -> float:
+        if not is_cn_symbol(symbol):
+            return 0.0
+        local_day = at.astimezone(ZoneInfo("Asia/Shanghai")).date()
+        return sum(
+            fill.qty
+            for fill in self._fills
+            if fill.symbol == symbol
+            and fill.side is Side.BUY
+            and fill.ts.astimezone(ZoneInfo("Asia/Shanghai")).date() == local_day
+        )
+
+    def _cn_sellable_qty(self, symbol: str, at: datetime) -> float:
+        pos = self._positions.get(symbol)
+        return max(0.0, (pos.qty if pos else 0.0) - self._cn_bought_today(symbol, at))
 
     def _release_reservation(self, order_id: str) -> None:
         self._reserved.pop(order_id, None)
@@ -261,6 +301,18 @@ class PaperBroker(BrokerInterface):
             pos = self._positions.get(stored.symbol)
             if pos is None or pos.qty <= _EPS:
                 return reject(f"shorting not allowed: no long position in {stored.symbol}")
+            if is_cn_symbol(stored.symbol):
+                qty_reason = quantity_violation(
+                    stored.qty, stored.side, held_qty=pos.qty
+                )
+                if qty_reason:
+                    return reject(f"CN order quantity invalid: {qty_reason}")
+                sellable = self._cn_sellable_qty(stored.symbol, stored.ts)
+                if stored.qty > sellable + _EPS:
+                    return reject(
+                        f"T+1 restriction: only {sellable:g} settled shares/units "
+                        f"of {stored.symbol} are sellable today"
+                    )
             available = pos.qty - self._reserved_sell_qty(stored.symbol)
             if stored.qty > available + _EPS:
                 return reject(
@@ -268,13 +320,18 @@ class PaperBroker(BrokerInterface):
                     f"available {available:g}, requested {stored.qty:g}"
                 )
         else:  # BUY: reserve cash
+            if is_cn_symbol(stored.symbol):
+                qty_reason = quantity_violation(stored.qty, stored.side)
+                if qty_reason:
+                    return reject(f"CN order quantity invalid: {qty_reason}")
             ref_px = self._buy_reference_px(stored)
             if ref_px is None:
                 return reject(f"no reference price for {stored.symbol} MOC order")
             reservation = (
                 stored.qty * ref_px
-                + self.commission_per_order
-                + self._statutory_fees(stored.currency, stored.qty * ref_px)
+                + self._fees(
+                    stored.currency, stored.qty * ref_px, Side.BUY, stored.symbol
+                )
             )
             currency_cash = self._cash_by_currency.get(stored.currency, 0.0)
             reserved = self._total_reserved(stored.currency)
@@ -385,6 +442,11 @@ class PaperBroker(BrokerInterface):
             if order.side is Side.SELL:  # cash account: never sell below zero
                 pos = self._positions.get(order.symbol)
                 qty = min(qty, pos.qty if pos else 0.0)
+                if is_cn_symbol(order.symbol):
+                    qty = min(
+                        qty,
+                        self._cn_sellable_qty(order.symbol, execution_ts or bar.ts),
+                    )
             if qty <= _EPS:
                 continue
             fills.append(self._apply_fill(order, qty, px, bar, execution_ts=execution_ts))
@@ -454,9 +516,7 @@ class PaperBroker(BrokerInterface):
         # lumped into the fill commission for the paper sim (broker vs statutory
         # reconciliation happens once real IBKR fills exist). The BUY reservation
         # covered these on the ref/limit price, so the sleeve never goes negative.
-        commission = self.commission_per_order + self._statutory_fees(
-            order.currency, qty * px
-        )
+        commission = self._fees(order.currency, qty * px, order.side, order.symbol)
         fill = Fill(
             # ``bar.ts`` is the bar START (09:30 for a daily Yahoo candle),
             # not the moment the 16:00 close callback executed. Runtime calls
@@ -551,6 +611,7 @@ class PaperBroker(BrokerInterface):
         positions: list[Position],
         orders: list[Order],
         day_open_equity: Optional[float] = None,
+        fills: Optional[list[Fill]] = None,
     ) -> list[str]:
         """Load replayed state into a FRESH broker (Loop.md Phase 0.5:
         rehydration across Finance-service restarts).
@@ -564,6 +625,7 @@ class PaperBroker(BrokerInterface):
         if self._orders or self._positions or self._fills:
             raise RuntimeError("restore_state requires a fresh PaperBroker")
         warnings: list[str] = []
+        self._fills = [fill.model_copy(deep=True) for fill in (fills or [])]
         self._cash_by_currency = (
             {self.base_currency: float(cash)}
             if isinstance(cash, (int, float))
@@ -595,7 +657,8 @@ class PaperBroker(BrokerInterface):
             # refreshes EXISTING entries (it early-returns on unknown ids).
             remaining = order.qty - order.filled_qty
             self._reserved[order.id] = (
-                remaining * ref + self.commission_per_order
+                remaining * ref
+                + self._fees(order.currency, remaining * ref, Side.BUY, order.symbol)
             )
         # Sanity: resting SELLs must be covered by restored positions.
         for symbol in {o.symbol for o in self._orders.values()}:
@@ -626,9 +689,12 @@ class PaperBroker(BrokerInterface):
         """Reset the day-open equity anchor to current equity."""
         self._day_open_equity = self._equity()
 
-    def end_of_day(self) -> None:
-        """Expire resting DAY orders (their fills, if any, stand)."""
+    def end_of_day(self, currency: Optional[str] = None) -> None:
+        """Expire resting DAY orders for one sleeve (or all when omitted)."""
+        scope = currency.upper() if currency else None
         for order in self._orders.values():
+            if scope is not None and order.currency != scope:
+                continue
             if order.tif is TimeInForce.DAY and order.status in _RESTING:
                 order.status = OrderStatus.EXPIRED
                 self._release_reservation(order.id)

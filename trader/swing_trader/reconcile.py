@@ -47,10 +47,14 @@ class ReconciliationResult:
         )
 
 
-def _ledger_positions(ledger: Ledger, mode: Mode) -> dict[str, float]:
+def _ledger_positions(
+    ledger: Ledger, mode: Mode, currency: str | None = None
+) -> dict[str, float]:
     """Net position qty per symbol implied by recorded fills (BUY +, SELL −)."""
     qty: dict[str, float] = {}
     for fill in ledger.get_fills(mode):
+        if currency is not None and fill.currency != currency:
+            continue
         delta = fill.qty if fill.side is Side.BUY else -fill.qty
         qty[fill.symbol] = qty.get(fill.symbol, 0.0) + delta
     return {s: q for s, q in qty.items() if abs(q) > _QTY_TOL}
@@ -65,7 +69,8 @@ def reconcile_broker_ledger(
         mode = Mode(mode)
         broker_pos = {p.symbol: float(p.qty) for p in broker.get_positions()
                       if abs(p.qty) > _QTY_TOL}
-        ledger_pos = _ledger_positions(ledger, mode)
+        currency = getattr(broker, "currency", None)
+        ledger_pos = _ledger_positions(ledger, mode, currency=currency)
     except Exception as exc:  # noqa: BLE001 — reconciliation must never crash
         logger.warning("reconciliation failed", extra={"error": str(exc)[:200]})
         return ReconciliationResult(

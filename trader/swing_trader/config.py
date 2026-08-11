@@ -73,11 +73,11 @@ class Settings(BaseSettings):
     market_tz: str = "America/New_York"
     user_tz: str = "Asia/Shanghai"
 
-    # --- China morning RESEARCH session (Loop.md two-session extension) ---
-    # A second daily session that runs a lighter, tech-focused research brief on
-    # mainland China market in the CN morning. Report-only for now (NO orders),
-    # but wired so it can gain order authority later. ``cn_symbols`` overrides
-    # the default CN/HK universe (comma-separated; empty = built-in default).
+    # --- China morning session (research, optionally PAPER via serve CLI) ---
+    # ``cn_session_enabled`` controls regional research. The operator-facing
+    # ``serve --cn-paper`` flag promotes it to the isolated CNY PaperBroker loop;
+    # no secret/env toggle can accidentally grant live authority. ``cn_symbols``
+    # overrides the mainland listed universe (comma-separated).
     cn_session_enabled: bool = True
     cn_market_tz: str = "Asia/Shanghai"
     cn_symbols: str = ""

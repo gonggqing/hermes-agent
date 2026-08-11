@@ -19,7 +19,7 @@ Definition of "done" for v0 = **Phase 0 exit criteria met** (Section 7).
 
 ## 1. Vision & Goal
 
-Build a system that, each US trading day:
+Build a system that, on each enabled market's trading day:
 - **monitors** markets, the user's holdings/watchlist, news, and account risk;
 - runs **analysis sub-agents** to form theses;
 - a **decision core** proposes candidate orders with rationale + confidence + explicit take-profit/stop-loss;
@@ -36,8 +36,9 @@ Build a system that, each US trading day:
 
 - **Account:** IBKR Hong Kong, **CASH account** (no margin, < $25k). No PDT, but **T+1 settlement** ⇒ **no stock day-trading**; positions are held overnight / multiple days. **Swing/positional only.**
 - **IBKR not opened yet** ⇒ Phase 0 runs entirely on a **PaperBroker** backend + **free market data**; IBKR is a **stub behind an interface** (instrumented for later).
+- **Near-term operating focus (Aug 2026): mainland A shares.** Until IBKR onboarding completes, CN is an isolated **CNY 100,000 PaperBroker sleeve**, never a live broker path. It uses mainland calendar/session rules, 100-share buy lots, stock/fund tick grids, T+1 sellable quantity and human confirmation; free/delayed data and unverified price-limit status remain explicit simulation limitations.
 - **User availability (critical):** the US decision cycle must finish early in the session. The agent observes the open, **finalizes candidates and pushes them at 10:30 ET** (22:30 Shanghai during EDT), then leaves a full hour for the user to confirm **by 11:30 ET**.
-  - Because the user is offline for the US afternoon, **approved orders must be set-and-forget**: **GTC limit**, **GTC stop-loss**, and/or **MOC/LOC** (market/limit-on-close, filling at 16:00 ET close while the user sleeps).
+  - Because the user is offline for the US afternoon, approved entries use a **DAY limit parent** with attached **GTC stop-loss/take-profit**; unfilled entry remainder expires at that market's close and must be researched/reconfirmed next day. MOC/LOC may be used only where the adapter explicitly supports the simulated venue behavior.
 - **Capital is small and partly family money** ⇒ tiny position sizes, hard risk caps, human-in-loop mandatory.
 
 ---
@@ -68,7 +69,7 @@ Build a system that, each US trading day:
 | 16:00 | 04:00 | MOC/LOC fills; resting GTC orders may fill |
 | next 09:00 | next 21:00 | Reporter: overnight fills, ledger update, morning summary |
 
-Order-type policy for approvals: **entries** = GTC limit or MOC/LOC; **protection** = GTC stop-loss (attach on entry fill via bracket/OCA); never leave a position without a resting stop.
+Order-type policy for approvals: **entries** = DAY limit parent; **protection** = GTC stop-loss/take-profit (attach on entry fill via bracket/OCA); never carry an unfilled entry approval into the next day.
 
 Human-facing research delivery uses a separate Finance-owned Beijing cadence:
 **every calendar day at 09:00 and 21:00 Asia/Shanghai**, one non-blocking
@@ -98,16 +99,16 @@ non-destructive `docker/compose.sh` wrapper: `./docker/compose.sh up`,
 `./docker/compose.sh health`. Runtime secrets remain in `~/.hermes/.env`;
 behavior/model routing remains in `~/.hermes/config.yaml`.
 
-### 4b. Two daily sessions — CN morning research + US evening trading (human decision, 2026-07-13)
+### 4b. Regional sessions — CN morning paper trading + US/HK trading + KR research
 
 The user checks the system **twice a day**. Each session runs on its own market clock/calendar; an execution-capable market completes candidate selection at 10:30 local and preserves a one-hour human window, while research-only sessions may retain a later evidence pass:
 
 | Session | Clock | Focus | Orders | Output |
 |---|---|---|---|---|
-| **CN morning** | Asia/Shanghai 09:30 → 11:00 → **11:30** | China/HK market, **technology-first** (semiconductors, electronics, AI; other sectors informative-not-focus) | **NONE** — report-only; build the ability/function for the future | a lighter **Investment Research brief** pushed to the group |
+| **CN morning** | Asia/Shanghai 09:30 monitor → 10:00 decide → **10:15 push → 11:15 cutoff → 15:00 close** | Cross-industry mainland stocks and liquid sector/broad ETFs | **CNY Paper only**; RiskEngine + human approval + primary-model double check; no live authority | full Investment Research brief + approval cards + execution/expiry audit |
 | **US evening** | ET 09:00–16:00 (§4 table) | US market (watchlist §11) | Paper (Phase 0), the full confirm→execute flow | brief + risk-checked candidate approval cards |
 
-CN is **research-only**: it runs monitors + analysis sub-agents + the research brief but has NO decision core, NO RiskEngine execution, NO ConfirmationService, NO broker — so it structurally cannot place an order. Upgrading it to order-capable later means adding those components behind the SAME §3 authority boundaries; the mainland A-share + HK universe is config-editable and degrades to HK-only when mainland data is unreachable.
+CN now owns the same propose → deterministic risk → human confirmation → fresh-market primary-model review → idempotent execution chain as US, but is hard-wired to `Mode.PAPER` and an isolated CNY sleeve. Post-submission hourly bars are used conservatively at close so a morning order cannot be filled by an earlier daily low; unavailable intraday bars produce no fill. A-share price-limit bands, suspensions and security-specific T+0 exceptions remain fail-closed/unclaimed until authoritative instrument status and previous-close data are connected.
 
 **Dual-bot roles (both bots live in the same group chat; refined 2026-07-13).** Two Telegram bots run concurrently as TWO separate processes — the Hermes gateway manages the general bot (one gateway = one `TELEGRAM_BOT_TOKEN`), and the finance service runs the finance bot (`FINANCE_TELEGRAM_BOT_TOKEN`). Hard rule: one token = one long-poller (two pollers on the same token → Telegram 409).
 - **General / gateway bot** (`TELEGRAM_BOT_TOKEN`): the everyday Hermes conversational agent — it replies to the user in the group and now carries the read-only Finance toolset, so it can do complex finance analysis + real-time feedback in chat. The finance service ALSO sends daily summaries / research briefs OUTBOUND via this token (sendMessage only — it never long-polls it, so no 409 with the gateway).
@@ -121,7 +122,7 @@ CN is **research-only**: it runs monitors + analysis sub-agents + the research b
 
 **5.1 Broker abstraction**
 - `BrokerInterface`: `get_account()`, `get_positions()`, `get_quote(sym)`, `get_bars(sym, tf)`, `place_order(order)`, `cancel_order(id)`, `get_orders()`
-- Adapters: **`PaperBroker`** (deterministic fills plus currency-isolated cash/reservations), `AlpacaPaperBroker` (optional), and **`IBKRBroker`** (offline-tested `ib_async` adapter with SMART/USD and qualified SEHK/HKD contracts; connected-paper acceptance remains required).
+- Adapters: **`PaperBroker`** (deterministic USD/HKD/CNY fills, currency-isolated cash/reservations, mainland T+1 and scoped market closes), `AlpacaPaperBroker` (optional), and **`IBKRBroker`** (offline-tested `ib_async` adapter with SMART/USD and qualified SEHK/HKD contracts; connected-paper acceptance remains required).
 - `DataFeed` interface (`get_quote`, `get_bars`, `get_news`): adapters `YFinanceFeed` (now), IBKR feed (later)
 
 **5.2 Monitors** (scheduled pollers; each persists timestamped snapshots)
@@ -144,6 +145,8 @@ CN is **research-only**: it runs monitors + analysis sub-agents + the research b
 **5.7 Execution & authority boundary** — translate human-approved candidates to broker calls; prefer GTC limit + attached GTC stop (bracket/OCA) or MOC/LOC; **re-validate price vs signal validity before send**; handle partials/rejects. `place_order` is a service capability exposed only to ExecutionEngine, not a generic conversational skill. In Phase 3, an independently versioned Quant executor may use the same path for a pre-approved, low-notional strategy whitelist; it must identify itself as `quant:<strategy_version>`, satisfy all existing RiskEngine/ledger gates, and be instantly disabled by the human kill switch.
 
 **Ordinary-order lifecycle:** use `DAY` for an ordinary entry parent and discretionary limit exit; keep only protective stop-loss/take-profit children `GTC`. At market close, cancel any unfilled entry remainder and persist `unfilled/expired`; after a partial fill, cancel the remainder while retaining/resizing GTC protection to the filled quantity. The next trading day must run fresh research, quote/news review and RiskEngine checks, generate new terms, and request a new human confirmation rather than silently replaying or repricing the old approval. Any material change to limit, stop or take-profit invalidates the prior approval and requires a second confirmation. Bounded automatic repricing may be considered only after this deterministic cancel/expire/research/reconfirm lifecycle is proven.
+
+**Mainland PAPER contract:** buy quantity is a 100-share/份 multiple; sell quantity is integral and an odd-lot residual must be flattened in one order. Stock prices use CNY 0.01 ticks and listed funds CNY 0.001; new entries are accepted only during mainland order-entry sessions. Same-day buys are excluded from sellable quantity (T+1), including protective children; each currency view reads/sizes/syncs/expires only its own sleeve. Estimated CN paper costs are labelled estimates and broker fills become authoritative when a real adapter exists.
 
 **5.8 Ledger & durable market memory** — SQLite ledger stores signals, orders, trades (`mode = paper|live`), fills, pnl, rationale, and approval audit events; feeds statistics (win rate, payoff ratio, max drawdown). Monitor snapshots and fetched source documents are retained by trading date rather than discarded. The ledger remains the authoritative source for numerical/accounting facts; no vector index may be treated as an order, fill, or risk record.
 
@@ -267,14 +270,16 @@ Python 3.11 · `ib_async` (later) · `alpaca-py` (optional) · `yfinance` · `pa
 - [x] Route twice-daily US/HK/CN/KR final synthesis through the Hermes primary model on a non-blocking Beijing 09:00/21:00 schedule; persist model/prompt/evidence provenance and show visible failure without template/weak-model fallback.
 - [x] Rebuild brief quality around publication-time news freshness/deduplication, dated historical RAG, prior-publication deltas, real-holding context and a validated trend action map; stop intraday refreshes from multiplying archived briefs/prediction runs.
 - [x] Replace the production A-share fixed-stock/US-VIX research path with cross-industry sector anchors plus a live, industry-capped Eastmoney market universe; dynamically extend breadth, movers, themes, signals and the primary-model evidence packet, distinguish scan outage from “no opportunity”, and render substantive CN↔HK comparison from both independent primary-model briefs.
+- [x] Promote CN to an isolated **CNY 100,000 Paper** loop: 10:15–11:15 confirmation, main-model double check, per-market cash/fill/expiry isolation, official 2026 calendar, stock/fund tick grids, 100-unit buys, T+1 sellability, estimated paper costs, restart recovery and conservative post-submission hourly fills; live authority remains structurally disabled.
+- [ ] Run ≥20 valid mainland paper days and audit every candidate→approval→review→DAY order→fill/expiry→T+1 protection transition; compare simulated fills against time-stamped intraday bars and treat missing bars/price-limit/suspension status as no-fill or explicit uncertainty.
 - [ ] Add a secondary broad A-share universe/feed plus sourced mainland fundamentals, filings, earnings calendar, policy/industry-flow evidence and valuation deltas; until then CN action views remain research guidance rather than sufficient evidence for automatic investment confirmation.
 - [ ] Accumulate ≥20 valid US paper trading days; every approved candidate must have a persisted terminal outcome and no approval may remain silently stranded.
 - [ ] Run a five-consecutive-open-day US/HK/CN/KR research soak; measure on-time publication, freshness/source gaps, readable briefs, alerts and restart persistence.
 - [ ] Make the entire session step-idempotent and crash-resumable, not only confirmation execution; prove reruns cannot double-count or double-place.
 - [ ] Add a secondary `DataFeed` implementation/failover path and expose per-source staleness; keep new entries fail-closed when all sources are unhealthy.
-- [ ] Complete the ordinary PaperBroker order matrix: GTC entry, bracket/OCA protection, cancel/replace, partial fill, overnight rest, rejection, close processing and restart recovery.
+- [ ] Complete the ordinary PaperBroker order matrix: DAY entry, bracket/OCA protection, cancel/replace, partial fill, close expiry, rejection, market-scoped close processing and restart recovery.
 - [ ] Connect IBKR Paper and prove ordinary order-state normalization, permanent identity, reconnect/resubscription, cancel/replace, partial fills, bracket activation, settled cash and broker↔ledger reconciliation.
-- [x] Build the offline-tested **multi-currency execution foundation**: currency-tagged schemas/ledger, canonical one-currency-per-symbol validation, USD/HKD PaperBroker cash and reservation sleeves, FX-normalized risk/exposure controls, USD 2,000 + HKD 16,000 paper opening balances, and IBKR SEHK/HKD contract qualification plus order/fill/position reconciliation fields.
+- [x] Build the offline-tested **multi-currency execution foundation**: currency-tagged schemas/ledger, canonical one-currency-per-symbol validation, isolated USD/HKD/CNY PaperBroker cash/reservation/session views, normalized risk/exposure controls, USD 2,000 + HKD 16,000 + CNY 100,000 paper opening balances, and IBKR SEHK/HKD contract qualification plus order/fill/position reconciliation fields.
 - [ ] Finish connected **HK IBKR Paper acceptance**: persist qualified contract details/conId, enforce board-lot/tick rules, Hong Kong calendar/lunch/auction behavior, fee rules and quote entitlement/freshness; then prove GTC/bracket/partial/cancel/restart/reconciliation parity through the independent **10:30–11:30 Asia/Hong_Kong** human window. Later USD↔HKD conversion requires a fresh quoted rate and separate human-confirmed audit action; never convert implicitly. Detailed plan: `docs/finance-hk-ibkr-rollout.md`.
 - [ ] Add closed-trade analysis feedback for signal/research evaluation only; it may not alter hard risk limits or authority.
 - [ ] Run the end-to-end IBKR Paper dry run, reconciliation and kill-switch drill, then obtain human Phase-1 sign-off.
@@ -340,6 +345,7 @@ Each symbol is tagged `{theme, ai_phase(infra|memory|network|power|application|c
 
 ## 13. Progress log (building agent appends; newest first)
 
+- 2026-08-11 — **Mainland paper execution enabled.** Promoted CN from research-only to an isolated CNY 100,000 PaperBroker loop with a 10:15–11:15 local confirmation window, primary-model post-approval review, market-scoped recovery/close processing, official 2026 holidays, stock/fund ticks, 100-unit buys, T+1 sellability, conservative post-order hourly fills and Web/Desktop/Telegram order-capable presentation; authoritative price-limit/suspension data and the ≥20-day acceptance run remain open.
 - 2026-08-11 — **Daily research quality refactor.** Audited 445 archived snapshots and proved repeated Yahoo headlines were being treated as new for up to 16 research days; current CN digest entries were all older than 72h (oldest >350 days). Added publication-time freshness/deduplication, dated RAG context, richer persistence/volume/drawdown factors, prior-thesis deltas, read-only real-holding context, structured trend stances/invalidation, canonical-edition-only archival, and Web/Desktop/Telegram rendering; deterministic tests and historical replay are recorded in `docs/finance-research-quality-audit-2026-08-11.md`.
 - 2026-08-11 — **A-share research breadth refactor.** Runtime inspection proved CN discovery had zero source symbols, US VIX contaminated the A-share regime, movers overlapped inside an eight-name static universe, and CN↔HK “complete” only meant two files existed. Added dynamic cross-industry market seeds, sector anchors, market-native regime/breadth, non-overlapping dynamic movers and primary-model-backed cross-market comparison; a live read-only scan surfaced healthcare and industrial-metals candidates instead of the legacy technology list.
 - 2026-08-11 — **Official upstream refresh.** Merged official `main` through `2cdb30a474d7` (6,331 upstream commits), migrated Finance into the contribution-driven Desktop/Web route architecture, preserved its service/tool authority boundary, and recorded validation plus known baselines in `docs/upstream-sync/2026-08-11.md`.

@@ -156,7 +156,19 @@ services:
       - /opt/hermes/trader/.venv/bin/python
       - -m
       - swing_trader
-    command: ["serve", "--host", "0.0.0.0", "--db", "/opt/data/trader.db", "--port", "9319"]
+    command:
+      - serve
+      - --host
+      - 0.0.0.0
+      - --db
+      - /opt/data/trader.db
+      - --port
+      - "9319"
+      # Mainland execution is PAPER-only and owns an isolated CNY sleeve.
+      # Keep this as an explicit process argument (behaviour, not a secret).
+      - --cn-paper
+      - --starting-cash-cny
+      - "100000"
 
   # NOTE: the dashboard deliberately has NO separate service. It runs inside
   # the gateway container (HERMES_DASHBOARD=1 above) so the dashboard's

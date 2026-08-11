@@ -194,7 +194,6 @@ export function FinanceResearchView({
   const customGroups = watchlistsQuery.data ?? []
   const selectedCustomGroup = customGroups.find(group => group.id === customGroupId) ?? null
   const marketDesk = isMarketDesk(desk)
-  const researchOnly = marketDesk && desk !== 'us'
   const marketKey = desk === 'us' ? 'us' : desk === 'korea' ? 'kr' : desk === 'hk' ? 'hk' : 'cn'
 
   const briefQuery = useQuery({
@@ -206,6 +205,9 @@ export function FinanceResearchView({
   })
 
   const brief = briefQuery.data
+  // Authority comes from the backend brief shape: an order-capable regional
+  // loop carries account risk, while a research-only session has risk=null.
+  const researchOnly = marketDesk && brief?.risk == null
 
   const marketLabel: Record<(typeof ACTIVE_MARKETS)[number], string> = {
     us: copy.marketUs,
@@ -420,7 +422,7 @@ export function BriefBody({
       {researchOnly ? <ResearchOnlyNote /> : <RiskSection risk={brief.risk} />}
       <RegimeSection regime={brief.regime} />
       <DiscoverySection pool={brief.discovery} />
-      {researchOnly && <SynthesisSection synthesis={brief.cross_market_synthesis} />}
+      <SynthesisSection synthesis={brief.cross_market_synthesis} />
       <MoversSection bottom={brief.movers.bottom} top={brief.movers.top} />
       <ThemesSection themes={brief.themes} />
       <NewsSection news={brief.news} />

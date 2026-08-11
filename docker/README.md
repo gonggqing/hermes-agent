@@ -18,6 +18,12 @@ Finance process is separate so research/model latency cannot block Hermes chat.
 The Finance-owned scheduler, not Hermes conversational cron, runs the persisted
 US/CN/HK/KR briefs at 09:00 and 21:00 Asia/Shanghai.
 
+The Compose Finance command explicitly enables `--cn-paper` with a CNY 100,000
+opening sleeve. This is behavioral configuration, not a credential: mainland
+orders remain `Mode.PAPER`, share no USD/HKD cash, and cannot activate an IBKR
+live path. Change the amount only before the first fill in a new ledger; the
+rehydration contract assumes opening balances remain stable thereafter.
+
 Finance connects to Qdrant only over `finance-internal`. The Finance API is
 published only on host loopback; the vector service has no published port.
 Historical normalized documents can be idempotently backfilled with the
@@ -89,7 +95,8 @@ cd trader
 uv sync --extra dev --extra service --extra knowledge --extra ibkr
 uv run pytest
 uv run ruff check swing_trader tests
-uv run python -m swing_trader serve --db /tmp/hermes-finance-dev.db --port 9320
+uv run python -m swing_trader serve --db /tmp/hermes-finance-dev.db --port 9320 \
+  --cn-paper --starting-cash-cny 100000
 ```
 
 Use a temporary DB and a different port for development. Stop the Compose
@@ -118,6 +125,8 @@ Useful direct checks:
 ```bash
 curl -fsS http://127.0.0.1:9319/v1/health
 curl -fsS http://127.0.0.1:9319/v1/research/brief?market=us
+curl -fsS http://127.0.0.1:9319/v1/research/brief?market=cn
+curl -fsS http://127.0.0.1:9319/v1/markets
 docker inspect --format '{{.RestartCount}}' hermes-finance
 ```
 

@@ -4,7 +4,7 @@ Consumes monitor context + post-debate signals + memory and proposes
 :class:`CandidateOrder` objects. It NEVER places orders: every candidate must
 pass the RiskEngine, then human confirmation via Telegram (Loop.md §3).
 
-Order-type policy (Loop.md §4): entries are GTC BRACKET (limit entry +
+Order-type policy (Loop.md §4): entries are DAY BRACKET (limit entry +
 protective stop + take-profit) so a position can never exist without a
 resting stop; discretionary exits are MOC (fill at the 16:00 ET close while
 the user sleeps).
@@ -24,6 +24,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Protocol
 
+from swing_trader.cn_market import (
+    is_cn_symbol,
+    normalize_cn_buy_qty,
+    round_cn_price,
+)
 from swing_trader.log import get_logger
 from swing_trader.risk import RiskParams
 from swing_trader.sehk_rules import SEHKPriceError, is_sehk_symbol, round_to_tick
@@ -143,10 +148,12 @@ class RuleBasedDecisionCore:
         params: DecisionParams | None = None,
         risk_params: RiskParams | None = None,
         memory: MemoryStore | None = None,
+        market_id: str = "US",
     ) -> None:
         self.params = params or DecisionParams()
         self.risk_params = risk_params or RiskParams()
         self.memory = memory
+        self.market_id = market_id.upper()
 
     # ------------------------------------------------------------------ api
 
@@ -181,12 +188,23 @@ class RuleBasedDecisionCore:
             if sig.symbol in held and sig.direction is Direction.SHORT \
                     and sig.confidence >= p.min_exit_confidence:
                 pos = held[sig.symbol]
+                is_mainland = is_cn_symbol(sig.symbol)
+                # Mainland venues do not have the US-style MOC order used by
+                # the legacy exit path.  Submit a fresh DAY limit at the
+                # observed price instead; it expires at the close and must be
+                # researched/reconfirmed the next day if it does not trade.
+                exit_limit = (
+                    round_cn_price(view.last, sig.symbol, direction="down")
+                    if is_mainland
+                    else None
+                )
                 exits.append(
                     CandidateOrder(
                         symbol=sig.symbol,
                         side=Side.SELL,
                         qty=pos.qty,
-                        order_type=OrderType.MOC,
+                        order_type=(OrderType.LMT if is_mainland else OrderType.MOC),
+                        limit=exit_limit,
                         tif=TimeInForce.DAY,
                         rationale=f"exit: {sig.thesis[:240]}",
                         confidence=sig.confidence,
@@ -212,10 +230,13 @@ class RuleBasedDecisionCore:
             if confidence < p.min_entry_confidence:
                 continue
 
-            entry = round(view.last * (1 - p.entry_limit_discount_pct / 100.0), 2)
+            raw_entry = view.last * (1 - p.entry_limit_discount_pct / 100.0)
             atr_dollars = view.last * view.atr_pct / 100.0
-            sl = round(entry - p.sl_atr_mult * atr_dollars, 2)
-            tp = round(entry + p.tp_atr_mult * atr_dollars, 2)
+            raw_sl = raw_entry - p.sl_atr_mult * atr_dollars
+            raw_tp = raw_entry + p.tp_atr_mult * atr_dollars
+            entry = round(raw_entry, 2)
+            sl = round(raw_sl, 2)
+            tp = round(raw_tp, 2)
             if is_sehk_symbol(sig.symbol):
                 # SEHK orders must sit on the exchange tick grid; snap each price
                 # BEFORE approval (rollout doc) and away from the entry so the
@@ -229,9 +250,25 @@ class RuleBasedDecisionCore:
                     tp = float(round_to_tick(tp, direction="up"))
                 except SEHKPriceError:
                     continue
+            elif is_cn_symbol(sig.symbol):
+                # Mainland stocks use 0.01 CNY ticks while listed funds/ETFs
+                # use 0.001. Normalize BEFORE approval so the human sees the
+                # exact prices; execution later refuses off-grid edits.
+                try:
+                    entry = round_cn_price(raw_entry, sig.symbol, direction="down")
+                    sl = round_cn_price(raw_sl, sig.symbol, direction="down")
+                    tp = round_cn_price(raw_tp, sig.symbol, direction="up")
+                except ValueError:
+                    continue
             if sl <= 0 or sl >= entry:
                 continue
-            qty = self._size(entry, sl, account)
+            qty = self._size(entry, sl, account, currency=(
+                "CNY" if is_cn_symbol(sig.symbol)
+                else "HKD" if is_sehk_symbol(sig.symbol)
+                else "USD"
+            ))
+            if is_cn_symbol(sig.symbol):
+                qty = normalize_cn_buy_qty(qty)
             if qty <= 0:
                 continue
 
@@ -293,9 +330,15 @@ class RuleBasedDecisionCore:
             return sig.confidence * p.memory_conf_penalty
         return sig.confidence
 
-    def _size(self, entry: float, sl: float, account: AccountSnapshot) -> int:
+    def _size(
+        self, entry: float, sl: float, account: AccountSnapshot, *, currency: str
+    ) -> int:
         """Risk-based sizing; the RiskEngine independently re-checks the cap."""
-        risk_per_share = entry - sl
+        fx = account.fx_to_base.get(currency)
+        spendable = account.cash_by_currency.get(currency)
+        if fx is None or fx <= 0 or spendable is None:
+            return 0
+        risk_per_share = (entry - sl) * fx
         if risk_per_share <= 0 or account.equity <= 0:
             return 0
         risk_dollars = (
@@ -304,7 +347,7 @@ class RuleBasedDecisionCore:
         qty = math.floor(risk_dollars / risk_per_share)
         # cash sanity so we do not propose obviously unaffordable candidates
         max_affordable = math.floor(
-            max(0.0, account.cash - self.risk_params.est_commission) / entry
+            max(0.0, spendable - self.risk_params.est_commission) / entry
         )
         return max(0, min(qty, max_affordable))
 

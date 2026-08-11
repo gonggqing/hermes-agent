@@ -88,6 +88,7 @@ class FinanceRuntime:
     llm_analyst: Any = None  # optional LLMAnalyst voice for /v1/analyze
     # Phase 0.8 (resilience): last HealthStatus the loop assessed at decide time.
     health: Any = None  # swing_trader.health.HealthStatus | None
+    health_by_market: dict = field(default_factory=dict)
     # Phase 0.9 (portfolio): instrument type-ahead + the append-only journal.
     instrument_search: Any = None  # CachedInstrumentSearch | None
     portfolio: Any = None  # swing_trader.portfolio_journal.PortfolioJournal | None
@@ -1373,7 +1374,7 @@ def create_app(runtime: FinanceRuntime):
                 Holding(
                     symbol=position.symbol,
                     market=market_for(position.symbol),
-                    currency=account.base_currency,
+                    currency=position.currency,
                     qty=position.qty,
                     avg_cost=position.avg_px,
                     cost_basis_known=True,
@@ -1382,11 +1383,8 @@ def create_app(runtime: FinanceRuntime):
                 if abs(position.qty) > 1e-9
             ],
             cash=[
-                CashBalance(
-                    currency=account.base_currency,
-                    amount=snapshot.cash,
-                    known=True,
-                )
+                CashBalance(currency=currency, amount=amount, known=True)
+                for currency, amount in sorted(snapshot.cash_by_currency.items())
             ],
             as_of=as_of,
             n_events=len(fills),
@@ -1419,12 +1417,12 @@ def create_app(runtime: FinanceRuntime):
             quote = live.get(position.symbol)
             if quote is not None:
                 marks[position.symbol] = Mark(
-                    position.symbol, quote, account.base_currency,
+                    position.symbol, quote, position.currency,
                     now, "live", "paper-broker",
                 )
             elif position.mkt_px is not None:
                 marks[position.symbol] = Mark(
-                    position.symbol, position.mkt_px, account.base_currency,
+                    position.symbol, position.mkt_px, position.currency,
                     snap_ts, "close", "paper-broker",
                 )
         return marks

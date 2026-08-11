@@ -45,6 +45,7 @@ __all__ = [
     "CN_HK_HOLIDAYS_2026",
     "CN_HOLIDAYS_2026",
     "CN_SCHEDULE",
+    "CN_TRADING_SCHEDULE",
     "BEIJING_BRIEF_SCHEDULE",
     "ET",
     "EVENT_TIMES_ET",
@@ -183,21 +184,16 @@ US_SCHEDULE = SessionSchedule(
     holidays=NYSE_FULL_DAY_HOLIDAYS_2026,
 )
 
-#: CN morning RESEARCH session (Asia/Shanghai): monitors 09:30 -> build 11:00
-#: -> push a lighter research brief 11:30 (local). Report-only: NO confirmation
-#: window, NO cutoff, NO close/execution events (Loop.md two-session extension:
-#: "not place order in CN for now, but build the ability for future").
+#: Legacy CN research-only cadence, retained for deployments that do not pass
+#: ``--cn-paper``.  The production Compose service uses CN_TRADING_SCHEDULE.
 CN_EVENT_TIMES_LOCAL: Mapping[Event, time] = {
     Event.MONITOR_START: time(9, 30),
     Event.DECIDE_START: time(11, 0),
     Event.PUSH_CANDIDATES: time(11, 30),
 }
 
-# Approximate COMBINED mainland A-share (SSE/SZSE) + HKEX full-day closures
-# for 2026 (weekends already handled). Report-only, so an imperfect entry only
-# risks sending a brief over stale data (freshness-flagged) — never an order.
-# TODO(calendar): replace with an authoritative SSE/HKEX 2026 calendar (and
-# extend for 2027) before the CN session ever gains order authority.
+# Legacy combined CN/HK closure table retained for compatibility. Execution
+# uses the independent authoritative CN_HOLIDAYS_2026 / HK_HOLIDAYS_2026 sets.
 CN_HK_HOLIDAYS_2026: frozenset[date] = frozenset(
     {
         date(2026, 1, 1),  # New Year's Day (mainland + HK)
@@ -222,9 +218,16 @@ CN_HK_HOLIDAYS_2026: frozenset[date] = frozenset(
 )
 
 CN_HOLIDAYS_2026: frozenset[date] = frozenset(
-    day for day in CN_HK_HOLIDAYS_2026
-    if day not in {
-        date(2026, 4, 3), date(2026, 5, 25), date(2026, 12, 25)
+    {
+        date(2026, 1, 1),
+        date(2026, 2, 16), date(2026, 2, 17), date(2026, 2, 18),
+        date(2026, 2, 19), date(2026, 2, 20), date(2026, 2, 23),
+        date(2026, 4, 6),
+        date(2026, 5, 1), date(2026, 5, 4), date(2026, 5, 5),
+        date(2026, 6, 19),
+        date(2026, 9, 25),
+        date(2026, 10, 1), date(2026, 10, 2), date(2026, 10, 5),
+        date(2026, 10, 6), date(2026, 10, 7),
     }
 )
 
@@ -241,6 +244,25 @@ CN_SCHEDULE = SessionSchedule(
     market_id="CN",
     tz=SHANGHAI,
     event_times=CN_EVENT_TIMES_LOCAL,
+    holidays=CN_HOLIDAYS_2026,
+)
+
+#: Mainland A-share PAPER session.  Research/selection completes at 10:15,
+#: leaving a full hour for human confirmation before 11:15.  Submission is
+#: deliberately before the 11:30 lunch break; DAY entries expire at 15:00 and
+#: are re-researched on the next trading day.  Holidays match the official SSE
+#: 2026 closure notice (上证公告〔2025〕45号).
+CN_TRADING_SCHEDULE = SessionSchedule(
+    market_id="CN",
+    tz=SHANGHAI,
+    event_times={
+        Event.MORNING_REPORT: time(9, 0),
+        Event.MONITOR_START: time(9, 30),
+        Event.DECIDE_START: time(10, 0),
+        Event.PUSH_CANDIDATES: time(10, 15),
+        Event.CONFIRM_CUTOFF: time(11, 15),
+        Event.MARKET_CLOSE: time(15, 0),
+    },
     holidays=CN_HOLIDAYS_2026,
 )
 

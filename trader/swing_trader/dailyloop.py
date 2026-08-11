@@ -117,6 +117,7 @@ class TelegramSurfaceAdapter:
         allowed_users: Optional[set[str]] = None,
         respond_text: Optional[Callable[[str], Optional[str]]] = None,
         candidate_account_label: str = "IBHK Paper（模拟盘）",
+        candidate_account_labels: Optional[dict[str, str]] = None,
     ) -> None:
         """``interactive=False`` = OUTBOUND ONLY (cards/reports are sent, but
         poll() is a no-op). Required when the Hermes gateway long-polls
@@ -142,6 +143,9 @@ class TelegramSurfaceAdapter:
         }
         self._respond_text = respond_text
         self._candidate_account_label = candidate_account_label
+        self._candidate_account_labels = {
+            key.lower(): value for key, value in (candidate_account_labels or {}).items()
+        }
         self._candidate_reasoner: Optional[Callable[[CandidateOrder], Optional[str]]] = None
         self._by_short_id: dict[str, str] = {}
         # short-id -> the ConfirmationService that OWNS that candidate. Lets a
@@ -302,7 +306,8 @@ class TelegramSurfaceAdapter:
         """
         lines: list[str] = []
         if report.placed:
-            lines.append(f"📨 已向 {self._candidate_account_label} 提交挂单")
+            label = self._account_label_for(report.placed[0])
+            lines.append(f"📨 已向 {label} 提交挂单")
             for order in report.placed:
                 px = order.limit if order.limit is not None else order.stop
                 side = "买入" if order.side is Side.BUY else "卖出"
@@ -330,6 +335,19 @@ class TelegramSurfaceAdapter:
             self._transport.send_message(chat_id, text)
         except Exception:
             logger.warning("failed to send telegram candidate status")
+
+    def _account_label_for(self, item: Any) -> str:
+        market = str(getattr(item, "market", "") or "").lower()
+        if not market:
+            symbol = str(getattr(item, "symbol", "") or "").upper()
+            market = (
+                "cn" if symbol.endswith((".SS", ".SZ"))
+                else "hk" if symbol.endswith(".HK")
+                else "us"
+            )
+        return self._candidate_account_labels.get(
+            market, self._candidate_account_label
+        )
 
     def poll(self, service: Optional[ConfirmationService], now_utc: datetime) -> None:
         # ``service`` may be None before the daily decide phase — draft
@@ -401,7 +419,7 @@ class TelegramSurfaceAdapter:
                 render_candidate_action_reply(
                     candidate,
                     "edit",
-                    account_label=self._candidate_account_label,
+                    account_label=self._account_label_for(candidate),
                 ),
             )
             return
@@ -444,7 +462,7 @@ class TelegramSurfaceAdapter:
             render_candidate_action_reply(
                 result.candidate,
                 action,
-                account_label=self._candidate_account_label,
+                account_label=self._account_label_for(result.candidate),
                 reason_zh=reason_zh,
             ),
         )
@@ -659,6 +677,8 @@ class DailyLoop:
         holdings_provider=None,  # Optional read-only real-portfolio projection
         order_reviewer=None,  # Optional[LLMCandidateReviewer] — advisory only
         order_review_required: bool = False,
+        close_timeframe: str | None = None,
+        watchlist_lookup: Callable[[str], Any] | None = None,
     ) -> None:
         self.feed = feed
         self.broker = broker
@@ -694,12 +714,15 @@ class DailyLoop:
         self.clock = clock
         self.risk_params = risk_params or RiskParams()
         self.symbols = symbols or watchlist_mod.enabled_symbols()
+        self.watchlist_lookup = watchlist_lookup or watchlist_mod.get
         self.runtime = runtime
         self.telegram = telegram
         self.notify = notify or (lambda text: logger.info("notify", extra={"text": text[:200]}))
 
         self.risk_engine = RiskEngine(self.risk_params)
-        self.decision = decision_core or RuleBasedDecisionCore(risk_params=self.risk_params)
+        self.decision = decision_core or RuleBasedDecisionCore(
+            risk_params=self.risk_params, market_id=self.market_id
+        )
         # live_orders_allowed defaults False (fail-closed): even in Mode.LIVE the
         # ExecutionEngine refuses to place unless the caller explicitly threads
         # the triple gate through (Loop.md §3). __main__ passes
@@ -746,12 +769,19 @@ class DailyLoop:
         self._entries_placed_today = 0
         self._memory_seen_trades: set[str] = set()
         self._health: Optional[HealthStatus] = None  # Phase 0.8 (dead-man's switch)
+        self._risk_status = None
         self.kill_switch = kill_switch  # Phase 0.95 manual HALT (may be None)
         self.discovery_scanner = discovery_scanner
         self.brief_writer = brief_writer
         self.holdings_provider = holdings_provider
         self.order_reviewer = order_reviewer
         self.order_review_required = order_review_required
+        # Mainland orders are submitted mid-morning; using the full daily OHLC
+        # at close would allow a fill on a low printed before submission.  CN
+        # therefore replays only post-submission hourly bars (fail-closed when
+        # the feed cannot supply them). Other markets retain the established
+        # daily-bar simulator until their own intraday acceptance work lands.
+        self.close_timeframe = close_timeframe
         self._discovery = None
         self._confirmation_recovery_lock = threading.Lock()
         self._execution_lock = threading.Lock()
@@ -786,12 +816,17 @@ class DailyLoop:
         self._update_memory_outcomes()
         self.broker.start_of_day()
         status = self.account_monitor.poll()
+        self._risk_status = status
         self.ledger.record_snapshot(status.snapshot)
         text = morning_summary(self.broker, self.ledger, self.mode,
                                since_utc=now - timedelta(hours=24))
         if self.runtime is not None:
-            self.runtime.latest_reports["morning"] = text
-        self.notify(text)
+            self.runtime.latest_reports[f"morning_{self.market_id.lower()}"] = text
+            if self.market_id == "US":
+                self.runtime.latest_reports["morning"] = text
+        self.notify(
+            text if self.market_id == "US" else f"[{self._market_label}]\n{text}"
+        )
         logger.info("morning report done", extra={"warnings": status.warnings})
 
     def on_monitor(self) -> None:
@@ -800,7 +835,9 @@ class DailyLoop:
             try:
                 self._discovery = self.discovery_scanner.scan(self.market_id)
             except Exception:
-                logger.exception("US discovery scan failed")
+                logger.exception(
+                    "market discovery scan failed", extra={"market": self.market_id}
+                )
                 self._discovery = None
         discovered = [
             row.symbol for row in (self._discovery.candidates if self._discovery else [])
@@ -808,8 +845,12 @@ class DailyLoop:
         research_symbols = list(dict.fromkeys([*self.symbols, *discovered]))
         self._portfolio = self.portfolio_monitor.poll(research_symbols)
         self._news = self.news_monitor.poll(research_symbols)
+        self._risk_status = self.account_monitor.poll()
         if self.runtime is not None:
-            self.runtime.market = self._market.model_dump(mode="json")
+            market_dump = self._market.model_dump(mode="json")
+            self.runtime.market_snapshots[self.market_id.lower()] = market_dump
+            if self.market_id == "US":
+                self.runtime.market = market_dump
         self._ingest_news()
         # Publish the core market/portfolio/news snapshot BEFORE optional
         # Yahoo earnings/fundamentals enrichment. Those endpoints are much
@@ -822,7 +863,7 @@ class DailyLoop:
         self._publish_brief()
 
     def run_research_now(self) -> dict:
-        """Refresh the US research desk without entering the decision loop.
+        """Refresh this market's research desk without entering the decision loop.
 
         Safe for startup catch-up and the research API: it gathers market,
         portfolio, news and earnings context and publishes a brief, but never
@@ -831,11 +872,22 @@ class DailyLoop:
         try:
             self.on_monitor()
         except Exception:  # a refresh failure must not crash the service
-            logger.exception("US research refresh failed; publishing degraded brief")
+            logger.exception(
+                "research refresh failed; publishing degraded brief",
+                extra={"market": self.market_id},
+            )
             self._publish_brief()
-        ready = bool(self.runtime is not None and self.runtime.latest_brief)
+        slot = self.market_id.lower()
+        ready = bool(
+            self.runtime is not None
+            and (
+                self.runtime.latest_brief
+                if self.market_id == "US"
+                else self.runtime.latest_briefs.get(slot)
+            )
+        )
         return {
-            "market": "US",
+            "market": self.market_id,
             "ran_at": self.clock().isoformat(),
             "brief_ready": ready,
         }
@@ -846,6 +898,7 @@ class DailyLoop:
         self._entries_placed_today = 0
         debates, views = self._build_signals()
         status = self.account_monitor.poll()
+        self._risk_status = status
         account = status.snapshot
         positions = self._portfolio.positions
         open_syms = {o.symbol for o in self.broker.get_orders(active_only=True)}
@@ -1065,7 +1118,11 @@ class DailyLoop:
         if bars is None:
             bars = self._fetch_close_bars()
         if bars:
-            self.broker.step(bars, execution_ts=now)
+            if isinstance(bars, list):
+                for packet in bars:
+                    self.broker.step(packet, execution_ts=now)
+            else:
+                self.broker.step(bars, execution_ts=now)
         self.execution.sync_fills()
         self.broker.end_of_day()
         # §4 safety net: re-arm protection for any position a discretionary exit
@@ -1075,6 +1132,7 @@ class DailyLoop:
             self.clock(), reason="missed execution: market closed without an order"
         )
         status = self.account_monitor.poll()
+        self._risk_status = status
         self.ledger.record_snapshot(status.snapshot)
         self.ledger.record_market_marks(self.broker.get_positions(), self.mode, now)
         self._update_memory_outcomes()
@@ -1383,10 +1441,11 @@ class DailyLoop:
             self._pre_cutoff_alerted.add(et_now.date())
             if self.telegram is not None:
                 symbols = ", ".join(candidate.symbol for candidate in approved)
+                cutoff = self._cutoff_time.strftime("%H:%M")
                 self.telegram.push_recovery_notice(
-                    f"⏰ 距 11:30 ET 提交截止不足 30 分钟：已批准 "
+                    f"⏰ 距 {cutoff} {self._tz_name} 提交截止不足 30 分钟：已批准 "
                     f"{len(approved)} 笔（{symbols}），当前尚未挂单；系统将在 "
-                    "11:30 自动复核并提交。"
+                    f"{cutoff} 自动复核并提交。"
                 )
 
         if approved and self._cutoff_time <= et_now.time() < self._market_close_time:
@@ -1693,7 +1752,7 @@ class DailyLoop:
             self.ledger.record_signal(verdict, self.mode)
             session_signals.append(verdict)
             debates.append(verdict)
-            item = watchlist_mod.get(symbol)
+            item = self.watchlist_lookup(symbol)
             views[symbol] = SymbolView(
                 symbol=symbol,
                 last=state.last,
@@ -1742,7 +1801,9 @@ class DailyLoop:
         )
         self._health = health
         if self.runtime is not None:
-            self.runtime.health = health
+            self.runtime.health_by_market[self.market_id.lower()] = health
+            if self.market_id == "US":
+                self.runtime.health = health
         return health
 
     def _alert_unhealthy(self, health: HealthStatus) -> None:
@@ -1788,6 +1849,28 @@ class DailyLoop:
     def _fetch_close_bars(self):
         symbols = {p.symbol for p in self.broker.get_positions()}
         symbols |= {o.symbol for o in self.broker.get_orders(active_only=True)}
+        if self.close_timeframe:
+            packets: dict[datetime, dict[str, Any]] = {}
+            local_day = self.clock().astimezone(self._tz).date()
+            active = self.broker.get_orders(active_only=True)
+            for symbol in symbols:
+                submitted = [order.ts for order in active if order.symbol == symbol]
+                earliest = min(submitted) if submitted else None
+                try:
+                    candles = self.feed.get_bars(
+                        symbol, self.close_timeframe, limit=12
+                    )
+                except (DataFeedError, ValueError):
+                    continue
+                for candle in candles:
+                    if candle.ts.astimezone(self._tz).date() != local_day:
+                        continue
+                    # A candle begins before every trade in its interval. Skip
+                    # the boundary candle rather than risk a pre-order fill.
+                    if earliest is not None and candle.ts < earliest:
+                        continue
+                    packets.setdefault(candle.ts, {})[symbol] = candle
+            return [packets[stamp] for stamp in sorted(packets)]
         bars = {}
         for symbol in symbols:
             try:
@@ -1820,6 +1903,9 @@ class DailyLoop:
                 candidates=self.ledger.get_candidates(
                     mode=self.mode, market=self.market_id
                 ),
+                risk_status=self._risk_status,
+                watchlist_lookup=self.watchlist_lookup,
+                trading_tz=self._tz,
                 additional_holdings=(
                     self.holdings_provider(self.market_id)
                     if self.holdings_provider is not None

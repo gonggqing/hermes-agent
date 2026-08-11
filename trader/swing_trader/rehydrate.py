@@ -141,7 +141,9 @@ def rehydrate_from_ledger(
                 f"{last.cash:.2f} — was --starting-cash changed for this ledger?"
             )
 
-    restore_warnings = broker.restore_state(cash_by_currency, positions, open_orders)
+    restore_warnings = broker.restore_state(
+        cash_by_currency, positions, open_orders, fills=fills
+    )
     warnings.extend(restore_warnings)
 
     report = RehydrationReport(

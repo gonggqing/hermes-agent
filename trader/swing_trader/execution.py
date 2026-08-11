@@ -22,6 +22,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from swing_trader.cn_market import (
+    is_cn_order_acceptable,
+    is_cn_symbol,
+    off_grid_cn_prices,
+    quantity_violation as cn_quantity_violation,
+)
 from swing_trader.interfaces import BrokerInterface
 from swing_trader.ledger import AuditEvent, Ledger
 from swing_trader.log import get_logger
@@ -273,6 +279,23 @@ class ExecutionEngine:
             # way); an exit is allowed to rest until the session resumes.
             if cand.side is Side.BUY and not is_hk_order_acceptable(now):
                 return "HK market closed / lunch break — not accepting orders"
+
+        if is_cn_symbol(cand.symbol):
+            bad = off_grid_cn_prices(
+                cand.symbol,
+                {"limit": cand.limit, "stop": cand.stop, "tp": cand.tp},
+            )
+            if bad:
+                return "CN order off exchange tick grid: " + "; ".join(bad.values())
+            held = next(
+                (p.qty for p in self.broker.get_positions() if p.symbol == cand.symbol),
+                None,
+            )
+            qty_reason = cn_quantity_violation(cand.qty, cand.side, held_qty=held)
+            if qty_reason:
+                return "CN order quantity invalid: " + qty_reason
+            if not is_cn_order_acceptable(now):
+                return "CN market closed / lunch break — not accepting orders"
 
         if cand.side is Side.SELL:
             return None  # exits are never blocked on price drift
