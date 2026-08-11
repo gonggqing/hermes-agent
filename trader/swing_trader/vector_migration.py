@@ -61,10 +61,18 @@ def migrate_document_store(
 
     docs = documents.find()
     target_before = target.count()
+    source_ids = {doc.id for doc in docs if doc.id}
+    target_ids = target.document_ids()
+    # The SQL store is authoritative. Remove orphaned vector references first,
+    # then embed only rows absent from Qdrant. Stable point IDs make this safe
+    # to resume after a crash and avoid a full paid re-embedding whenever one
+    # newly ingested document changes the count.
+    target.delete_document_ids(target_ids - source_ids)
+    missing = [doc for doc in docs if doc.id not in target_ids]
     submitted = 0
     dim = target.embedding_dim
-    for start in range(0, len(docs), batch_size):
-        batch = docs[start : start + batch_size]
+    for start in range(0, len(missing), batch_size):
+        batch = missing[start : start + batch_size]
         submitted += target.index_many(
             [
                 (
@@ -82,7 +90,7 @@ def migrate_document_store(
         sample_docs = [docs[0], docs[len(docs) // 2], docs[-1]]
         sample_docs = list({doc.id: doc for doc in sample_docs}.values())
 
-    source_ids = {doc.id for doc in docs}
+    target_after_ids = target.document_ids()
     sample_hits_resolved = 0
     for doc in sample_docs:
         query = doc.title or doc.text[:160]
@@ -91,8 +99,9 @@ def migrate_document_store(
             sample_hits_resolved += 1
 
     verified = (
-        submitted == len(docs)
+        submitted == len(missing)
         and target_after == len(docs)
+        and target_after_ids == source_ids
         and sample_hits_resolved == len(sample_docs)
     )
     return VectorMigrationReport(

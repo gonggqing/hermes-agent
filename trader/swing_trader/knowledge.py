@@ -691,6 +691,56 @@ class KnowledgeIndex:
         except Exception as exc:  # fail closed (Loop.md §5.10)
             raise self._unavailable(exc) from exc
 
+    def document_ids(self) -> set[str]:
+        """Return every authoritative document ID currently in the index.
+
+        Migration uses this payload-only scroll to repair a partial collection
+        without re-embedding every historical document.  Vectors are never
+        transferred back to the process.
+        """
+        try:
+            if not self._client.collection_exists(self._collection):
+                return set()
+            found: set[str] = set()
+            offset = None
+            while True:
+                records, next_offset = self._client.scroll(
+                    collection_name=self._collection,
+                    limit=512,
+                    offset=offset,
+                    with_payload=["document_id"],
+                    with_vectors=False,
+                )
+                for record in records:
+                    payload = record.payload or {}
+                    doc_id = payload.get("document_id")
+                    if isinstance(doc_id, str) and doc_id:
+                        found.add(doc_id)
+                if next_offset is None:
+                    break
+                if next_offset == offset:  # defensive against a broken backend cursor
+                    raise RuntimeError("Qdrant scroll cursor did not advance")
+                offset = next_offset
+            return found
+        except Exception as exc:  # fail closed (Loop.md §5.10)
+            raise self._unavailable(exc) from exc
+
+    def delete_document_ids(self, document_ids: set[str]) -> int:
+        """Delete stale points by deterministic document-derived point ID."""
+        if not document_ids:
+            return 0
+        try:
+            point_ids = [self._point_id(doc_id) for doc_id in sorted(document_ids)]
+            for start in range(0, len(point_ids), 512):
+                self._client.delete(
+                    collection_name=self._collection,
+                    points_selector=point_ids[start : start + 512],
+                    wait=True,
+                )
+            return len(point_ids)
+        except Exception as exc:  # fail closed (Loop.md §5.10)
+            raise self._unavailable(exc) from exc
+
     def search(self, query: str, k: int = 5) -> list[dict[str, Any]]:
         """Top-``k`` hits as ``{document_id, score, payload}`` dicts.
 

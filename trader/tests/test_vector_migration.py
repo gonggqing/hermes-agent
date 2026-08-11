@@ -45,8 +45,41 @@ def test_document_store_migration_is_verified_and_idempotent(tmp_path):
 
     second = migrate_document_store(store, index, batch_size=2)
     assert second.target_before == second.target_after == 3
-    assert second.submitted == 3
+    assert second.submitted == 0
     assert second.verified is True
+
+
+def test_document_store_migration_repairs_only_missing_and_stale_points(tmp_path):
+    store = DocumentStore(f"sqlite:///{tmp_path / 'documents.db'}")
+    docs = []
+    for idx in range(3):
+        doc_id = store.ingest(
+            ResearchDocument(
+                title=f"Document {idx}",
+                text=f"evidence packet {idx}",
+                source_url=f"https://example.com/{idx}",
+                publisher="Example",
+                retrieved_at=datetime(2026, 8, 11, idx, tzinfo=timezone.utc),
+                trading_date_et=date(2026, 8, 11),
+                doc_type=DocType.RESEARCH,
+            )
+        )
+        docs.append(store.get(doc_id))
+    index = KnowledgeIndex(
+        path=tmp_path / "target-qdrant",
+        embedder=HashingEmbedder(dim=64),
+    )
+    assert docs[0] is not None and docs[1] is not None
+    index.index(docs[0].id or "", docs[0].text, {"document_id": docs[0].id})
+    index.index("stale-document", "obsolete", {"document_id": "stale-document"})
+
+    report = migrate_document_store(store, index, batch_size=2)
+
+    assert report.target_before == 2
+    assert report.submitted == 2
+    assert report.target_after == 3
+    assert index.document_ids() == {doc.id for doc in docs if doc is not None}
+    assert report.verified is True
 
 
 def test_document_store_migration_rejects_invalid_batch_size(tmp_path):
