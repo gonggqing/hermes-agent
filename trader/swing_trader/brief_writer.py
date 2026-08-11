@@ -411,7 +411,9 @@ class ResearchBriefWriter:
 
         try:
             data = _extract_object(raw)
-            sections = [NarrativeSection.model_validate(row) for row in data["sections"]]
+            sections = [
+                NarrativeSection.model_validate(row) for row in data["sections"][:7]
+            ]
             narrative = ResearchNarrative(
                 generated_at=brief.as_of,
                 market=market_id.upper(),
@@ -425,17 +427,17 @@ class ResearchBriefWriter:
                     str(row).strip()
                     for row in data.get("change_summary", [])
                     if str(row).strip()
-                ],
+                ][:6],
                 action_views=_validate_action_views(
-                    data.get("action_views", []), brief
-                ),
+                    data.get("action_views", [])[:12], brief
+                )[:12],
                 sections=sections,
                 watch_next=[
                     str(row).strip() for row in data.get("watch_next", []) if str(row).strip()
-                ],
+                ][:6],
                 claims=[
                     ForecastClaim.model_validate(row)
-                    for row in data.get("claims", [])
+                    for row in data.get("claims", [])[:20]
                 ],
             )
         except Exception as first_exc:
@@ -463,17 +465,20 @@ class ResearchBriefWriter:
                         str(row).strip()
                         for row in data.get("change_summary", [])
                         if str(row).strip()
-                    ],
+                    ][:6],
                     action_views=_validate_action_views(
-                        data.get("action_views", []), brief
-                    ),
-                    sections=[NarrativeSection.model_validate(row) for row in data["sections"]],
+                        data.get("action_views", [])[:12], brief
+                    )[:12],
+                    sections=[
+                        NarrativeSection.model_validate(row)
+                        for row in data["sections"][:7]
+                    ],
                     watch_next=[
                         str(row).strip() for row in data.get("watch_next", []) if str(row).strip()
-                    ],
+                    ][:6],
                     claims=[
                         ForecastClaim.model_validate(row)
-                        for row in data.get("claims", [])
+                        for row in data.get("claims", [])[:20]
                     ],
                 )
             except Exception as retry_exc:  # never break the market loop

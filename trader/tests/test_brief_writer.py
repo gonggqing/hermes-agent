@@ -1,5 +1,6 @@
 """Evidence-bound AI brief writer tests (no network)."""
 
+import json
 from datetime import datetime, timezone
 
 from swing_trader.brief import (
@@ -114,6 +115,25 @@ def test_writer_strictly_retries_a_truncated_structured_response() -> None:
 
     assert narrative is not None and len(narrative.sections) == 4
     assert len(calls) == 2 and calls[1].startswith("STRICT JSON RETRY")
+
+
+def test_writer_safely_caps_oversized_model_arrays_before_validation() -> None:
+    payload = json.loads(_reply().split("</think>", 1)[1])
+    payload["change_summary"] = [f"change-{index}" for index in range(7)]
+    payload["sections"] = [*payload["sections"], *payload["sections"]]
+    payload["watch_next"] = [f"watch-{index}" for index in range(8)]
+    payload["action_views"] = payload["action_views"] * 13
+
+    narrative = ResearchBriefWriter(
+        SETTINGS,
+        complete=lambda _settings, _system, _prompt: json.dumps(payload),
+    ).write(_brief(), market_id="CN", market_label="Mainland China")
+
+    assert narrative is not None
+    assert len(narrative.change_summary) == 6
+    assert len(narrative.sections) == 7
+    assert len(narrative.watch_next) == 6
+    assert len(narrative.action_views) == 12
 
 
 def test_writer_supplies_prior_recurrence_and_signal_delta_to_primary_model() -> None:
