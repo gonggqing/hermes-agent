@@ -90,12 +90,14 @@ def _markets_missing_today(runtime, market_timezones: dict[str, str]) -> list[st
 
 
 def _backfill_brief_narratives(runtime, writer, markets) -> list[str]:
-    """Add model-written analysis to current structured briefs after upgrade.
+    """Add model-written analysis to volatile restored briefs after upgrade.
 
     Older archives intentionally remain valid without ``narrative``.  On the
     first startup with the writer enabled, enrich only briefs that do not need
     a full market-data refresh; this avoids leaving today's page blank until
     the next scheduled research event and avoids fetching Yahoo data twice.
+    This compatibility enrichment is deliberately NOT archived or scored;
+    only BriefCycleCoordinator publishes canonical morning/evening editions.
     """
 
     from swing_trader.brief import ResearchBrief
@@ -130,11 +132,6 @@ def _backfill_brief_narratives(runtime, writer, markets) -> list[str]:
                 runtime.latest_briefs[market] = dump
                 if market == "cn":
                     runtime.latest_brief_cn = dump
-            store = getattr(runtime, "brief_store", None)
-            if store is not None or getattr(runtime, "prediction_ledger", None) is not None:
-                from swing_trader.prediction_ledger import persist_brief_artifacts
-
-                persist_brief_artifacts(runtime, market, dump)
             enriched.append(market)
         except Exception:
             logger.exception("restored brief narrative backfill failed", extra={"market": market})
@@ -508,7 +505,16 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 # section report. This runs on the isolated brief worker, so
                 # the larger bound cannot delay Telegram or order execution.
                 timeout=max(180.0, brief_llm_settings.timeout),
-            )
+            ),
+            history_loader=lambda market, before, limit: (
+                runtime.brief_store.get_recent_distinct(
+                    market,
+                    before_generated_at=before,
+                    limit=limit,
+                )
+                if runtime.brief_store is not None
+                else []
+            ),
         )
     else:
         brief_writer = None
@@ -728,6 +734,22 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             ),
         ]
     )
+    from swing_trader.portfolio_research import portfolio_research_holdings
+
+    def _research_holdings(market: str):
+        try:
+            return portfolio_research_holdings(
+                runtime.portfolio,
+                market,
+                name_overrides=runtime.name_overrides,
+            )
+        except Exception:
+            logger.exception(
+                "real portfolio research projection failed",
+                extra={"market": market},
+            )
+            return []
+
     loop = DailyLoop(
         feed,
         broker,
@@ -756,6 +778,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             min_adv=5_000_000,
             clock=runtime.clock,
         ),
+        holdings_provider=_research_holdings,
     )
     runtime.apply_portfolio_controls = loop.apply_portfolio_controls
     if rehydration.performed:
@@ -817,6 +840,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 min_adv=10_000_000,
                 clock=runtime.clock,
             ),
+            holdings_provider=_research_holdings,
         )
         cn_runner = DailyLoopRunner(
             {
@@ -885,6 +909,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                     min_adv=5_000_000,
                     clock=runtime.clock,
                 ),
+                holdings_provider=_research_holdings,
             )
             hk_runner = DailyLoopRunner(
                 hk_loop.callbacks(), clock=runtime.clock,
@@ -926,6 +951,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                     min_adv=5_000_000,
                     clock=runtime.clock,
                 ),
+                holdings_provider=_research_holdings,
             )
             hk_runner = DailyLoopRunner(
                 {
@@ -973,6 +999,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             "情绪领先 A 股半导体",
             lang="zh",
             clock=runtime.clock,
+            holdings_provider=_research_holdings,
         )
         kr_runner = DailyLoopRunner(
             {

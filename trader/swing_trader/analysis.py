@@ -19,6 +19,8 @@ Phase 0 notes:
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from math import sqrt
+from statistics import pstdev
 from typing import Optional, Protocol, runtime_checkable
 
 from swing_trader.interfaces import Bar, NewsItem
@@ -173,6 +175,33 @@ class TechnicalAgent:
         if sma20 is None or sma50 is None or rsi14 is None:  # pragma: no cover
             return None  # unreachable with MIN_BARS >= 60; defensive narrowing
         dist_sma50_pct = pct_dist(close, sma50)
+        return_5d_pct = pct_dist(close, closes[-6])
+        return_20d_pct = pct_dist(close, closes[-21])
+        high_20d = max(closes[-20:])
+        drawdown_20d_pct = pct_dist(close, high_20d)
+        daily_returns = [
+            (closes[index] / closes[index - 1] - 1.0)
+            for index in range(len(closes) - 19, len(closes))
+            if closes[index - 1] != 0
+        ]
+        realized_vol_20d_pct = (
+            pstdev(daily_returns) * sqrt(252.0) * 100.0
+            if len(daily_returns) >= 2
+            else 0.0
+        )
+        recent_volumes = [bar.volume for bar in bars[-20:] if bar.volume > 0]
+        avg_volume_20d = (
+            sum(recent_volumes) / len(recent_volumes) if recent_volumes else 0.0
+        )
+        volume_ratio_20d = (
+            bars[-1].volume / avg_volume_20d
+            if avg_volume_20d > 0 and bars[-1].volume > 0
+            else None
+        )
+        up_days_10 = sum(
+            1 for index in range(len(closes) - 9, len(closes))
+            if closes[index] > closes[index - 1]
+        )
 
         if close > sma20 > sma50 and rsi14 < RSI_OVERBOUGHT:
             direction = Direction.LONG
@@ -221,6 +250,12 @@ class TechnicalAgent:
                 "sma50": sma50,
                 "close": close,
                 "dist_sma50_pct": dist_sma50_pct,
+                "return_5d_pct": return_5d_pct,
+                "return_20d_pct": return_20d_pct,
+                "drawdown_20d_pct": drawdown_20d_pct,
+                "realized_vol_20d_pct": realized_vol_20d_pct,
+                "volume_ratio_20d": volume_ratio_20d,
+                "up_days_10": up_days_10,
             },
         )
 

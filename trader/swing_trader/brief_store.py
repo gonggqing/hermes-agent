@@ -67,6 +67,17 @@ def _count_signals(brief: dict) -> int:
     return 0
 
 
+def _publication_identity(brief: dict) -> tuple[str, str] | None:
+    narrative = brief.get("narrative")
+    if not isinstance(narrative, dict):
+        return None
+    edition = str(narrative.get("edition") or "")
+    evidence_hash = str(narrative.get("evidence_hash") or "")
+    if not edition or not evidence_hash:
+        return None
+    return edition, evidence_hash
+
+
 class BriefStore:
     """Append-only archive of rendered market briefs, keyed by market + time."""
 
@@ -78,11 +89,31 @@ class BriefStore:
         """Persist one brief snapshot; returns its id. Never raises on a
         malformed brief — the caller (a research publish) must not break."""
         market = (market or "").strip().lower()
+        trading_date = str(brief.get("trading_date") or "")
+        identity = _publication_identity(brief)
+        if identity is not None:
+            # Restart/manual retries of the same canonical publication are
+            # idempotent. A changed evidence hash remains an append-only
+            # revision even within the same morning/evening edition.
+            with Session(self._engine) as s:
+                rows = s.exec(
+                    select(BriefSnapshotRow)
+                    .where(BriefSnapshotRow.market == market)
+                    .where(BriefSnapshotRow.trading_date == trading_date)
+                    .order_by(BriefSnapshotRow.created_at.desc())
+                ).all()
+                for existing in rows:
+                    try:
+                        payload = json.loads(existing.payload_json)
+                    except (TypeError, ValueError):
+                        continue
+                    if _publication_identity(payload) == identity:
+                        return existing.id
         sid = uuid.uuid4().hex
         row = BriefSnapshotRow(
             id=sid,
             market=market,
-            trading_date=str(brief.get("trading_date") or ""),
+            trading_date=trading_date,
             generated_at=str(
                 brief.get("as_of") or brief.get("generated_at") or _now_iso()
             ),
@@ -193,6 +224,57 @@ class BriefStore:
             )
             row = s.exec(q).first()
             return json.loads(row.payload_json) if row else None
+
+    def get_recent_distinct(
+        self,
+        market: str,
+        *,
+        before_generated_at: Optional[str] = None,
+        limit: int = 6,
+    ) -> list[dict]:
+        """Newest-first prior publications with distinct evidence hashes.
+
+        Old databases may contain repeated rows from intraday refreshes and
+        restarts. The research writer must see actual thesis evolution, not six
+        copies of the same prose, so duplicates and narrative-less rows are
+        ignored without rewriting audit history.
+        """
+
+        limit = max(1, min(int(limit), 30))
+        market = market.strip().lower()
+        with Session(self._engine) as s:
+            query = select(BriefSnapshotRow).where(
+                BriefSnapshotRow.market == market
+            )
+            if before_generated_at:
+                query = query.where(
+                    BriefSnapshotRow.generated_at < str(before_generated_at)
+                )
+            rows = s.exec(
+                query.order_by(
+                    BriefSnapshotRow.generated_at.desc(),
+                    BriefSnapshotRow.created_at.desc(),
+                ).limit(500)
+            ).all()
+
+        found: list[dict] = []
+        seen: set[str] = set()
+        for row in rows:
+            try:
+                payload = json.loads(row.payload_json)
+            except (TypeError, ValueError):
+                continue
+            identity = _publication_identity(payload)
+            if identity is None:
+                continue
+            fingerprint = identity[1]
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            found.append(payload)
+            if len(found) >= limit:
+                break
+        return found
 
     def iter_snapshots(self, limit: int = 10_000) -> list[tuple[str, str, dict]]:
         """Oldest-first full snapshots for idempotent derived-store backfills."""

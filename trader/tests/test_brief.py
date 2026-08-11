@@ -3,7 +3,7 @@
 Fully deterministic and network-free: synthetic monitor snapshots, a real
 SQLite ledger on tmp_path, and an injected ``now``. Covers the full brief
 (hand-checked movers ordering, theme aggregation, top-10 news by
-|sentiment|, provenance dedupe), the DEGRADED brief with ALL None inputs,
+freshness/source quality, provenance dedupe), the DEGRADED brief with ALL None inputs,
 freshness staleness boundaries, ET trading-date filtering of signals and
 candidates, auto-collected uncertainty items, mode stamping, and the
 ``model_dump(mode="json")`` round trip.
@@ -281,17 +281,42 @@ class TestFullBrief:
         assert compute.n_symbols == 2
         assert compute.leaders == ["AMD", "NVDA"]  # by dist_sma50 desc, top-2
 
-    def test_news_top10_by_abs_sentiment(self, ledger: Ledger) -> None:
+    def test_news_is_fresh_deduped_and_ranked(self, ledger: Ledger) -> None:
         brief = build_full(ledger)
         items = brief.news.items
         assert len(items) == 10
         assert [i.headline for i in items] == [
-            "h1 top", "h2 dupe of h1 url", "h3", "h4", "h5",
-            "h6", "h7", "h8", "h9", "h10",
+            "h1 top", "h3", "h4", "h5", "h6",
+            "h7", "h8", "h9", "h10", "h11",
         ]
         headlines = {i.headline for i in items}
-        assert "h11" not in headlines and "h12" not in headlines
+        assert "h2 dupe of h1 url" not in headlines and "h12" not in headlines
         assert brief.news.per_symbol_sentiment["NVDA"] == pytest.approx(0.9)
+        assert brief.news.duplicate_items_excluded == 1
+        assert items[0].published_at == TODAY_TS
+        assert items[0].age_hours == pytest.approx(1.0)
+        assert items[0].source_quality == "major"
+
+    def test_stale_news_is_excluded_from_digest_and_sentiment(
+        self, ledger: Ledger
+    ) -> None:
+        stale = news_item("old catalyst", -1.0, "NVDA")
+        stale["ts"] = (NOW - timedelta(hours=73)).isoformat()
+        fresh = news_item("new evidence", 0.25, "NVDA")
+        snapshot = NewsSnapshot(
+            ts=TODAY_TS,
+            items=[stale, fresh],
+            # This monitor aggregate intentionally includes the stale item;
+            # the brief must recompute from curated articles instead of using it.
+            per_symbol_sentiment={"NVDA": -0.375},
+        )
+
+        brief = build_full(ledger, news=snapshot)
+
+        assert [item.headline for item in brief.news.items] == ["new evidence"]
+        assert brief.news.per_symbol_sentiment == {"NVDA": pytest.approx(0.25)}
+        assert brief.news.stale_items_excluded == 1
+        assert any("older than 72 hours" in item for item in brief.uncertainty)
 
     def test_provenance_dedupes_urls_and_has_data_source_note(
         self, ledger: Ledger
@@ -300,7 +325,7 @@ class TestFullBrief:
         urls = [p.url for p in brief.provenance]
         assert urls == [
             "https://finance.yahoo.com",  # data-source note first
-            "https://x.com/a",  # h1 + h2 share this url -> once
+            "https://x.com/a",
             "https://x.com/b",
             "https://x.com/c",
         ]

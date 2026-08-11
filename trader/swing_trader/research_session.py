@@ -36,6 +36,7 @@ from swing_trader.interfaces import DataFeed, NewsItem
 from swing_trader.ledger import Ledger
 from swing_trader.log import get_logger
 from swing_trader.monitors import MarketMonitor, NewsMonitor, PortfolioMonitor
+from swing_trader.news_quality import curate_news
 from swing_trader.paper_broker import PaperBroker
 from swing_trader.scheduler import Event
 from swing_trader.schemas import Mode, Signal
@@ -61,7 +62,8 @@ class ResearchSession:
     broker/execution/confirmation wiring. ``ledger`` is required only to
     satisfy :func:`build_research_brief`'s signature — it is NEVER read here
     (``include_account=False`` and in-memory ``signals``/``candidates=[]``),
-    so CN research never touches or pollutes the US trading ledger.
+    so CN research never touches or pollutes the US trading ledger. A supplied
+    ``holdings_provider`` is a read-only portfolio projection for analysis.
     """
 
     def __init__(
@@ -86,6 +88,7 @@ class ResearchSession:
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         discovery_scanner: Optional[MarketDiscoveryScanner] = None,
         brief_writer=None,
+        holdings_provider: Optional[Callable[[str], list]] = None,
     ) -> None:
         self.market_id = market_id
         self.market_label = market_label
@@ -107,6 +110,7 @@ class ResearchSession:
         self.clock = clock
         self.discovery_scanner = discovery_scanner
         self.brief_writer = brief_writer
+        self.holdings_provider = holdings_provider
 
         self._broker = PaperBroker(starting_cash=_STUB_CASH)
         self.market_monitor = MarketMonitor(
@@ -298,7 +302,7 @@ class ResearchSession:
                 )
             except (KeyError, ValueError, TypeError):
                 continue
-        return items
+        return curate_news(items, as_of=self.clock(), across_symbols=False).items
 
     def _publish_brief(self):
         """Build the CN research brief and expose it via the runtime."""
@@ -321,6 +325,11 @@ class ResearchSession:
                     "are placed (Loop.md two-session extension)",
                 ],
                 discovery=self._discovery,
+                additional_holdings=(
+                    self.holdings_provider(self.market_id)
+                    if self.holdings_provider is not None
+                    else []
+                ),
             )
             if self.brief_writer is not None:
                 brief.narrative = self.brief_writer.write(
@@ -349,11 +358,9 @@ class ResearchSession:
             self.runtime.latest_briefs[self.market_id.lower()] = dump
             if self.market_id.upper() == "CN":
                 self.runtime.latest_brief_cn = dump  # back-compat
-            # Archive a durable snapshot so the brief survives restart and builds
-            # a queryable history (latest_briefs alone is in-memory). Best-effort.
-            from swing_trader.prediction_ledger import persist_brief_artifacts
-
-            persist_brief_artifacts(self.runtime, self.market_id.lower(), dump)
+            # Structured intraday evidence is volatile by design. The unified
+            # 09:00/21:00 coordinator adds the primary-model narrative and is
+            # the sole publisher to the durable brief/prediction ledgers.
         return brief
 
     def _ingest_news(self) -> None:

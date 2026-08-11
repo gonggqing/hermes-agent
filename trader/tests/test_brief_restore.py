@@ -77,7 +77,7 @@ def test_current_beijing_edition_avoids_restart_refresh_at_us_date_rollover(tmp_
     assert missing == []
 
 
-def test_backfill_adds_and_archives_narrative_without_market_refresh(tmp_path):
+def test_backfill_adds_runtime_narrative_without_noncanonical_archive(tmp_path):
     runtime = _runtime(tmp_path)
     brief = build_research_brief(runtime.ledger, Mode.PAPER, now=NOW)
     runtime.latest_brief = brief.model_dump(mode="json")
@@ -102,6 +102,6 @@ def test_backfill_adds_and_archives_narrative_without_market_refresh(tmp_path):
 
     assert _backfill_brief_narratives(runtime, FakeWriter(), ["us"]) == ["us"]
     assert runtime.latest_brief["narrative"]["model"] == "brief-test"
-    assert runtime.brief_store.get_latest("us")["narrative"]["headline"].startswith("市场信息")
-    # A second startup sees the durable narrative and makes no new archive row.
+    assert runtime.brief_store.get_latest("us") is None
+    # The enriched in-process slot is stable and does not repeat the model call.
     assert _backfill_brief_narratives(runtime, FakeWriter(), ["us"]) == []

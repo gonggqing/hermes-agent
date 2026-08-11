@@ -45,13 +45,19 @@ def retrieve_research(
 
 
 def research_snippets(hits: list[dict], limit: int = 4) -> list[str]:
-    """Compact ``[publisher] snippet`` strings for the LLM prompt context."""
+    """Compact dated snippets for the LLM prompt context.
+
+    The date is load-bearing: vector similarity can legitimately retrieve
+    older foundation material, but an analyst must not silently present it as
+    today's catalyst.
+    """
     out: list[str] = []
     for h in hits[:limit]:
         pub = str(h.get("publisher") or "?")
+        published = str(h.get("trading_date") or "date-unknown")
         snip = str(h.get("snippet") or "").strip()[:_SNIPPET_CHARS]
         if snip:
-            out.append(f"[{pub}] {snip}")
+            out.append(f"[{published} | {pub}] {snip}")
     return out
 
 

@@ -39,6 +39,18 @@ export const financeEn: FinanceTranslations = {
       unavailable:
         "The analytical brief was not generated. Refresh research after the model connection is available; the measurements below remain usable.",
       watchNext: "What to watch next",
+      sincePrior: "What changed since the prior brief",
+      actionMap: "Trend action map",
+      horizonSessions: "{n} sessions",
+      invalidation: "Invalidation",
+      stances: {
+        buy_on_confirmation: "Consider buying on confirmation",
+        hold: "Hold",
+        reduce_on_weakness: "Reduce on weakness",
+        exit_if_invalidated: "Exit if invalidated",
+        watch: "Watch",
+        avoid: "Avoid",
+      },
     },
     risk: {
       title: "Risk",

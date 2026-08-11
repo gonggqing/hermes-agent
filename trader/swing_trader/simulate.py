@@ -168,7 +168,12 @@ class SimFeed(DataFeed):
         return [
             NewsItem(symbol=symbol.upper(), ts=last.ts,
                      headline=f"{symbol} beats expectations with record strong quarter {n}",
-                     source="sim", url="https://example.invalid/sim")
+                     source="sim",
+                     # These are three distinct synthetic events. A shared URL
+                     # made the freshness/dedupe policy correctly collapse
+                     # them to one and accidentally removed the simulation's
+                     # intended three-item sentiment signal.
+                     url=f"https://example.invalid/sim/{symbol.upper()}/{n}")
             for n in range(3)
         ][:limit]
 

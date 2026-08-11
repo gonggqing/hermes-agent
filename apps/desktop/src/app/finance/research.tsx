@@ -462,6 +462,48 @@ function NarrativeBrief({ brief }: { brief: FinanceResearchBrief }) {
               </p>
             ))}
           </div>
+          {(narrative.change_summary ?? []).length > 0 && (
+            <section className="border-t border-(--ui-stroke-tertiary) pt-3">
+              <FinanceSectionLabel>{copy.narrativeSincePrior}</FinanceSectionLabel>
+              <ul className="mt-2 space-y-2">
+                {(narrative.change_summary ?? []).map(item => (
+                  <li className="border-l-2 border-primary/30 pl-3 text-xs leading-5 text-foreground" key={item}>
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {(narrative.action_views ?? []).length > 0 && (
+            <section className="border-t border-(--ui-stroke-tertiary) pt-3">
+              <FinanceSectionLabel>{copy.narrativeActionMap}</FinanceSectionLabel>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                {(narrative.action_views ?? []).map(action => (
+                  <FinanceCard className="space-y-2" key={`${action.symbol}-${action.stance}`}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-semibold text-foreground">{action.symbol}</span>
+                      {action.display_name && (
+                        <span className="text-[0.62rem] text-muted-foreground">{action.display_name}</span>
+                      )}
+                      <FinancePill variant="outline">
+                        {copy.narrativeStances[action.stance] ?? action.stance}
+                      </FinancePill>
+                      <span className="text-[0.62rem] text-muted-foreground">
+                        {copy.narrativeHorizon(action.horizon_sessions)} · {Math.round(action.confidence * 100)}%
+                      </span>
+                    </div>
+                    <p className="text-xs leading-5 text-foreground">{action.what_changed}</p>
+                    <p className="text-[0.68rem] leading-5 text-muted-foreground">{action.rationale}</p>
+                    {action.invalidation && (
+                      <p className="text-[0.62rem] leading-5 text-muted-foreground">
+                        {copy.narrativeInvalidation}: {action.invalidation}
+                      </p>
+                    )}
+                  </FinanceCard>
+                ))}
+              </div>
+            </section>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
             {narrative.sections.map(section => (
               <section className="border-l-2 border-primary/30 pl-3" key={section.title}>
@@ -984,6 +1026,9 @@ function NewsRow({ item }: { item: FinanceNewsDigestItem }) {
       )}
       <span className="ml-2 inline-flex flex-wrap items-baseline gap-x-2 text-[0.62rem] text-muted-foreground">
         {item.source && <span>{item.source}</span>}
+        {item.age_hours !== null && item.age_hours !== undefined && (
+          <span>{item.age_hours < 24 ? `${Math.round(item.age_hours)}h` : `${Math.round(item.age_hours / 24)}d`}</span>
+        )}
         {item.symbol && <span className="font-medium">{item.symbol}</span>}
         {item.sentiment !== null && (
           <span className="inline-flex items-center gap-1 tabular-nums">

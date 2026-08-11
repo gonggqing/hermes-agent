@@ -36,8 +36,10 @@ def test_retrieve_success_and_helpers(monkeypatch):
     monkeypatch.setattr(kp, "search_knowledge", lambda *a, **k: _HITS)
     hits = rag.retrieve_research(object(), object(), "nvda")
     assert hits == _HITS
-    assert rag.research_snippets(hits) == ["[Reuters] NVDA beats on data-center",
-                                           "[Reuters] more context"]
+    assert rag.research_snippets(hits) == [
+        "[2026-07-13 | Reuters] NVDA beats on data-center",
+        "[2026-07-13 | Reuters] more context",
+    ]
     srcs = rag.research_sources(hits)
     assert len(srcs) == 1 and srcs[0]["url"] == "https://x/1"  # deduped by url
 
@@ -72,8 +74,10 @@ def test_analyze_symbol_grounds_llm_and_returns_citations(monkeypatch):
     result = analyze_symbol(_Feed(), "NVDA", llm_analyst=llm,
                             knowledge=object(), knowledge_index=object(), now=T0)
     # LLM voice received RAG snippets...
-    assert llm.research_seen == ["[Reuters] NVDA beats on data-center",
-                                 "[Reuters] more context"]
+    assert llm.research_seen == [
+        "[2026-07-13 | Reuters] NVDA beats on data-center",
+        "[2026-07-13 | Reuters] more context",
+    ]
     # ...and the result surfaces deduped source citations.
     assert result["research"] and result["research"][0]["url"] == "https://x/1"
     assert "llm:test" in {s["source_agent"] for s in result["signals"]}

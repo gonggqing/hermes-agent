@@ -58,6 +58,11 @@ export interface FinanceTranslations {
       title: string;
       unavailable: string;
       watchNext: string;
+      sincePrior: string;
+      actionMap: string;
+      horizonSessions: string;
+      invalidation: string;
+      stances: Record<string, string>;
     };
     risk: {
       title: string;

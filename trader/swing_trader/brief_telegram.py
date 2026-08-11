@@ -27,6 +27,16 @@ _TOP_NEWS = 4
 _TOP_SIGNALS = 4
 _TOP_DISCOVERY = 3
 _MAX_WARNINGS = 3
+_MAX_ACTIONS = 6
+
+_STANCE_ZH = {
+    "buy_on_confirmation": "确认后考虑买入",
+    "hold": "持有",
+    "reduce_on_weakness": "转弱减仓",
+    "exit_if_invalidated": "失效退出",
+    "watch": "观察",
+    "avoid": "回避",
+}
 
 _L = {
     "zh": {
@@ -109,6 +119,20 @@ def render_research_brief(
         lines.append("")
         lines.append(f"【{narrative.headline}】")
         lines.append(narrative.summary)
+        if narrative.change_summary:
+            lines.append("")
+            lines.append("【相较上一版】" if lang == "zh" else "【Since the prior brief】")
+            lines.extend(f"· {item}" for item in narrative.change_summary)
+        if narrative.action_views:
+            lines.append("")
+            lines.append("【趋势行动图】" if lang == "zh" else "【Trend action map】")
+            for action in narrative.action_views[:_MAX_ACTIONS]:
+                stance = _STANCE_ZH.get(action.stance, action.stance) if lang == "zh" else action.stance
+                lines.append(
+                    f"· {action.symbol} · {stance} · {action.horizon_sessions}日 "
+                    f"({action.confidence:.0%}) — {action.what_changed}；"
+                    f"失效条件：{action.invalidation or '未形成'}"
+                )
         for section in narrative.sections:
             lines.append("")
             lines.append(f"【{section.title}】")

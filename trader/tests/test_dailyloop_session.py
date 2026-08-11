@@ -128,7 +128,7 @@ class TestResearchRefresh:
 
         assert calls == ["news", "publish", "earnings", "research", "publish"]
 
-    def test_us_brief_is_archived_when_published(self, loop_env):
+    def test_intraday_us_refresh_does_not_archive_a_canonical_brief(self, loop_env):
         loop, runtime, _, _ = loop_env
         saved = []
 
@@ -139,8 +139,11 @@ class TestResearchRefresh:
         runtime.brief_store = _Store()
         loop._publish_brief()
 
-        assert saved and saved[0][0] == "us"
-        assert saved[0][1] == runtime.latest_brief
+        # Only BriefCycleCoordinator archives the primary-model morning/evening
+        # publication. Intraday monitor/decision refreshes update runtime state
+        # without creating duplicate snapshots or forecast runs.
+        assert saved == []
+        assert runtime.latest_brief is not None
 
     def test_run_research_now_never_enters_decision_path(self, loop_env):
         loop, runtime, _, _ = loop_env

@@ -1695,6 +1695,11 @@ export interface Translations {
       narrativeTitle: string
       narrativeUnavailable: string
       narrativeWatchNext: string
+      narrativeSincePrior: string
+      narrativeActionMap: string
+      narrativeHorizon: (sessions: number) => string
+      narrativeInvalidation: string
+      narrativeStances: Record<string, string>
       freshMarket: string
       freshNews: string
       freshPortfolio: string

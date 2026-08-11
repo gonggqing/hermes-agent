@@ -171,7 +171,11 @@ class TestTechnicalAgent:
         assert sig.symbol == "NVDA"
         assert sig.direction is Direction.LONG
         f = sig.features_json
-        assert set(f) == {"rsi", "sma20", "sma50", "close", "dist_sma50_pct"}
+        assert set(f) == {
+            "rsi", "sma20", "sma50", "close", "dist_sma50_pct",
+            "return_5d_pct", "return_20d_pct", "drawdown_20d_pct",
+            "realized_vol_20d_pct", "volume_ratio_20d", "up_days_10",
+        }
         assert f["close"] > f["sma20"] > f["sma50"]
         assert f["rsi"] < 70.0
         # no stretch penalty (RSI in [35, 65]) so confidence > base 0.5

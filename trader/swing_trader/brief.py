@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from swing_trader import watchlist
+from swing_trader.interfaces import NewsItem
 from swing_trader.instrument_names import name_for
 from swing_trader.discovery import DiscoveryPool
 from swing_trader.ledger import Ledger, TradeStats
@@ -41,6 +42,7 @@ from swing_trader.monitors import (
     RiskStatus,
     WatchState,
 )
+from swing_trader.news_quality import curate_news, source_quality
 from swing_trader.schemas import (
     AiPhase,
     BreakerState,
@@ -59,6 +61,7 @@ __all__ = [
     "EventsView",
     "FreshnessInfo",
     "ForecastClaim",
+    "HoldingView",
     "Mover",
     "MoversView",
     "NewsDigestItem",
@@ -69,6 +72,7 @@ __all__ = [
     "RegimeView",
     "ResearchBrief",
     "ResearchNarrative",
+    "ThesisAction",
     "RiskView",
     "SignalView",
     "STALE_AFTER_MINUTES",
@@ -87,7 +91,7 @@ STALE_AFTER_MINUTES: float = 120.0
 #: Movers shown per direction (top / bottom, ranked by distance to SMA20).
 TOP_MOVERS: int = 5
 
-#: News digest size (ranked by |sentiment|).
+#: News digest size (freshness/source quality first, then |sentiment|).
 TOP_NEWS: int = 10
 
 #: Leader symbols shown per theme.
@@ -222,20 +226,33 @@ class ThemeView(BaseModel):
 
 
 class NewsDigestItem(BaseModel):
-    """One cited headline in the digest (top-|sentiment| selection)."""
+    """One fresh, cited and de-duplicated headline in the digest."""
 
     headline: str
     source: str = ""
     url: str = ""
     sentiment: Optional[float] = None
     symbol: Optional[str] = None
+    published_at: Optional[datetime] = None
+    age_hours: Optional[float] = Field(default=None, ge=0.0)
+    source_quality: str = "unrated"
+
+    @field_validator("published_at")
+    @classmethod
+    def _published_at_tz_aware(cls, value: Optional[datetime]) -> Optional[datetime]:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("published_at must be timezone-aware")
+        return value
 
 
 class NewsSection(BaseModel):
-    """News digest: top items by |sentiment| + per-symbol mean sentiment."""
+    """Current-catalyst digest plus fresh-only per-symbol sentiment."""
 
     items: list[NewsDigestItem] = Field(default_factory=list)
     per_symbol_sentiment: dict[str, float] = Field(default_factory=dict)
+    stale_items_excluded: int = 0
+    future_items_excluded: int = 0
+    duplicate_items_excluded: int = 0
 
 
 class SignalView(BaseModel):
@@ -255,6 +272,26 @@ class SignalView(BaseModel):
     #: Price used by the source signal when available. This freezes the
     #: revision baseline for later outcome evaluation.
     baseline_value: Optional[float] = None
+    #: Structured factors used by the signal.  The primary writer needs these
+    #: to reason about persistence/volume/drawdown instead of paraphrasing only
+    #: SMA and RSI prose.
+    features: dict = Field(default_factory=dict)
+
+
+class HoldingView(BaseModel):
+    """One current position supplied to the research writer (never authority)."""
+
+    symbol: str
+    display_name: str = ""
+    currency: str = ""
+    qty: float
+    avg_px: Optional[float] = None
+    mkt_px: Optional[float] = None
+    unrealized_pct: Optional[float] = None
+    role: str = ""
+    environment: str = ""
+    account_names: list[str] = Field(default_factory=list)
+    source: str = "broker"
 
 
 class EventsView(BaseModel):
@@ -325,6 +362,28 @@ class ForecastClaim(BaseModel):
         return normalized
 
 
+class ThesisAction(BaseModel):
+    """Human-readable trend stance; research guidance, never an order."""
+
+    symbol: str = Field(min_length=1, max_length=64)
+    display_name: str = Field(default="", max_length=160)
+    stance: str = Field(
+        pattern=(
+            r"^(buy_on_confirmation|hold|reduce_on_weakness|"
+            r"exit_if_invalidated|watch|avoid)$"
+        )
+    )
+    thesis_state: str = Field(
+        pattern=r"^(new|strengthened|unchanged|weakened|invalidated)$"
+    )
+    confidence: float = Field(ge=0.0, le=1.0)
+    horizon_sessions: int = Field(ge=1, le=60)
+    what_changed: str = Field(min_length=1, max_length=500)
+    rationale: str = Field(min_length=1, max_length=1000)
+    invalidation: str = Field(min_length=1, max_length=600)
+    evidence_refs: list[str] = Field(min_length=1, max_length=12)
+
+
 class ResearchNarrative(BaseModel):
     """Model-written synthesis of the complete structured research snapshot.
 
@@ -342,6 +401,8 @@ class ResearchNarrative(BaseModel):
     edition: str = Field(default="", max_length=24)
     headline: str = Field(min_length=1, max_length=180)
     summary: str = Field(min_length=1, max_length=2400)
+    change_summary: list[str] = Field(default_factory=list, max_length=6)
+    action_views: list[ThesisAction] = Field(default_factory=list, max_length=12)
     sections: list[NarrativeSection] = Field(min_length=4, max_length=7)
     watch_next: list[str] = Field(default_factory=list, max_length=6)
     claims: list[ForecastClaim] = Field(default_factory=list, max_length=20)
@@ -366,6 +427,7 @@ class ResearchBrief(BaseModel):
     freshness: FreshnessInfo
     regime: Optional[RegimeView] = None
     risk: Optional[RiskView] = None
+    holdings: list[HoldingView] = Field(default_factory=list)
     movers: MoversView = Field(default_factory=MoversView)
     themes: list[ThemeView] = Field(default_factory=list)
     events: EventsView = Field(default_factory=EventsView)
@@ -668,29 +730,80 @@ def _build_themes(
     return views
 
 
-def _build_news(news: Optional[NewsSnapshot]) -> NewsSection:
-    if news is None:
-        return NewsSection()
-
-    def rank_key(raw: dict) -> tuple[float, str]:
-        sentiment = raw.get("sentiment")
-        magnitude = abs(sentiment) if sentiment is not None else 0.0
-        return (-magnitude, str(raw.get("headline", "")))
-
-    ranked = sorted(news.items, key=rank_key)[:TOP_NEWS]
-    items = [
-        NewsDigestItem(
-            headline=str(raw.get("headline", "")),
+def _raw_news_item(raw: dict) -> Optional[NewsItem]:
+    try:
+        ts = raw.get("ts")
+        if isinstance(ts, str):
+            ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if not isinstance(ts, datetime):
+            return None
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return NewsItem(
+            symbol=raw.get("symbol"),
+            ts=ts,
+            headline=str(raw.get("headline") or ""),
             source=str(raw.get("source") or ""),
             url=str(raw.get("url") or ""),
             sentiment=raw.get("sentiment"),
-            symbol=raw.get("symbol"),
         )
-        for raw in ranked
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_news(news: Optional[NewsSnapshot], now: datetime) -> NewsSection:
+    if news is None:
+        return NewsSection()
+
+    parsed = [item for raw in news.items if (item := _raw_news_item(raw)) is not None]
+    per_symbol = curate_news(parsed, as_of=now, across_symbols=False)
+    digest = curate_news(per_symbol.items, as_of=now, across_symbols=True)
+
+    def rank_key(item: NewsItem) -> tuple[float, float, float, str]:
+        published = item.ts.astimezone(timezone.utc)
+        age_hours = max(0.0, (now.astimezone(timezone.utc) - published).total_seconds() / 3600)
+        magnitude = abs(item.sentiment) if item.sentiment is not None else 0.0
+        return (age_hours, -source_quality(item.source)[1], -magnitude, item.headline)
+
+    ranked = sorted(digest.items, key=rank_key)[:TOP_NEWS]
+    items = [
+        NewsDigestItem(
+            headline=item.headline,
+            source=item.source,
+            url=item.url,
+            sentiment=item.sentiment,
+            symbol=item.symbol,
+            published_at=item.ts.astimezone(timezone.utc),
+            age_hours=max(
+                0.0,
+                (
+                    now.astimezone(timezone.utc) - item.ts.astimezone(timezone.utc)
+                ).total_seconds()
+                / 3600,
+            ),
+            source_quality=source_quality(item.source)[0],
+        )
+        for item in ranked
     ]
+
+    sentiments: dict[str, list[float]] = {}
+    for item in per_symbol.items:
+        if item.sentiment is None:
+            continue
+        key = item.symbol or "MARKET"
+        sentiments.setdefault(key, []).append(float(item.sentiment))
+
     return NewsSection(
         items=items,
-        per_symbol_sentiment=dict(news.per_symbol_sentiment),
+        per_symbol_sentiment={
+            key: sum(values) / len(values) for key, values in sentiments.items()
+        },
+        stale_items_excluded=per_symbol.stale_excluded,
+        future_items_excluded=per_symbol.future_excluded,
+        duplicate_items_excluded=(
+            per_symbol.duplicates_excluded
+            + max(0, len(per_symbol.items) - len(digest.items))
+        ),
     )
 
 
@@ -735,9 +848,37 @@ def _signal_views(
                 if isinstance(s.features_json.get("close"), (int, float))
                 else None
             ),
+            features=dict(s.features_json),
         )
         for s in todays
     ]
+
+
+def _holding_views(
+    portfolio: Optional[PortfolioSnapshot], environment: str
+) -> list[HoldingView]:
+    if portfolio is None:
+        return []
+    rows: list[HoldingView] = []
+    for position in portfolio.positions:
+        unrealized_pct = None
+        if position.avg_px > 0 and position.mkt_px is not None:
+            unrealized_pct = (position.mkt_px / position.avg_px - 1.0) * 100.0
+        rows.append(
+            HoldingView(
+                symbol=position.symbol,
+                display_name=name_for(position.symbol),
+                currency=position.currency,
+                qty=position.qty,
+                avg_px=position.avg_px,
+                mkt_px=position.mkt_px,
+                unrealized_pct=unrealized_pct,
+                role=position.pool.value,
+                environment=environment,
+                source="broker",
+            )
+        )
+    return sorted(rows, key=lambda row: row.symbol)
 
 
 def _candidates_today(
@@ -783,6 +924,7 @@ def build_research_brief(
     earnings: Optional[list] = None,
     discovery: Optional[DiscoveryPool] = None,
     currency: Optional[str] = None,
+    additional_holdings: Optional[list[HoldingView]] = None,
 ) -> ResearchBrief:
     """Build the daily Investment Research brief (Loop.md §7 Phase 0.5).
 
@@ -798,10 +940,12 @@ def build_research_brief(
 
     CN research session (Loop.md two-session extension): pass ``signals``
     (in-memory, keeps CN research out of the trading ledger), ``candidates=[]``
-    (report-only — no orders), ``include_account=False`` (no CN account),
+    (report-only — no orders), ``include_account=False`` (no broker risk),
     ``watchlist_lookup`` = the CN universe lookup, and ``trading_tz`` =
     Asia/Shanghai so "today" is the CN trading date. ``extra_uncertainty``
     prepends session-specific caveats (e.g. "CN session is research-only").
+    ``additional_holdings`` may supply a read-only projection of the user's
+    real portfolio journal without granting this builder any mutation path.
     """
     now = _coerce_now(now)
     mode = Mode(mode)
@@ -827,7 +971,10 @@ def build_research_brief(
     watch = portfolio.watch if portfolio is not None else {}
     movers, all_movers = _build_movers(watch, lookup)
     themes = _build_themes(watch, lookup)
-    news_section = _build_news(news)
+    news_section = _build_news(news, now)
+    holdings = _holding_views(portfolio, mode.value) if include_account else []
+    holdings.extend(row.model_copy(deep=True) for row in (additional_holdings or []))
+    holdings.sort(key=lambda row: (row.symbol, row.environment, row.source))
 
     if signals is None:
         signals = _safe(
@@ -887,6 +1034,15 @@ def build_research_brief(
         )
     if earnings is None:
         unknowns.append(EARNINGS_NOT_WIRED_NOTE)
+    if news_section.stale_items_excluded:
+        unknowns.append(
+            f"excluded {news_section.stale_items_excluded} news item(s) older than "
+            "72 hours; they are historical context, not current catalysts"
+        )
+    if news_section.future_items_excluded:
+        unknowns.append(
+            f"excluded {news_section.future_items_excluded} future-dated news item(s)"
+        )
     if llm_enabled:
         unknowns.append(
             "LLM analyst is enabled — its output is analysis-only, "
@@ -904,6 +1060,7 @@ def build_research_brief(
         freshness=freshness,
         regime=regime,
         risk=risk,
+        holdings=holdings,
         movers=movers,
         themes=themes,
         events=events,

@@ -50,8 +50,9 @@ _SYSTEM = (
     '"thesis": "<one sentence, cite the evidence given>"}. '
     "short means avoid/trim (the account cannot short). Be conservative: "
     "prefer neutral when evidence is mixed. When research_context is provided, "
-    "GROUND your thesis in it and reference the source; never invent facts "
-    "beyond the evidence given."
+    "GROUND your thesis in it and reference the dated source; never invent facts "
+    "beyond the evidence given. Treat older research as background, not as a new "
+    "catalyst. Only recent_headlines may support a claim that news is current."
 )
 
 

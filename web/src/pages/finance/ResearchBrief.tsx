@@ -173,6 +173,69 @@ function NarrativeBrief({
                 </p>
               ))}
             </div>
+            {(narrative.change_summary ?? []).length > 0 && (
+              <section className="border-t border-border pt-4">
+                <h4 className="text-xs uppercase tracking-wide text-text-tertiary">
+                  {copy.sincePrior}
+                </h4>
+                <ul className="mt-2 space-y-2">
+                  {(narrative.change_summary ?? []).map((item) => (
+                    <li
+                      key={item}
+                      className="border-l-2 border-primary/30 pl-3 font-mondwest normal-case text-sm leading-6 text-foreground"
+                    >
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            {(narrative.action_views ?? []).length > 0 && (
+              <section className="border-t border-border pt-4">
+                <h4 className="text-xs uppercase tracking-wide text-text-tertiary">
+                  {copy.actionMap}
+                </h4>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  {(narrative.action_views ?? []).map((action) => (
+                    <div
+                      key={`${action.symbol}-${action.stance}`}
+                      className="border border-border p-3"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono-ui text-sm font-semibold">
+                          {action.symbol}
+                        </span>
+                        {action.display_name && (
+                          <span className="text-xs text-text-tertiary">
+                            {action.display_name}
+                          </span>
+                        )}
+                        <Badge variant="outline">
+                          {copy.stances[action.stance] ?? action.stance}
+                        </Badge>
+                        <span className="text-xs text-text-tertiary">
+                          {interpolate(copy.horizonSessions, {
+                            n: action.horizon_sessions,
+                          })}{" "}
+                          · {Math.round(action.confidence * 100)}%
+                        </span>
+                      </div>
+                      <p className="mt-2 font-mondwest normal-case text-sm leading-6 text-foreground">
+                        {action.what_changed}
+                      </p>
+                      <p className="mt-1 font-mondwest normal-case text-xs leading-5 text-muted-foreground">
+                        {action.rationale}
+                      </p>
+                      {action.invalidation && (
+                        <p className="mt-2 text-xs text-text-tertiary">
+                          {copy.invalidation}: {action.invalidation}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
             <div className="grid gap-4 md:grid-cols-2">
               {narrative.sections.map((section) => (
                 <section
@@ -826,6 +889,13 @@ function NewsCard({
                 )}
                 <div className="flex flex-wrap items-center gap-2 text-xs text-text-tertiary">
                   {item.source && <span>{item.source}</span>}
+                  {item.age_hours !== null && item.age_hours !== undefined && (
+                    <span>
+                      {item.age_hours < 24
+                        ? `${Math.round(item.age_hours)}h`
+                        : `${Math.round(item.age_hours / 24)}d`}
+                    </span>
+                  )}
                   {item.symbol && (
                     <span className="font-mono-ui">{item.symbol}</span>
                   )}

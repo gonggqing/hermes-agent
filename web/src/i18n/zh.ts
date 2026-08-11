@@ -640,6 +640,18 @@ export const zh: Translations = {
         unavailable:
           "本次分析简报尚未生成。模型连接恢复后请重新运行研究；下方结构化数据仍可正常查看。",
         watchNext: "接下来关注",
+        sincePrior: "相较上一版的变化",
+        actionMap: "趋势行动图",
+        horizonSessions: "{n} 个交易日",
+        invalidation: "失效条件",
+        stances: {
+          buy_on_confirmation: "确认后考虑买入",
+          hold: "持有",
+          reduce_on_weakness: "转弱减仓",
+          exit_if_invalidated: "失效退出",
+          watch: "观察",
+          avoid: "回避",
+        },
       },
       risk: {
         title: "风险",

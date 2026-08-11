@@ -50,6 +50,7 @@ from swing_trader.monitors import (
     NewsMonitor,
     PortfolioMonitor,
 )
+from swing_trader.news_quality import curate_news
 from swing_trader.reconcile import reconcile_broker_ledger
 from swing_trader.reporter import morning_summary, push_window_preamble
 from swing_trader.risk import RiskEngine, RiskParams
@@ -655,6 +656,7 @@ class DailyLoop:
         kill_switch=None,  # Optional[KillSwitch] — manual operator HALT (§3)
         discovery_scanner=None,  # Optional[MarketDiscoveryScanner] — research only
         brief_writer=None,  # Optional[ResearchBriefWriter] — narrative only
+        holdings_provider=None,  # Optional read-only real-portfolio projection
         order_reviewer=None,  # Optional[LLMCandidateReviewer] — advisory only
         order_review_required: bool = False,
     ) -> None:
@@ -737,6 +739,7 @@ class DailyLoop:
         self._earnings: list = []
         self._portfolio = None
         self._news = None
+        self._latest_signals: list[Signal] = []
         self._risk_approved: list[CandidateOrder] = []
         self._confirmation: Optional[ConfirmationService] = None
         self._entries_placed_today = 0
@@ -745,6 +748,7 @@ class DailyLoop:
         self.kill_switch = kill_switch  # Phase 0.95 manual HALT (may be None)
         self.discovery_scanner = discovery_scanner
         self.brief_writer = brief_writer
+        self.holdings_provider = holdings_provider
         self.order_reviewer = order_reviewer
         self.order_review_required = order_review_required
         self._discovery = None
@@ -1637,6 +1641,7 @@ class DailyLoop:
 
     def _build_signals(self) -> tuple[list[Signal], dict[str, SymbolView]]:
         debates: list[Signal] = []
+        session_signals: list[Signal] = []
         views: dict[str, SymbolView] = {}
         watch = self._portfolio.watch if self._portfolio else {}
         news_items = self._rebuild_news_items()
@@ -1682,8 +1687,10 @@ class DailyLoop:
                 continue
             for sig in signals:
                 self.ledger.record_signal(sig, self.mode)
+                session_signals.append(sig)
             verdict = self.debate.debate(symbol, signals)
             self.ledger.record_signal(verdict, self.mode)
+            session_signals.append(verdict)
             debates.append(verdict)
             item = watchlist_mod.get(symbol)
             views[symbol] = SymbolView(
@@ -1692,6 +1699,7 @@ class DailyLoop:
                 atr_pct=state.atr_pct,
                 pool=item.role if item is not None else Role.ROTATION,
             )
+        self._latest_signals = session_signals
         return debates, views
 
     def _rebuild_news_items(self) -> list[NewsItem]:
@@ -1711,7 +1719,7 @@ class DailyLoop:
                 ))
             except (KeyError, ValueError, TypeError):
                 continue
-        return items
+        return curate_news(items, as_of=self.clock(), across_symbols=False).items
 
     def _assess_health(self, account) -> HealthStatus:
         """Phase 0.8 (Loop.md §5.10): assess whether the loop can be TRUSTED to
@@ -1807,6 +1815,15 @@ class DailyLoop:
                           if self.earnings_provider is not None else None),
                 discovery=self._discovery,
                 currency=self._brief_currency,
+                signals=list(self._latest_signals),
+                candidates=self.ledger.get_candidates(
+                    mode=self.mode, market=self.market_id
+                ),
+                additional_holdings=(
+                    self.holdings_provider(self.market_id)
+                    if self.holdings_provider is not None
+                    else []
+                ),
             )
             slot = self.market_id.lower()  # per-market brief slot (us/hk/cn/kr)
             if self.brief_writer is not None:
@@ -1839,9 +1856,10 @@ class DailyLoop:
             self.runtime.latest_briefs[slot] = dump
             if self.market_id == "US":
                 self.runtime.latest_brief = dump
-            from swing_trader.prediction_ledger import persist_brief_artifacts
-
-            persist_brief_artifacts(self.runtime, slot, dump)
+            # Intraday monitor/decision refreshes update volatile evidence only.
+            # The canonical 09:00/21:00 BriefCycleCoordinator archives exactly
+            # one primary-model publication per market/edition; persisting here
+            # created hundreds of duplicate snapshots and forecast runs.
         except Exception:  # brief must never break the trading loop
             logger.exception("research brief build failed")
 

@@ -2010,6 +2010,18 @@ export const en: Translations = {
       narrativeUnavailable:
         'The analytical brief was not generated. Refresh research after the model connection is available; the measurements below remain usable.',
       narrativeWatchNext: 'What to watch next',
+      narrativeSincePrior: 'What changed since the prior brief',
+      narrativeActionMap: 'Trend action map',
+      narrativeHorizon: sessions => `${sessions} sessions`,
+      narrativeInvalidation: 'Invalidation',
+      narrativeStances: {
+        buy_on_confirmation: 'Consider buying on confirmation',
+        hold: 'Hold',
+        reduce_on_weakness: 'Reduce on weakness',
+        exit_if_invalidated: 'Exit if invalidated',
+        watch: 'Watch',
+        avoid: 'Avoid'
+      },
       freshMarket: 'market',
       freshNews: 'news',
       freshPortfolio: 'portfolio',

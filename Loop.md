@@ -79,6 +79,19 @@ refresh structured evidence, but they do not send an additional human brief or
 erase the latest scheduled narrative. The Web/Desktop tab only reads persisted
 results; Hermes conversational cron is not the source of truth for this cycle.
 
+**Research-quality contract:** article publication/event time, not poll time,
+determines freshness. A headline older than 72 hours is historical context and
+cannot enter current sentiment or be called a catalyst; duplicate URL/headline
+events are counted once, and vector-retrieved older research is always dated.
+The primary-model brief receives prior distinct publications plus deterministic
+regime/theme/signal/news deltas and read-only live holdings. It must explain
+what changed, maintain or invalidate prior theses, and emit a structured trend
+action map (`buy_on_confirmation` / `hold` / `reduce_on_weakness` /
+`exit_if_invalidated` / `watch` / `avoid`) with horizon, confidence, evidence
+and an observable invalidation. Technical alignment alone cannot justify a
+buy-on-confirmation view. Intraday refreshes update volatile evidence only;
+only canonical 09:00/21:00 primary-model editions enter brief/prediction history.
+
 Local Docker operations are documented in `docker/README.md` and use the
 non-destructive `docker/compose.sh` wrapper: `./docker/compose.sh up`,
 `./docker/compose.sh rebuild`, `./docker/compose.sh logs finance`, and
@@ -252,6 +265,7 @@ Python 3.11 · `ib_async` (later) · `alpaca-py` (optional) · `yfinance` · `pa
 - [ ] Telegram poll failures are isolated from the Finance process and cutoff execution; add bounded backoff, health state and operator alerting to complete the resilience gate.
 - [x] Move US selection/push to 10:30 ET with a 10:30–11:30 human window, and add the fail-closed post-approval fresh-market primary-model review: unchanged orders retain approval; changed terms use a new candidate/card and require a second human confirmation.
 - [x] Route twice-daily US/HK/CN/KR final synthesis through the Hermes primary model on a non-blocking Beijing 09:00/21:00 schedule; persist model/prompt/evidence provenance and show visible failure without template/weak-model fallback.
+- [x] Rebuild brief quality around publication-time news freshness/deduplication, dated historical RAG, prior-publication deltas, real-holding context and a validated trend action map; stop intraday refreshes from multiplying archived briefs/prediction runs.
 - [ ] Accumulate ≥20 valid US paper trading days; every approved candidate must have a persisted terminal outcome and no approval may remain silently stranded.
 - [ ] Run a five-consecutive-open-day US/HK/CN/KR research soak; measure on-time publication, freshness/source gaps, readable briefs, alerts and restart persistence.
 - [ ] Make the entire session step-idempotent and crash-resumable, not only confirmation execution; prove reruns cannot double-count or double-place.
@@ -324,6 +338,7 @@ Each symbol is tagged `{theme, ai_phase(infra|memory|network|power|application|c
 
 ## 13. Progress log (building agent appends; newest first)
 
+- 2026-08-11 — **Daily research quality refactor.** Audited 445 archived snapshots and proved repeated Yahoo headlines were being treated as new for up to 16 research days; current CN digest entries were all older than 72h (oldest >350 days). Added publication-time freshness/deduplication, dated RAG context, richer persistence/volume/drawdown factors, prior-thesis deltas, read-only real-holding context, structured trend stances/invalidation, canonical-edition-only archival, and Web/Desktop/Telegram rendering; deterministic tests and historical replay are recorded in `docs/finance-research-quality-audit-2026-08-11.md`.
 - 2026-08-11 — **Official upstream refresh.** Merged official `main` through `2cdb30a474d7` (6,331 upstream commits), migrated Finance into the contribution-driven Desktop/Web route architecture, preserved its service/tool authority boundary, and recorded validation plus known baselines in `docs/upstream-sync/2026-08-11.md`.
 - 2026-07-17 — **Review-failure spam fix + DAY-entry fill-chain lifecycle.** Fixed the "主模型复核失败" Telegram flood: the live primary model (MiniMax-M3) sometimes returns reasoning-only completions with no `content`, so the post-approval review raised and retried every ~3s with no backoff/dedup while fail-closed still blocked all placement. `http_complete` now recovers `reasoning_content`/`reasoning_details`, the review budget rose 800→2000 tokens, and the post-approval review is bounded to 3 attempts at 1/5-min delays with audit-persisted state and first-failure-only alerting (deployed under the §0.97 freeze exception since the bug blocked every order). Then implemented the §5.7 ordinary-order lifecycle: entries are now a **DAY** limit-entry parent with **GTC** protective children — an unfilled entry is cancelled at the close and re-researched next day, and a partial fill keeps GTC protection sized to the filled quantity (close-cancel, child resize, next-day no-replay and §5.6 material-change reconfirmation already existed). Full suite 1323 passed; 4 pre-existing e2e failures are a sim price-drift calibration issue (execution re-validation correctly skips entries that ran >1.5% above ref), not a regression. Open: reconcile §4 line 71 (older GTC/MOC-LOC entry wording) with §5.7; connected HK IBKR Paper acceptance still pending.
 - 2026-07-16 — **Balanced prediction review + allocation controls + HK currency foundation.** All-market forecast/recent rows now round-robin US/HK/CN/KR, remove semantic duplicates and use verified regional names; Web/Desktop gained durable operator allocation controls and currency cash visibility; PaperBroker/Ledger/Risk/IBKR now carry isolated USD/HKD execution state with offline SEHK qualification tests, while connected lot/tick/session/fee acceptance remains open.

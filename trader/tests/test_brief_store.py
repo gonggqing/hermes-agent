@@ -105,6 +105,41 @@ def test_unknown_snapshot_id_returns_none(tmp_path):
     assert _store(tmp_path).get("does-not-exist") is None
 
 
+def test_same_edition_and_evidence_hash_is_idempotent(tmp_path):
+    st = _store(tmp_path)
+    brief = _brief_with_edition("morning", as_of="2026-07-14T01:00:00Z")
+    brief["narrative"]["evidence_hash"] = "same-evidence"
+
+    first = st.save("cn", brief)
+    second = st.save("cn", {**brief, "as_of": "2026-07-14T01:01:00Z"})
+
+    assert second == first
+    assert len(st.list_snapshots("cn")) == 1
+
+
+def test_recent_distinct_ignores_repeated_evidence_and_structured_only_rows(tmp_path):
+    st = _store(tmp_path)
+    old = _brief_with_edition("morning", as_of="2026-07-13T01:00:00Z")
+    old["narrative"]["evidence_hash"] = "old"
+    repeated = _brief_with_edition("evening", as_of="2026-07-13T13:00:00Z")
+    repeated["narrative"]["evidence_hash"] = "old"
+    current = _brief_with_edition("morning", as_of="2026-07-14T01:00:00Z")
+    current["narrative"]["evidence_hash"] = "current"
+    st.save("cn", old)
+    st.save("cn", repeated)
+    st.save("cn", {**current, "narrative": None})
+    st.save("cn", current)
+
+    history = st.get_recent_distinct(
+        "cn", before_generated_at="2026-07-15T00:00:00Z", limit=6
+    )
+
+    assert [row["narrative"]["evidence_hash"] for row in history] == [
+        "current",
+        "old",
+    ]
+
+
 def _brief_with_edition(edition, *, as_of, trading_date="2026-07-14"):
     b = _kr_brief(as_of=as_of, trading_date=trading_date)
     b["narrative"] = {"edition": edition, "generated_at": as_of, "headline": "h"}

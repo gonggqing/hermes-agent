@@ -3774,6 +3774,29 @@ export interface FinanceBriefNewsItem {
   url: string;
   sentiment: number | null;
   symbol: string | null;
+  published_at?: string | null;
+  age_hours?: number | null;
+  source_quality?: string;
+}
+
+export interface FinanceThesisAction {
+  symbol: string;
+  display_name: string;
+  stance:
+    | "buy_on_confirmation"
+    | "hold"
+    | "reduce_on_weakness"
+    | "exit_if_invalidated"
+    | "watch"
+    | "avoid";
+  thesis_state:
+    "new" | "strengthened" | "unchanged" | "weakened" | "invalidated";
+  confidence: number;
+  horizon_sessions: number;
+  what_changed: string;
+  rationale: string;
+  invalidation: string;
+  evidence_refs: string[];
 }
 
 export interface FinanceBriefSignal {
@@ -3810,6 +3833,8 @@ export interface FinanceResearchNarrative {
   model: string;
   headline: string;
   summary: string;
+  change_summary?: string[];
+  action_views?: FinanceThesisAction[];
   sections: { title: string; analysis: string }[];
   watch_next: string[];
 }
@@ -3829,6 +3854,9 @@ export interface FinanceResearchBrief {
   news: {
     items: FinanceBriefNewsItem[];
     per_symbol_sentiment: Record<string, number>;
+    stale_items_excluded?: number;
+    future_items_excluded?: number;
+    duplicate_items_excluded?: number;
   };
   signals_today: FinanceBriefSignal[];
   candidates_today: {
