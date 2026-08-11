@@ -875,7 +875,7 @@ class DailyLoop:
             # market/mover tables. Build the analysis in memory and republish;
             # persistence remains reserved for the decision path so repeated
             # manual refreshes cannot duplicate signals or gain order authority.
-            self._build_signals(persist=False)
+            self._build_signals(persist=False, include_llm=False)
             self._publish_brief()
         except Exception:  # a refresh failure must not crash the service
             logger.exception(
@@ -1706,7 +1706,7 @@ class DailyLoop:
     # ---------------------------------------------------------- internals
 
     def _build_signals(
-        self, *, persist: bool = True
+        self, *, persist: bool = True, include_llm: bool = True
     ) -> tuple[list[Signal], dict[str, SymbolView]]:
         debates: list[Signal] = []
         session_signals: list[Signal] = []
@@ -1735,7 +1735,7 @@ class DailyLoop:
             senti = self.senti.analyze(symbol, sym_news)
             if senti is not None:
                 signals.append(senti)
-            if self.llm_analyst is not None and tech is not None:
+            if include_llm and self.llm_analyst is not None and tech is not None:
                 from swing_trader.rag import research_snippets, retrieve_research
 
                 query = f"{symbol} " + " ".join(n.headline for n in sym_news[:2])

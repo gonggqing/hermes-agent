@@ -151,7 +151,7 @@ class TestResearchRefresh:
         signal_builds = []
         loop.on_decide = lambda: decided.append(True)
         loop._build_signals = (
-            lambda *, persist: signal_builds.append(persist) or ([], {})
+            lambda **options: signal_builds.append(options) or ([], {})
         )
 
         result = loop.run_research_now()
@@ -159,7 +159,7 @@ class TestResearchRefresh:
         assert result["market"] == "US"
         assert result["brief_ready"] is True
         assert decided == []
-        assert signal_builds == [False]
+        assert signal_builds == [{"persist": False, "include_llm": False}]
 
 
 class TestSessionParameterization:
