@@ -871,6 +871,12 @@ class DailyLoop:
         """
         try:
             self.on_monitor()
+            # A research refresh must contain symbol-level analysis, not only
+            # market/mover tables. Build the analysis in memory and republish;
+            # persistence remains reserved for the decision path so repeated
+            # manual refreshes cannot duplicate signals or gain order authority.
+            self._build_signals(persist=False)
+            self._publish_brief()
         except Exception:  # a refresh failure must not crash the service
             logger.exception(
                 "research refresh failed; publishing degraded brief",
@@ -1699,7 +1705,9 @@ class DailyLoop:
 
     # ---------------------------------------------------------- internals
 
-    def _build_signals(self) -> tuple[list[Signal], dict[str, SymbolView]]:
+    def _build_signals(
+        self, *, persist: bool = True
+    ) -> tuple[list[Signal], dict[str, SymbolView]]:
         debates: list[Signal] = []
         session_signals: list[Signal] = []
         views: dict[str, SymbolView] = {}
@@ -1746,10 +1754,12 @@ class DailyLoop:
             if not signals:
                 continue
             for sig in signals:
-                self.ledger.record_signal(sig, self.mode)
+                if persist:
+                    self.ledger.record_signal(sig, self.mode)
                 session_signals.append(sig)
             verdict = self.debate.debate(symbol, signals)
-            self.ledger.record_signal(verdict, self.mode)
+            if persist:
+                self.ledger.record_signal(verdict, self.mode)
             session_signals.append(verdict)
             debates.append(verdict)
             item = self.watchlist_lookup(symbol)

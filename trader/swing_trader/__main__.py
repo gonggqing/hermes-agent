@@ -712,6 +712,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         JsonDiscoveryUniverse,
         KnowledgeDiscoveryUniverse,
         MarketDiscoveryScanner,
+        SinaIndustryUniverse,
     )
 
     discovery_universe = CompositeDiscoveryUniverse(
@@ -750,6 +751,10 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             # while the live market universe prevents an empty discovery run
             # when neither qualitative source is pre-populated.
             EastmoneyMarketUniverse(max_seeds=30, max_per_industry=3),
+            # Independent public fallback: one live turnover leader per broad
+            # industry. This keeps the pool dynamic when Eastmoney rejects the
+            # container/proxy connection without hard-coding favored stocks.
+            SinaIndustryUniverse(),
         ]
     )
     from swing_trader.portfolio_research import portfolio_research_holdings

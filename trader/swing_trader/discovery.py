@@ -14,6 +14,7 @@ makes identical inputs produce identical rankings.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 import json
@@ -38,6 +39,7 @@ __all__ = [
     "EvidenceKind",
     "MarketDiscoveryScanner",
     "EastmoneyMarketUniverse",
+    "SinaIndustryUniverse",
     "JsonDiscoveryUniverse",
     "KnowledgeDiscoveryUniverse",
     "CompositeDiscoveryUniverse",
@@ -340,6 +342,155 @@ class EastmoneyMarketUniverse:
                 )
             )
         return seeds
+
+
+_SINA_MARKET_URL = (
+    "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+    "Market_Center.getHQNodeData"
+)
+
+
+def _default_sina_market_fetch(url: str, timeout: float) -> list[dict]:
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; hermes-finance/1.0)",
+            "Referer": "https://finance.sina.com.cn/",
+        },
+    )
+    last_error: Exception | None = None
+    for _attempt in range(2):
+        try:
+            with urlopen(request, timeout=timeout) as response:  # noqa: S310 fixed host
+                payload = json.loads(response.read().decode("utf-8", errors="replace"))
+                return payload if isinstance(payload, list) else []
+        except Exception as exc:
+            last_error = exc
+    assert last_error is not None
+    raise last_error
+
+
+class SinaIndustryUniverse:
+    """Dynamic cross-industry fallback for the mainland discovery pool.
+
+    Eastmoney occasionally closes the connection from Docker/proxy networks.
+    Sina exposes a separate public industry ranking.  We query one liquid
+    leader from each broad industry concurrently, so the fallback fixes the
+    *industry frame* while the securities rotate with current turnover; it is
+    not another permanent ticker watchlist.
+    """
+
+    _INDUSTRIES = (
+        ("传媒娱乐", "new_cmyl"),
+        ("电力行业", "new_dlhy"),
+        ("电器行业", "new_dqhy"),
+        ("电子器件", "new_dzqj"),
+        ("电子信息", "new_dzxx"),
+        ("发电设备", "new_fdsb"),
+        ("飞机制造", "new_fjzz"),
+        ("化工行业", "new_hghy"),
+        ("环保行业", "new_hbhy"),
+        ("机械行业", "new_jxhy"),
+        ("建筑建材", "new_jzjc"),
+        ("交通运输", "new_jtys"),
+        ("煤炭行业", "new_mthy"),
+        ("农林牧渔", "new_nlmy"),
+        ("汽车制造", "new_qczz"),
+        ("商业百货", "new_sybh"),
+        ("食品行业", "new_sphy"),
+        ("医疗器械", "new_ylqx"),
+        ("仪器仪表", "new_yqyb"),
+        ("石油行业", "new_syhy"),
+        ("金融行业", "new_jrhy"),
+        ("生物制药", "new_swzz"),
+        ("有色金属", "new_ysjs"),
+    )
+
+    def __init__(
+        self,
+        fetch: Optional[Callable[[str, float], list[dict]]] = None,
+        *,
+        timeout: float = 8.0,
+        max_workers: int = 6,
+        industries: Optional[tuple[tuple[str, str], ...]] = None,
+    ) -> None:
+        self._fetch = fetch or _default_sina_market_fetch
+        self.timeout = timeout
+        self.max_workers = max(1, min(max_workers, 8))
+        self.industries = industries or self._INDUSTRIES
+
+    @staticmethod
+    def _url(node: str) -> str:
+        query = urlencode(
+            {
+                "page": 1,
+                "num": 3,
+                "sort": "amount",
+                "asc": 0,
+                "node": node,
+                "symbol": "",
+            }
+        )
+        return f"{_SINA_MARKET_URL}?{query}"
+
+    def _industry_seed(
+        self, item: tuple[str, str], as_of: datetime
+    ) -> DiscoverySeed | None:
+        industry, node = item
+        url = self._url(node)
+        try:
+            rows = self._fetch(url, self.timeout)
+        except Exception:
+            return None
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            code = str(row.get("code") or "").strip()
+            name = str(row.get("name") or "").strip()
+            resolved = EastmoneyMarketUniverse._symbol(code)
+            if resolved is None or not name or "ST" in name.upper() or "退" in name:
+                continue
+            try:
+                price = float(row.get("trade") or 0)
+                turnover = float(row.get("amount") or 0)
+                daily = float(row.get("changepercent") or 0)
+            except (TypeError, ValueError):
+                continue
+            if price <= 0 or turnover <= 0:
+                continue
+            symbol, exchange = resolved
+            relationship = (
+                f"新浪行业成交额动态样本；{industry}当前成交活跃标的，"
+                f"成交额 {turnover / 1e8:.1f} 亿元，当日涨跌 {daily:+.1f}%"
+            )
+            return DiscoverySeed(
+                symbol=symbol,
+                display_name=name,
+                market="CN",
+                exchange=exchange,
+                currency="CNY",
+                theme=f"A股/{industry}",
+                component=industry,
+                relationship=relationship,
+                evidence=[DiscoveryEvidence(
+                    kind=EvidenceKind.MARKET_SCREEN,
+                    source="新浪财经行业行情",
+                    url=url,
+                    observed_at=as_of,
+                    summary=relationship,
+                    confidence=0.62,
+                )],
+            )
+        return None
+
+    def seeds(self, market: str, as_of: datetime) -> list[DiscoverySeed]:
+        if market.upper() != "CN":
+            return []
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+            rows = list(pool.map(
+                lambda item: self._industry_seed(item, as_of), self.industries
+            ))
+        return [row for row in rows if row is not None]
 
 
 class CompositeDiscoveryUniverse:

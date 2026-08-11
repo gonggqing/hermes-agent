@@ -148,13 +148,18 @@ class TestResearchRefresh:
     def test_run_research_now_never_enters_decision_path(self, loop_env):
         loop, runtime, _, _ = loop_env
         decided = []
+        signal_builds = []
         loop.on_decide = lambda: decided.append(True)
+        loop._build_signals = (
+            lambda *, persist: signal_builds.append(persist) or ([], {})
+        )
 
         result = loop.run_research_now()
 
         assert result["market"] == "US"
         assert result["brief_ready"] is True
         assert decided == []
+        assert signal_builds == [False]
 
 
 class TestSessionParameterization:

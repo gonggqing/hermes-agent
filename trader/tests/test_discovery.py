@@ -13,6 +13,7 @@ from swing_trader.discovery import (
     MarketDiscoveryScanner,
     JsonDiscoveryUniverse,
     KnowledgeDiscoveryUniverse,
+    SinaIndustryUniverse,
     DiscoveryTheme,
     CompositeDiscoveryUniverse,
     StaticDiscoveryUniverse,
@@ -206,6 +207,34 @@ def test_eastmoney_market_universe_is_dynamic_cross_industry_and_resolved():
     assert {row.theme for row in seeds} == {"A股/通信设备", "A股/酿酒行业", "A股/银行"}
     assert all(row.evidence[0].kind is EvidenceKind.MARKET_SCREEN for row in seeds)
     assert provider.seeds("HK", NOW) == []
+
+
+def test_sina_fallback_selects_live_leader_per_industry_not_fixed_tickers():
+    rows = {
+        "new_jxhy": [{
+            "code": "300308", "name": "中际旭创", "trade": "100",
+            "amount": "20000000000", "changepercent": "2.5",
+        }],
+        "new_ylqx": [{
+            "code": "600055", "name": "万东医疗", "trade": "20",
+            "amount": "3000000000", "changepercent": "-0.8",
+        }],
+    }
+
+    def fetch(url, timeout):
+        del timeout
+        node = url.split("node=")[1].split("&")[0]
+        return rows[node]
+
+    provider = SinaIndustryUniverse(
+        fetch=fetch,
+        industries=(("机械行业", "new_jxhy"), ("医疗器械", "new_ylqx")),
+    )
+    seeds = provider.seeds("CN", NOW)
+    assert [row.symbol for row in seeds] == ["300308.SZ", "600055.SS"]
+    assert [row.theme for row in seeds] == ["A股/机械行业", "A股/医疗器械"]
+    assert all(row.evidence[0].source == "新浪财经行业行情" for row in seeds)
+    assert provider.seeds("US", NOW) == []
 
 
 def test_empty_universe_is_reported_as_unavailable_not_no_opportunity():
