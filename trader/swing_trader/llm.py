@@ -184,19 +184,74 @@ def http_complete(
     # provider extension separates reasoning into `reasoning_details`, leaving
     # `content` as the parseable answer. This is stateless, so no reasoning
     # history needs to be replayed. Do not send the extension to other vendors.
-    if (
+    is_minimax = (
         "minimaxi.com" in settings.base_url.lower()
         or settings.model.lower().startswith("minimax-")
-    ):
+    )
+    if is_minimax:
         payload["reasoning_split"] = True
+        # MiniMax M-series reasoning models are documented to work best with
+        # streaming.  A full CN brief can otherwise produce no response bytes
+        # until the entire reasoning trace and answer are complete, tripping
+        # the read timeout even though generation is still progressing.
+        payload["stream"] = True
 
     resp = requests.post(
         f"{settings.base_url}/chat/completions",
         headers={"Authorization": f"Bearer {settings.api_key}"},
         json=payload,
         timeout=settings.timeout,
+        stream=is_minimax,
     )
     resp.raise_for_status()
+    if is_minimax:
+        content = ""
+        reasoning = ""
+
+        def merge(current: str, value: object) -> str:
+            if not isinstance(value, str) or not value:
+                return current
+            # MiniMax has emitted both ordinary token deltas and cumulative
+            # snapshots across compatible endpoints.  Accept either shape
+            # without duplicating already received text.
+            if value.startswith(current):
+                return value
+            return current + value
+
+        for raw_line in resp.iter_lines(decode_unicode=True):
+            if isinstance(raw_line, bytes):
+                line = raw_line.decode("utf-8", errors="replace")
+            else:
+                line = str(raw_line or "")
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                chunk = json.loads(data)
+                delta = chunk["choices"][0].get("delta") or {}
+            except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+                continue
+            content = merge(content, delta.get("content"))
+            reasoning = merge(reasoning, delta.get("reasoning_content"))
+            details = delta.get("reasoning_details")
+            if isinstance(details, list):
+                for item in details:
+                    if isinstance(item, str):
+                        reasoning = merge(reasoning, item)
+                    elif isinstance(item, dict):
+                        for key in ("text", "content", "reasoning"):
+                            value = item.get(key)
+                            if isinstance(value, str) and value:
+                                reasoning = merge(reasoning, value)
+                                break
+        if content.strip():
+            return content
+        if reasoning.strip():
+            return reasoning
+        raise ValueError("streaming completion has no usable content")
+
     message = resp.json()["choices"][0]["message"]
     content = message.get("content")
     if isinstance(content, str) and content.strip():
