@@ -301,9 +301,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         feed,
         clock=runtime.clock,
     )
-    prediction_backfill = backfill_brief_history(
-        runtime.brief_store, runtime.prediction_ledger
-    )
+    prediction_backfill = backfill_brief_history(runtime.brief_store, runtime.prediction_ledger)
     logger.info(
         "prediction history backfilled",
         extra={
@@ -448,9 +446,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         )
         embedding_profile = f"{OPENAI_EMBEDDING_MODEL}:{OPENAI_EMBEDDING_DIM}"
 
-    knowledge, knowledge_index = build_knowledge(
-        knowledge_config
-    )
+    knowledge, knowledge_index = build_knowledge(knowledge_config)
     vector_migration = None
     if knowledge_index is not None:
         try:
@@ -532,9 +528,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     if telegram is not None and search_llm_settings is not None:
         from swing_trader.candidate_reply import CandidateReasonSummarizer
 
-        telegram.set_candidate_reasoner(
-            CandidateReasonSummarizer(search_llm_settings).summarize
-        )
+        telegram.set_candidate_reasoner(CandidateReasonSummarizer(search_llm_settings).summarize)
 
     runtime.knowledge = knowledge
     runtime.knowledge_index = knowledge_index
@@ -696,6 +690,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     from swing_trader.discovery import (
         CompositeDiscoveryUniverse,
         DiscoveryTheme,
+        EastmoneyMarketUniverse,
         JsonDiscoveryUniverse,
         KnowledgeDiscoveryUniverse,
         MarketDiscoveryScanner,
@@ -732,6 +727,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                     ),
                 ],
             ),
+            # Dynamic A-share breadth is the production fallback. Explicit
+            # file/knowledge evidence keeps precedence for duplicate symbols,
+            # while the live market universe prevents an empty discovery run
+            # when neither qualitative source is pre-populated.
+            EastmoneyMarketUniverse(max_seeds=30, max_per_industry=3),
         ]
     )
     from swing_trader.portfolio_research import portfolio_research_holdings
@@ -822,15 +822,15 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             watchlist_lookup=cn_wl.lookup,
             trading_tz=ZoneInfo(settings.cn_market_tz),
             index_symbols=list(CN_MAINLAND_INDEX_SYMBOLS),
+            anchor_symbol="000001.SS",
+            vix_symbol="",  # US VIX is not an A-share regime input
             mode=settings.mode,
             runtime=runtime,
             notify=notify,  # REPORTER bot (outbound-only)
-            llm_analyst=(
-                LLMAnalyst(search_llm_settings) if search_llm_settings else None
-            ),
+            llm_analyst=(LLMAnalyst(search_llm_settings) if search_llm_settings else None),
             knowledge=knowledge,
             knowledge_index=knowledge_index,
-            focus_note="聚焦科技: 半导体 / 电子 / AI (其他板块仅作参考)",
+            focus_note="",
             lang="zh",
             clock=runtime.clock,
             discovery_scanner=MarketDiscoveryScanner(
@@ -838,6 +838,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 discovery_universe,
                 benchmark_symbol="000001.SS",
                 min_adv=10_000_000,
+                min_score=38.0,
                 clock=runtime.clock,
             ),
             holdings_provider=_research_holdings,
@@ -912,7 +913,8 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 holdings_provider=_research_holdings,
             )
             hk_runner = DailyLoopRunner(
-                hk_loop.callbacks(), clock=runtime.clock,
+                hk_loop.callbacks(),
+                clock=runtime.clock,
                 schedule=HK_TRADING_SCHEDULE,
             )
             runtime.run_research["hk"] = hk_loop.run_research_now
@@ -933,15 +935,15 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 watchlist_lookup=hk_wl.lookup,
                 trading_tz=ZoneInfo(settings.hk_market_tz),
                 index_symbols=list(HK_INDEX_SYMBOLS),
+                anchor_symbol="^HSI",
+                vix_symbol="",
                 mode=settings.mode,
                 runtime=runtime,
                 notify=notify,
-                llm_analyst=(
-                    LLMAnalyst(search_llm_settings) if search_llm_settings else None
-                ),
+                llm_analyst=(LLMAnalyst(search_llm_settings) if search_llm_settings else None),
                 knowledge=knowledge,
                 knowledge_index=knowledge_index,
-                focus_note="香港独立研究: 科技 / 平台 / 半导体供应链",
+                focus_note="",
                 lang="zh",
                 clock=runtime.clock,
                 discovery_scanner=MarketDiscoveryScanner(
@@ -987,12 +989,12 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             watchlist_lookup=kr_wl.lookup,
             trading_tz=ZoneInfo(settings.kr_market_tz),
             index_symbols=list(KR_INDEX_SYMBOLS),
+            anchor_symbol="^KS11",
+            vix_symbol="",
             mode=settings.mode,
             runtime=runtime,
             notify=notify,  # REPORTER bot (outbound-only)
-            llm_analyst=(
-                LLMAnalyst(search_llm_settings) if search_llm_settings else None
-            ),
+            llm_analyst=(LLMAnalyst(search_llm_settings) if search_llm_settings else None),
             knowledge=knowledge,
             knowledge_index=knowledge_index,
             focus_note="仅半导体: 存储巨头(三星/海力士) + HBM 封装链; 关注财报 / news, "

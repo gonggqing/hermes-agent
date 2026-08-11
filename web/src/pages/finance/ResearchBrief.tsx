@@ -445,14 +445,18 @@ function RegimeChips({
         ) : (
           <div className="flex flex-wrap items-center gap-3 font-mondwest normal-case text-sm">
             <Badge tone={regimeTone(regime.risk_on_off)}>
-              {regime.risk_on_off}
+              {regime.risk_on_off === "risk_on"
+                ? ft.brief.regime.riskOn
+                : regime.risk_on_off === "risk_off"
+                  ? ft.brief.regime.riskOff
+                  : ft.brief.regime.neutral}
             </Badge>
-            <span className="text-muted-foreground">
-              {ft.brief.regime.vix}{" "}
-              <span className="text-foreground">
-                {regime.vix === null ? "—" : regime.vix.toFixed(1)}
+            {regime.vix !== null && (
+              <span className="text-muted-foreground">
+                {ft.brief.regime.vix}{" "}
+                <span className="text-foreground">{regime.vix.toFixed(1)}</span>
               </span>
-            </span>
+            )}
             <span className="text-muted-foreground">
               {ft.brief.regime.breadth}{" "}
               <span className="text-foreground">
@@ -712,7 +716,11 @@ function DiscoveryCard({
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        {candidates.length === 0 ? (
+        {pool != null && (pool.status === "unavailable" || pool.source_count === 0) ? (
+          <p className="font-mondwest normal-case py-2 text-sm text-destructive">
+            {ft.brief.discovery.sourceUnavailable}
+          </p>
+        ) : candidates.length === 0 ? (
           <p className="font-mondwest normal-case py-2 text-sm text-muted-foreground">
             {ft.brief.discovery.empty}
           </p>
@@ -805,6 +813,11 @@ function SynthesisCard({
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
+        {synthesis.headline && (
+          <p className="font-mondwest normal-case text-sm font-medium leading-6 text-foreground">
+            {synthesis.headline}
+          </p>
+        )}
         <div className="flex flex-wrap gap-2">
           {Object.values(synthesis.markets).map((market) => (
             <span
@@ -834,9 +847,23 @@ function SynthesisCard({
                   CN {theme.cn_symbols.join(", ") || "—"} · HK{" "}
                   {theme.hk_symbols.join(", ") || "—"}
                 </div>
+                {theme.relationship && (
+                  <p className="mt-2 text-sm leading-5 text-muted-foreground">
+                    {theme.relationship}
+                  </p>
+                )}
               </li>
             ))}
           </ul>
+        )}
+        {(synthesis.analysis?.length ?? 0) > 0 && (
+          <div className="flex flex-col gap-3 border-t border-border pt-3">
+            {synthesis.analysis!.slice(0, 2).map((paragraph) => (
+              <p key={paragraph} className="font-mondwest normal-case whitespace-pre-line text-sm leading-6 text-muted-foreground">
+                {paragraph}
+              </p>
+            ))}
+          </div>
         )}
       </CardContent>
     </Card>

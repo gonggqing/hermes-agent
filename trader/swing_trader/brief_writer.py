@@ -66,7 +66,10 @@ _MARKET_LENSES = {
     ),
     "CN": (
         "Treat this as an A-share brief: distinguish broad-index participation from domestic "
-        "industry and supply-chain rotation, and identify whether leadership is broadening or narrow."
+        "industry and supply-chain rotation. Compare the static market anchors with the dynamic "
+        "cross-industry discovery pool; do not center semiconductors or any legacy watchlist theme "
+        "unless today's evidence makes it material. Identify actionable trend changes across "
+        "industries, current holdings and newly surfaced instruments."
     ),
     "HK": (
         "Treat this as an offshore Hong Kong brief: distinguish Hang Seng/HSTECH market structure "

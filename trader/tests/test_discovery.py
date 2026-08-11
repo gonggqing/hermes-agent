@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from swing_trader.discovery import (
     DiscoveryEvidence,
     DiscoverySeed,
+    EastmoneyMarketUniverse,
     EvidenceKind,
     MarketDiscoveryScanner,
     JsonDiscoveryUniverse,
@@ -181,3 +182,35 @@ def test_composite_universe_uses_explicit_file_override_first(tmp_path):
     ])
     rows = provider.seeds("US", NOW)
     assert len(rows) == 1 and rows[0].theme == "robotics"
+
+
+def test_eastmoney_market_universe_is_dynamic_cross_industry_and_resolved():
+    rows = [
+        {"f12": "300308", "f14": "中际旭创", "f2": 100, "f3": 2,
+         "f6": 20_000_000_000, "f8": 3, "f24": 10, "f62": 1_000_000_000,
+         "f100": "通信设备"},
+        {"f12": "600519", "f14": "贵州茅台", "f2": 1300, "f3": -1,
+         "f6": 10_000_000_000, "f8": 1, "f24": 4, "f62": -200_000_000,
+         "f100": "酿酒行业"},
+        {"f12": "000001", "f14": "平安银行", "f2": 12, "f3": .5,
+         "f6": 8_000_000_000, "f8": 2, "f24": 2, "f62": 100_000_000,
+         "f100": "银行"},
+    ]
+    provider = EastmoneyMarketUniverse(
+        fetch=lambda url, timeout: {"data": {"diff": rows}},
+        max_seeds=3,
+        max_per_industry=1,
+    )
+    seeds = provider.seeds("CN", NOW)
+    assert [row.symbol for row in seeds] == ["300308.SZ", "600519.SS", "000001.SZ"]
+    assert {row.theme for row in seeds} == {"A股/通信设备", "A股/酿酒行业", "A股/银行"}
+    assert all(row.evidence[0].kind is EvidenceKind.MARKET_SCREEN for row in seeds)
+    assert provider.seeds("HK", NOW) == []
+
+
+def test_empty_universe_is_reported_as_unavailable_not_no_opportunity():
+    feed = FakeFeed({"SPY": bars("SPY")})
+    pool = scanner([], feed).scan("US")
+    assert pool.status == "unavailable"
+    assert pool.source_count == 0
+    assert "not evidence" in pool.notes[0]

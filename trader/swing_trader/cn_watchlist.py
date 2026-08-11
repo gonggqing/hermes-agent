@@ -1,13 +1,11 @@
 """China/HK research universe for the CN morning session (Loop.md two-session
 extension).
 
-The CN morning session is **research-only** (no orders) and deliberately
-**technology-focused** — semiconductors, electronics/hardware, and AI/software
-are the conviction themes; internet platforms, EV/battery, indices, and a
-consumer anchor are carried for context. The set spans BOTH mainland A-shares
-(``.SS`` Shanghai / ``.SZ`` Shenzhen) and Hong Kong (``.HK``); when mainland
-data is unreachable via the free feed those symbols simply return no bars and
-are skipped, so the session degrades gracefully to HK-only.
+The CN morning session is **research-only** (no orders).  Production mainland
+research uses liquid broad/sector ETFs as stable market anchors and adds a
+dynamic, cross-industry company universe on every run.  The older mixed CN/HK
+catalog remains available for compatibility, but it no longer defines the
+production A-share stock-picking universe.
 
 The universe is **config-editable**: ``FINANCE_CN_SYMBOLS`` (or ``Settings.
 cn_symbols``) is a comma-separated override. Symbols already known here keep
@@ -36,12 +34,11 @@ __all__ = [
 
 def _mk(symbols: str, theme: str, phase: AiPhase, role: Role) -> list[WatchlistItem]:
     return [
-        WatchlistItem(symbol=s, theme=theme, ai_phase=phase, role=role)
-        for s in symbols.split()
+        WatchlistItem(symbol=s, theme=theme, ai_phase=phase, role=role) for s in symbols.split()
     ]
 
 
-#: Default CN/HK research universe (technology-focused; NOT a buy list).
+#: Legacy mixed CN/HK research universe retained for API compatibility.
 #: Mainland symbols are best-effort — they are skipped when the free feed has
 #: no data for them (HK-only degrade). Tags drive brief theme aggregation.
 CN_UNIVERSE: list[WatchlistItem] = [
@@ -72,8 +69,19 @@ CN_INDEX_SYMBOLS: tuple[str, ...] = ("^HSI", "^HSCE")
 
 # Phase 0.95 keeps the legacy mixed universe above for API compatibility, but
 # production CN and HK sessions consume disjoint views.
+# Production mainland baseline is a set of broad/sector market anchors rather
+# than a frozen stock-picking list.  Individual companies enter the daily
+# evidence packet through ``EastmoneyMarketUniverse`` and can rotate every run.
 CN_MAINLAND_UNIVERSE: list[WatchlistItem] = [
-    item for item in CN_UNIVERSE if item.symbol.endswith((".SS", ".SZ"))
+    *_mk("510300.SS 510500.SS 588000.SS", "cn-broad-market", AiPhase.NONE, Role.CORE),
+    *_mk("512800.SS", "cn-banks", AiPhase.NONE, Role.HEDGE),
+    *_mk("512880.SS", "cn-brokerage", AiPhase.NONE, Role.ROTATION),
+    *_mk("512010.SS", "cn-healthcare", AiPhase.NONE, Role.ROTATION),
+    *_mk("159928.SZ", "cn-consumer", AiPhase.NONE, Role.HEDGE),
+    *_mk("512660.SS", "cn-defense", AiPhase.NONE, Role.ROTATION),
+    *_mk("516160.SS 515790.SS", "cn-new-energy", AiPhase.POWER, Role.ROTATION),
+    *_mk("159869.SZ", "cn-digital-content", AiPhase.APPLICATION, Role.ROTATION),
+    *_mk("159995.SZ", "cn-semiconductor", AiPhase.INFRA, Role.CONVICTION),
 ]
 CN_MAINLAND_INDEX_SYMBOLS: tuple[str, ...] = ("000001.SS", "399001.SZ")
 
@@ -138,9 +146,12 @@ def build_mainland_watchlist(override: str = "") -> CnWatchlist:
         sym = _norm(raw)
         if not sym.endswith((".SS", ".SZ")):
             continue
-        items.append(known.get(sym) or WatchlistItem(
+        items.append(
+            known.get(sym)
+            or WatchlistItem(
             symbol=sym, theme="cn-custom", ai_phase=AiPhase.NONE, role=Role.ROTATION
-        ))
+            )
+        )
     if not override.strip():
         items = list(CN_MAINLAND_UNIVERSE)
     by_symbol = {_norm(i.symbol): i for i in items}

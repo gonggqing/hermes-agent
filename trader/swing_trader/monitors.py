@@ -361,6 +361,7 @@ class MarketMonitor(_BaseMonitor):
         clock: Callable[[], datetime] = utcnow,
         anchor_symbol: str = "SPY",
         vix_symbol: str = VIX_SYMBOL,
+        require_vix_for_risk_on: bool = True,
     ) -> None:
         super().__init__(sink, clock)
         self._feed = feed
@@ -370,11 +371,17 @@ class MarketMonitor(_BaseMonitor):
         # is computed from ITS market, not the US tape.
         self._anchor_symbol = anchor_symbol
         self._vix_symbol = vix_symbol
+        self._require_vix_for_risk_on = require_vix_for_risk_on
         self._breadth_symbols = (
             list(breadth_symbols)
             if breadth_symbols is not None
             else watchlist.enabled_symbols()
         )
+
+    def set_breadth_symbols(self, symbols: Sequence[str]) -> None:
+        """Align breadth with the current run's dynamically expanded universe."""
+
+        self._breadth_symbols = list(dict.fromkeys(symbols))
 
     def poll(self) -> MarketSnapshot:
         ts = self._clock()
@@ -415,7 +422,13 @@ class MarketMonitor(_BaseMonitor):
                 logger.warning("VIX quote unavailable", extra={"error": str(exc)})
 
         breadth = self._breadth_pct_above_50dma()
-        regime = self._regime(spy_last, spy_sma50, spy_long_sma, vix)
+        regime = self._regime(
+            spy_last,
+            spy_sma50,
+            spy_long_sma,
+            vix,
+            require_vix_for_risk_on=self._require_vix_for_risk_on,
+        )
 
         snapshot = MarketSnapshot(
             ts=ts,
@@ -462,6 +475,8 @@ class MarketMonitor(_BaseMonitor):
         spy_sma50: Optional[float],
         spy_long_sma: Optional[float],
         vix: Optional[float],
+        *,
+        require_vix_for_risk_on: bool = True,
     ) -> RiskRegime:
         risk_off = (vix is not None and vix > RISK_OFF_VIX_MIN) or (
             spy_last is not None
@@ -474,8 +489,10 @@ class MarketMonitor(_BaseMonitor):
             spy_last is not None
             and spy_sma50 is not None
             and spy_last > spy_sma50
-            and vix is not None
-            and vix < RISK_ON_VIX_MAX
+            and (
+                (vix is not None and vix < RISK_ON_VIX_MAX)
+                or (vix is None and not require_vix_for_risk_on)
+            )
         )
         if risk_on:
             return "risk_on"

@@ -2385,10 +2385,15 @@ export interface FinanceDiscoveryPool {
   candidates: FinanceDiscoveryCandidate[]
   rejected: { symbol: string; reason: string }[]
   source_count: number
+  status?: string
+  notes?: string[]
 }
 
 export interface FinanceResearchSynthesis {
   status: string
+  headline?: string
+  analysis?: string[]
+  watch_next?: string[]
   markets: Record<
     string,
     {
@@ -2396,6 +2401,8 @@ export interface FinanceResearchSynthesis {
       available: boolean
       freshness_status: string
       regime: string | null
+      headline?: string | null
+      summary?: string | null
     }
   >
   shared_themes: {
@@ -2403,6 +2410,9 @@ export interface FinanceResearchSynthesis {
     cn_symbols: string[]
     hk_symbols: string[]
     evidence_urls: string[]
+    cn_strength_pct?: number | null
+    hk_strength_pct?: number | null
+    relationship?: string
   }[]
   notes: string[]
 }

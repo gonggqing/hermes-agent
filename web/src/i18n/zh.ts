@@ -675,12 +675,15 @@ export const zh: Translations = {
           "概括波动率、市场广度与主要指数趋势，用于理解当前市场风险偏好。",
         vix: "VIX",
         breadth: "50日均线上方广度",
+        riskOn: "偏进攻",
+        neutral: "中性 · 等待方向",
+        riskOff: "偏防守",
         unavailable: "暂无市场状态快照 —— 市场监控尚未运行。",
       },
       movers: {
-        title: "自选股异动",
+        title: "研究范围异动",
         description:
-          "展示观察范围内相对中期趋势变化最明显的标的，用于定位需要进一步解释的价格异动。",
+          "比较本轮基础市场锚点与动态发现标的的趋势变化，用于识别跨行业的强弱切换。",
         top: "居前",
         bottom: "居后",
         symbol: "代码",
@@ -703,7 +706,8 @@ export const zh: Translations = {
         title: "新机会发现池",
         description:
           "汇总系统新发现的标的，并结合证据完整度、趋势、流动性与主题相关性排列后续研究优先级。",
-        empty: "今日暂无通过来源、代码、趋势和流动性验证的新标的。",
+        empty: "本轮动态扫描已完成，但没有形成值得升级研究优先级的新标的。",
+        sourceUnavailable: "本轮没有取得全市场扫描输入；这表示发现源不可用，不代表市场没有机会。",
         score: "研究评分",
         reasons: "评分依据",
         noReasons: "该标的没有保留下更细的评分原因。",

@@ -75,6 +75,9 @@ export const financeEn: FinanceTranslations = {
         "Summarizes volatility, market breadth and major-index trends to describe the market's current risk appetite.",
       vix: "VIX",
       breadth: "Breadth >50dma",
+      riskOn: "Risk-on",
+      neutral: "Neutral · awaiting direction",
+      riskOff: "Risk-off",
       unavailable:
         "No market regime snapshot — the market monitor has not run.",
     },
@@ -104,7 +107,8 @@ export const financeEn: FinanceTranslations = {
       title: "New opportunities discovered",
       description:
         "Collects newly discovered instruments and ranks follow-up research priority using evidence depth, trend, liquidity and theme relevance.",
-      empty: "No validated symbols entered today's discovery pool.",
+      empty: "The dynamic scan completed, but no symbol earned a higher research priority this run.",
+      sourceUnavailable: "No broad-market universe was available for this run; this is a source failure, not evidence that no opportunities exist.",
       score: "research score",
       reasons: "Why it ranked",
       noReasons:

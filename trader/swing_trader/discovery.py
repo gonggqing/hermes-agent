@@ -19,6 +19,8 @@ from enum import Enum
 import json
 from pathlib import Path
 from typing import Any, Callable, Optional, Protocol
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -35,6 +37,7 @@ __all__ = [
     "DiscoveryUniverseProvider",
     "EvidenceKind",
     "MarketDiscoveryScanner",
+    "EastmoneyMarketUniverse",
     "JsonDiscoveryUniverse",
     "KnowledgeDiscoveryUniverse",
     "CompositeDiscoveryUniverse",
@@ -50,6 +53,7 @@ class EvidenceKind(str, Enum):
     ETF_CONSTITUENT = "etf_constituent"
     EARNINGS = "earnings"
     NEWS = "news"
+    MARKET_SCREEN = "market_screen"
 
 
 class DiscoveryEvidence(BaseModel):
@@ -105,6 +109,10 @@ class DiscoveryFeatures(BaseModel):
     event_score: float
     moat_score: float
     etf_change_score: float
+    # Strength of the broad-market screen that surfaced this symbol.  This is
+    # deliberately separate from ``moat_score``: turnover/flow can prioritize
+    # research, but it is not evidence of a durable competitive advantage.
+    screen_score: float = 0.0
 
 
 class DiscoveryCandidate(BaseModel):
@@ -134,6 +142,8 @@ class DiscoveryPool(BaseModel):
     candidates: list[DiscoveryCandidate] = Field(default_factory=list)
     rejected: list[RejectedDiscovery] = Field(default_factory=list)
     source_count: int = 0
+    status: str = "complete"
+    notes: list[str] = Field(default_factory=list)
 
 
 class DiscoveryUniverseProvider(Protocol):
@@ -174,6 +184,162 @@ class JsonDiscoveryUniverse:
             return []
         key = market.upper()
         return [seed for seed in parsed if seed.market == key]
+
+
+_EASTMONEY_MARKET_URL = "https://push2.eastmoney.com/api/qt/clist/get"
+_EASTMONEY_FIELDS = "f2,f3,f6,f8,f10,f12,f14,f20,f21,f24,f62,f100"
+
+
+def _default_eastmoney_market_fetch(url: str, timeout: float) -> dict:
+    request = Request(url, headers={"User-Agent": "hermes-finance/1.0"})
+    last_error: Exception | None = None
+    for _attempt in range(2):
+        try:
+            with urlopen(request, timeout=timeout) as response:  # noqa: S310 fixed host
+                return json.loads(response.read().decode("utf-8", errors="replace"))
+        except Exception as exc:  # one bounded retry for transient public-feed failures
+            last_error = exc
+    assert last_error is not None
+    raise last_error
+
+
+class EastmoneyMarketUniverse:
+    """Dynamic, cross-industry A-share research universe.
+
+    The old discovery path depended on a hand-written JSON file or symbols
+    already mentioned in the knowledge base.  In production neither source
+    was populated, so ``source_count`` stayed at zero forever.  This provider
+    starts from Eastmoney's live all-A-share turnover ranking, then applies an
+    industry cap.  It therefore changes with the tape and cannot collapse into
+    the same technology watchlist every day.
+
+    The rows are *research seeds*, not recommendations.  They still have to
+    pass the downstream bar freshness, liquidity, trend, relative-strength
+    and evidence-bound ranking before appearing in ``DiscoveryPool``.
+    """
+
+    _A_SHARE_FILTER = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23"
+
+    def __init__(
+        self,
+        fetch: Optional[Callable[[str, float], dict]] = None,
+        *,
+        timeout: float = 10.0,
+        fetch_size: int = 120,
+        max_seeds: int = 48,
+        max_per_industry: int = 4,
+    ) -> None:
+        self._fetch = fetch or _default_eastmoney_market_fetch
+        self.timeout = timeout
+        self.fetch_size = max(20, min(fetch_size, 300))
+        self.max_seeds = max(1, max_seeds)
+        self.max_per_industry = max(1, max_per_industry)
+
+    def _url(self) -> str:
+        query = urlencode(
+            {
+                "pn": 1,
+                "pz": self.fetch_size,
+                "po": 1,
+                "np": 1,
+                "fltt": 2,
+                "invt": 2,
+                "fid": "f6",  # turnover: liquid names across active industries
+                "fs": self._A_SHARE_FILTER,
+                "fields": _EASTMONEY_FIELDS,
+            }
+        )
+        return f"{_EASTMONEY_MARKET_URL}?{query}"
+
+    @staticmethod
+    def _number(row: dict, key: str) -> float:
+        try:
+            value = float(row.get(key))
+        except (TypeError, ValueError):
+            return 0.0
+        return value if value == value else 0.0
+
+    @staticmethod
+    def _symbol(code: str) -> tuple[str, str] | None:
+        if not (code.isdigit() and len(code) == 6):
+            return None
+        if code.startswith(("5", "6", "9")):
+            return f"{code}.SS", "SSE"
+        if code.startswith(("0", "1", "2", "3")):
+            return f"{code}.SZ", "SZSE"
+        return None
+
+    def seeds(self, market: str, as_of: datetime) -> list[DiscoverySeed]:
+        if market.upper() != "CN":
+            return []
+        url = self._url()
+        try:
+            payload = self._fetch(url, self.timeout)
+            rows = payload.get("data", {}).get("diff", [])
+        except Exception:
+            return []
+        if not isinstance(rows, list):
+            return []
+
+        selected: list[tuple[int, dict, str, str, str]] = []
+        industry_counts: dict[str, int] = {}
+        for rank, row in enumerate(rows, start=1):
+            if not isinstance(row, dict):
+                continue
+            code = str(row.get("f12") or "").strip()
+            name = str(row.get("f14") or "").strip()
+            resolved = self._symbol(code)
+            if resolved is None or not name or "ST" in name.upper() or "退" in name:
+                continue
+            if self._number(row, "f2") <= 0 or self._number(row, "f6") <= 0:
+                continue
+            industry = str(row.get("f100") or "其他").strip() or "其他"
+            if industry_counts.get(industry, 0) >= self.max_per_industry:
+                continue
+            industry_counts[industry] = industry_counts.get(industry, 0) + 1
+            symbol, exchange = resolved
+            selected.append((rank, row, industry, symbol, exchange))
+            if len(selected) >= self.max_seeds:
+                break
+
+        total = max(1, len(rows))
+        seeds: list[DiscoverySeed] = []
+        for rank, row, industry, symbol, exchange in selected:
+            turnover = self._number(row, "f6")
+            daily = self._number(row, "f3")
+            medium = self._number(row, "f24")
+            turnover_rate = self._number(row, "f8")
+            flow = self._number(row, "f62")
+            confidence = _clamp(0.3 + 0.5 * (1.0 - (rank - 1) / total))
+            relationship = (
+                f"A股全市场成交额动态样本；成交额 {turnover / 1e8:.1f} 亿元，"
+                f"当日涨跌 {daily:+.1f}%，中期涨跌 {medium:+.1f}%，"
+                f"换手率 {turnover_rate:.1f}%，主力净流入 {flow / 1e8:+.1f} 亿元"
+            )
+            seeds.append(
+                DiscoverySeed(
+                    symbol=symbol,
+                    display_name=str(row.get("f14") or symbol).strip(),
+                    market="CN",
+                    exchange=exchange,
+                    currency="CNY",
+                    theme=f"A股/{industry}",
+                    component=industry,
+                    relationship=relationship,
+                    instrument_resolved=True,
+                    evidence=[
+                        DiscoveryEvidence(
+                            kind=EvidenceKind.MARKET_SCREEN,
+                            source="东方财富全市场行情",
+                            url=url,
+                            observed_at=as_of,
+                            summary=relationship,
+                            confidence=confidence,
+                        )
+                    ],
+                )
+            )
+        return seeds
 
 
 class CompositeDiscoveryUniverse:
@@ -249,11 +415,14 @@ class KnowledgeDiscoveryUniverse:
                     seed = DiscoverySeed(
                         symbol=resolved.canonical_symbol,
                         display_name=resolved.display_name,
-                        market=market.upper(), exchange=resolved.exchange,
-                        currency=resolved.currency, theme=theme.name,
+                        market=market.upper(),
+                        exchange=resolved.exchange,
+                        currency=resolved.currency,
+                        theme=theme.name,
                         component="evidence-backed supply-chain relationship",
                         relationship=str(hit.get("snippet") or evidence.summary)[:500],
-                        instrument_resolved=True, evidence=[evidence],
+                        instrument_resolved=True,
+                        evidence=[evidence],
                     )
                     current = best.get(seed.symbol)
                     if current is None or (score, theme.name) > (current[0], current[1].theme):
@@ -287,9 +456,22 @@ class KnowledgeDiscoveryUniverse:
 
 
 _EVENT_TERMS = (
-    "earnings", "guidance", "contract", "order", "capex", "capacity",
-    "launch", "approval", "partnership", "backlog", "产能", "订单", "财报",
-    "指引", "获批", "合作",
+    "earnings",
+    "guidance",
+    "contract",
+    "order",
+    "capex",
+    "capacity",
+    "launch",
+    "approval",
+    "partnership",
+    "backlog",
+    "产能",
+    "订单",
+    "财报",
+    "指引",
+    "获批",
+    "合作",
 )
 
 
@@ -347,9 +529,7 @@ class MarketDiscoveryScanner:
         self.max_candidates = max_candidates
         self.max_bar_age_days = max_bar_age_days
         self.max_evidence_age_days = max_evidence_age_days
-        self.instrument_validator = instrument_validator or (
-            lambda seed: seed.instrument_resolved
-        )
+        self.instrument_validator = instrument_validator or (lambda seed: seed.instrument_resolved)
         self.clock = clock
 
     def scan(self, market: str) -> DiscoveryPool:
@@ -358,16 +538,27 @@ class MarketDiscoveryScanner:
         rejected: list[RejectedDiscovery] = []
         accepted: list[DiscoveryCandidate] = []
         benchmark_return = self._benchmark_return()
-        seeds = sorted(
-            self.universe.seeds(market, now), key=lambda s: (s.symbol, s.theme)
+        seeds = sorted(self.universe.seeds(market, now), key=lambda s: (s.symbol, s.theme))
+        if not seeds:
+            return DiscoveryPool(
+                market=market,
+                as_of=now,
+                source_count=0,
+                status="unavailable",
+                notes=[
+                    "discovery universe produced no symbols; this is a source outage "
+                    "or missing universe, not evidence that no opportunities exist"
+                ],
         )
 
         seen: set[str] = set()
         for seed in seeds:
             if seed.symbol in seen:
-                rejected.append(RejectedDiscovery(
+                rejected.append(
+                    RejectedDiscovery(
                     symbol=seed.symbol, reason="duplicate symbol in discovery universe"
-                ))
+                    )
+                )
                 continue
             seen.add(seed.symbol)
             reason = self._validate_seed(seed, market, now)
@@ -377,28 +568,32 @@ class MarketDiscoveryScanner:
             try:
                 bars = self.feed.get_bars(seed.symbol, "1d", limit=80)
             except (DataFeedError, ValueError) as exc:
-                rejected.append(RejectedDiscovery(
-                    symbol=seed.symbol, reason=f"market data unavailable: {exc}"
-                ))
+                rejected.append(
+                    RejectedDiscovery(symbol=seed.symbol, reason=f"market data unavailable: {exc}")
+                )
                 continue
             if len(bars) < 21:
-                rejected.append(RejectedDiscovery(
-                    symbol=seed.symbol, reason="fewer than 21 daily bars"
-                ))
+                rejected.append(
+                    RejectedDiscovery(symbol=seed.symbol, reason="fewer than 21 daily bars")
+                )
                 continue
             bars = sorted(bars, key=lambda bar: bar.ts)
             bar_age = (now - bars[-1].ts).total_seconds() / 86400.0
             if bar_age > self.max_bar_age_days:
-                rejected.append(RejectedDiscovery(
+                rejected.append(
+                    RejectedDiscovery(
                     symbol=seed.symbol, reason=f"last bar is {bar_age:.1f} days old"
-                ))
+                    )
+                )
                 continue
             adv = _adv20(bars)
             if adv < self.min_adv:
-                rejected.append(RejectedDiscovery(
+                rejected.append(
+                    RejectedDiscovery(
                     symbol=seed.symbol,
                     reason=f"ADV20 {adv:.0f} below minimum {self.min_adv:.0f}",
-                ))
+                    )
+                )
                 continue
             try:
                 news = self.feed.get_news(seed.symbol, limit=20)
@@ -408,12 +603,15 @@ class MarketDiscoveryScanner:
             features = self._features(seed, bars, recent, benchmark_return)
             score = self._score(features)
             if score < self.min_score:
-                rejected.append(RejectedDiscovery(
+                rejected.append(
+                    RejectedDiscovery(
                     symbol=seed.symbol,
                     reason=f"score {score:.1f} below threshold {self.min_score:.1f}",
-                ))
+                    )
+                )
                 continue
-            accepted.append(DiscoveryCandidate(
+            accepted.append(
+                DiscoveryCandidate(
                 symbol=seed.symbol,
                 display_name=seed.display_name,
                 market=seed.market,
@@ -427,18 +625,19 @@ class MarketDiscoveryScanner:
                 reasons=self._reasons(features),
                 features=features,
                 evidence=sorted(seed.evidence, key=lambda e: (e.kind.value, e.url)),
-            ))
+                )
+            )
 
         accepted.sort(key=lambda item: (-item.score, item.symbol))
         accepted = accepted[: self.max_candidates]
-        accepted = [item.model_copy(update={"rank": idx + 1})
-                    for idx, item in enumerate(accepted)]
+        accepted = [item.model_copy(update={"rank": idx + 1}) for idx, item in enumerate(accepted)]
         return DiscoveryPool(
             market=market,
             as_of=now,
             candidates=accepted,
             rejected=sorted(rejected, key=lambda item: (item.symbol, item.reason)),
             source_count=len(seeds),
+            status="complete",
         )
 
     def _benchmark_return(self) -> float:
@@ -451,9 +650,7 @@ class MarketDiscoveryScanner:
             return 0.0
         return _return_20d(bars) if len(bars) >= 21 else 0.0
 
-    def _validate_seed(
-        self, seed: DiscoverySeed, market: str, now: datetime
-    ) -> Optional[str]:
+    def _validate_seed(self, seed: DiscoverySeed, market: str, now: datetime) -> Optional[str]:
         if seed.market != market:
             return f"seed market {seed.market} does not match scanner market {market}"
         if not self.instrument_validator(seed):
@@ -474,16 +671,20 @@ class MarketDiscoveryScanner:
     ) -> DiscoveryFeatures:
         trend = _return_20d(bars)
         event_hits = sum(
-            1 for item in news
-            if any(term in item.headline.lower() for term in _EVENT_TERMS)
+            1 for item in news if any(term in item.headline.lower() for term in _EVENT_TERMS)
         )
         structural = [
-            item.confidence for item in seed.evidence
-            if item.kind in {
+            item.confidence
+            for item in seed.evidence
+            if item.kind
+            in {
                 EvidenceKind.COMPANY,
                 EvidenceKind.FILING,
                 EvidenceKind.SUPPLY_CHAIN,
             }
+        ]
+        screen = [
+            item.confidence for item in seed.evidence if item.kind is EvidenceKind.MARKET_SCREEN
         ]
         return DiscoveryFeatures(
             adv20=_adv20(bars),
@@ -494,9 +695,11 @@ class MarketDiscoveryScanner:
             event_score=_clamp(event_hits / 3.0),
             moat_score=(sum(structural) / len(structural) if structural else 0.0),
             etf_change_score=(
-                1.0 if any(item.kind is EvidenceKind.ETF_CONSTITUENT
-                           for item in seed.evidence) else 0.0
+                1.0
+                if any(item.kind is EvidenceKind.ETF_CONSTITUENT for item in seed.evidence)
+                else 0.0
             ),
+            screen_score=(sum(screen) / len(screen) if screen else 0.0),
         )
 
     @staticmethod
@@ -505,13 +708,14 @@ class MarketDiscoveryScanner:
         relative = _clamp((features.relative_strength_20d_pct + 5.0) / 20.0)
         volume = _clamp((features.volume_ratio - 1.0) / 2.0)
         score = 100.0 * (
-            0.20 * trend
-            + 0.15 * relative
-            + 0.15 * volume
-            + 0.15 * features.news_heat
-            + 0.10 * features.event_score
+            0.18 * trend
+            + 0.14 * relative
+            + 0.13 * volume
+            + 0.12 * features.news_heat
+            + 0.08 * features.event_score
             + 0.20 * features.moat_score
             + 0.05 * features.etf_change_score
+            + 0.10 * features.screen_score
         )
         return round(score, 4)
 
@@ -529,4 +733,6 @@ class MarketDiscoveryScanner:
             reasons.append(f"event catalyst {features.event_score:.2f}")
         if features.etf_change_score > 0:
             reasons.append("ETF constituent-change evidence")
+        if features.screen_score > 0:
+            reasons.append(f"broad-market screen {features.screen_score:.2f}")
         return reasons

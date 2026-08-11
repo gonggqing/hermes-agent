@@ -669,7 +669,9 @@ def _risk_view(
 
 
 def _build_movers(
-    watch: dict[str, WatchState], lookup: Callable
+    watch: dict[str, WatchState],
+    lookup: Callable,
+    display_name_lookup: Optional[Callable[[str], str]] = None,
 ) -> tuple[MoversView, list[Mover]]:
     movers: list[Mover] = []
     for symbol in sorted(watch):
@@ -682,7 +684,11 @@ def _build_movers(
         movers.append(
             Mover(
                 symbol=symbol,
-                display_name=name_for(symbol),
+                display_name=(
+                    display_name_lookup(symbol)
+                    if display_name_lookup is not None
+                    else name_for(symbol)
+                ),
                 last=state.last,
                 dist_sma20_pct=dist20,
                 dist_sma50_pct=_dist_pct(state.last, state.sma50),
@@ -695,7 +701,15 @@ def _build_movers(
             )
         )
     top = sorted(movers, key=lambda m: (-m.dist_sma20_pct, m.symbol))[:TOP_MOVERS]
-    bottom = sorted(movers, key=lambda m: (m.dist_sma20_pct, m.symbol))[:TOP_MOVERS]
+    # A symbol cannot be both a leader and laggard in one snapshot.  The old
+    # top-five/bottom-five slices overlapped when a market had fewer than ten
+    # usable rows.
+    top_symbols = {row.symbol for row in top}
+    bottom = [
+        row
+        for row in sorted(movers, key=lambda m: (m.dist_sma20_pct, m.symbol))
+        if row.symbol not in top_symbols
+    ][:TOP_MOVERS]
     return MoversView(top=top, bottom=bottom), movers
 
 
@@ -925,6 +939,7 @@ def build_research_brief(
     discovery: Optional[DiscoveryPool] = None,
     currency: Optional[str] = None,
     additional_holdings: Optional[list[HoldingView]] = None,
+    display_name_lookup: Optional[Callable[[str], str]] = None,
 ) -> ResearchBrief:
     """Build the daily Investment Research brief (Loop.md §7 Phase 0.5).
 
@@ -969,7 +984,7 @@ def build_research_brief(
         risk = None  # research-only session: no account/positions to report
 
     watch = portfolio.watch if portfolio is not None else {}
-    movers, all_movers = _build_movers(watch, lookup)
+    movers, all_movers = _build_movers(watch, lookup, display_name_lookup)
     themes = _build_themes(watch, lookup)
     news_section = _build_news(news, now)
     holdings = _holding_views(portfolio, mode.value) if include_account else []

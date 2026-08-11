@@ -3883,6 +3883,8 @@ export interface FinanceResearchSynthesis {
       trading_date: string | null;
       freshness_status: string;
       regime: string | null;
+      headline?: string | null;
+      summary?: string | null;
     }
   >;
   shared_themes: {
@@ -3890,7 +3892,13 @@ export interface FinanceResearchSynthesis {
     cn_symbols: string[];
     hk_symbols: string[];
     evidence_urls: string[];
+    cn_strength_pct?: number | null;
+    hk_strength_pct?: number | null;
+    relationship?: string;
   }[];
+  headline?: string;
+  analysis?: string[];
+  watch_next?: string[];
   notes: string[];
 }
 
@@ -3922,6 +3930,8 @@ export interface FinanceDiscoveryPool {
   candidates: FinanceDiscoveryCandidate[];
   rejected: { symbol: string; reason: string }[];
   source_count: number;
+  status?: string;
+  notes?: string[];
 }
 
 // ── On-demand market-data types (Phase 0.75; trader/swing_trader/api.py) ─

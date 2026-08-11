@@ -2049,7 +2049,8 @@ export const en: Translations = {
       discoveryTitle: 'New opportunities discovered',
       discoveryDescription:
         'Collects newly discovered instruments and ranks follow-up research priority using evidence depth, trend, liquidity and theme relevance.',
-      discoveryEmpty: 'No validated symbols entered today’s discovery pool.',
+      discoveryEmpty: 'The dynamic scan completed, but no symbol earned a higher research priority this run.',
+      discoverySourceUnavailable: 'No broad-market universe was available; this is a source failure, not evidence that no opportunities exist.',
       discoveryScore: score => `research score ${score}`,
       discoveryReasons: 'Why it ranked',
       discoveryNoReasons: 'No granular scoring reasons were retained for this candidate.',

@@ -77,6 +77,8 @@ class ResearchSession:
         watchlist_lookup: Callable[[str], Optional[WatchlistItem]],
         trading_tz: ZoneInfo,
         index_symbols: Optional[list[str]] = None,
+        anchor_symbol: str = "",
+        vix_symbol: str = "",
         mode: Mode = Mode.PAPER,
         runtime: Optional[FinanceRuntime] = None,
         notify: Optional[Callable[[str], None]] = None,
@@ -99,9 +101,7 @@ class ResearchSession:
         self.trading_tz = trading_tz
         self.mode = mode
         self.runtime = runtime
-        self.notify = notify or (
-            lambda text: logger.info("cn notify", extra={"text": text[:200]})
-        )
+        self.notify = notify or (lambda text: logger.info("cn notify", extra={"text": text[:200]}))
         self.llm_analyst = llm_analyst
         self.knowledge = knowledge
         self.knowledge_index = knowledge_index
@@ -117,6 +117,10 @@ class ResearchSession:
             feed,
             index_symbols=index_symbols or [],
             breadth_symbols=symbols,
+            anchor_symbol=anchor_symbol,
+            vix_symbol=vix_symbol,
+            require_vix_for_risk_on=bool(vix_symbol),
+            clock=clock,
         )
         self.portfolio_monitor = PortfolioMonitor(feed, self._broker, symbols=symbols)
         self.news_monitor = NewsMonitor(feed)
@@ -134,33 +138,29 @@ class ResearchSession:
 
     def on_monitor(self) -> None:
         """CN 09:30 — poll monitors, ingest news, publish an early brief."""
-        try:
-            self._market = self.market_monitor.poll()
-        except Exception:  # a research session must never crash the process
-            logger.exception("cn market monitor failed")
-            self._market = None
         if self.discovery_scanner is not None:
             try:
                 self._discovery = self.discovery_scanner.scan(self.market_id)
             except Exception:
-                logger.exception("research discovery scan failed",
-                                 extra={"market": self.market_id})
+                logger.exception("research discovery scan failed", extra={"market": self.market_id})
                 self._discovery = None
-        discovered = [
-            row.symbol for row in (self._discovery.candidates if self._discovery else [])
-        ]
+        discovered = [row.symbol for row in (self._discovery.candidates if self._discovery else [])]
         research_symbols = list(dict.fromkeys([*self.symbols, *discovered]))
+        self.market_monitor.set_breadth_symbols(research_symbols)
+        try:
+            self._market = self.market_monitor.poll()
+        except Exception:  # a research session must never crash the process
+            logger.exception("research market monitor failed", extra={"market": self.market_id})
+            self._market = None
         try:
             self._portfolio = self.portfolio_monitor.poll(research_symbols)
         except Exception:
-            logger.exception("research portfolio monitor failed",
-                             extra={"market": self.market_id})
+            logger.exception("research portfolio monitor failed", extra={"market": self.market_id})
             self._portfolio = None
         try:
             self._news = self.news_monitor.poll(research_symbols)
         except Exception:
-            logger.exception("research news monitor failed",
-                             extra={"market": self.market_id})
+            logger.exception("research news monitor failed", extra={"market": self.market_id})
             self._news = None
         if self.runtime is not None and self._market is not None:
             market_dump = self._market.model_dump(mode="json")
@@ -218,10 +218,7 @@ class ResearchSession:
         self.on_research()
         if send:
             self.on_send()
-        ready = (
-            self.runtime is not None
-            and self.market_id.lower() in self.runtime.latest_briefs
-        )
+        ready = self.runtime is not None and self.market_id.lower() in self.runtime.latest_briefs
         return {
             "market": self.market_id,
             "market_label": self.market_label,
@@ -250,9 +247,7 @@ class ResearchSession:
         watch = self._portfolio.watch if self._portfolio else {}
         news_items = self._news_items()
         regime = self._market.risk_on_off if self._market else "neutral"
-        discovered = {
-            row.symbol for row in (self._discovery.candidates if self._discovery else [])
-        }
+        discovered = {row.symbol for row in (self._discovery.candidates if self._discovery else [])}
         analysis_symbols = list(dict.fromkeys([*self.symbols, *sorted(discovered)]))
         for symbol in analysis_symbols:
             if symbol not in discovered and watch.get(symbol) is None:
@@ -317,7 +312,8 @@ class ResearchSession:
                 now=self.clock(),
                 signals=list(self._signals),
                 candidates=[],  # report-only: the CN session never proposes orders
-                watchlist_lookup=self.watchlist_lookup,
+                watchlist_lookup=self._research_lookup,
+                display_name_lookup=self._display_name,
                 trading_tz=self.trading_tz,
                 include_account=False,
                 extra_uncertainty=[
@@ -340,15 +336,10 @@ class ResearchSession:
                 )
             elif self.runtime is not None:
                 previous = self.runtime.latest_briefs.get(self.market_id.lower())
-                if (
-                    isinstance(previous, dict)
-                    and previous.get("narrative") is not None
-                ):
+                if isinstance(previous, dict) and previous.get("narrative") is not None:
                     from swing_trader.brief import ResearchNarrative
 
-                    brief.narrative = ResearchNarrative.model_validate(
-                        previous["narrative"]
-                    )
+                    brief.narrative = ResearchNarrative.model_validate(previous["narrative"])
         except Exception:  # brief must never break the loop
             logger.exception("cn research brief build failed")
             return None
@@ -362,6 +353,39 @@ class ResearchSession:
             # 09:00/21:00 coordinator adds the primary-model narrative and is
             # the sole publisher to the durable brief/prediction ledgers.
         return brief
+
+    def _discovery_candidate(self, symbol: str):
+        if self._discovery is None:
+            return None
+        canonical = symbol.strip().upper()
+        return next(
+            (row for row in self._discovery.candidates if row.symbol.strip().upper() == canonical),
+            None,
+        )
+
+    def _research_lookup(self, symbol: str) -> Optional[WatchlistItem]:
+        """Metadata for static anchors plus this run's dynamic discoveries."""
+
+        static = self.watchlist_lookup(symbol)
+        if static is not None:
+            return static
+        candidate = self._discovery_candidate(symbol)
+        if candidate is None:
+            return None
+        from swing_trader.schemas import AiPhase, Role
+
+        return WatchlistItem(
+            symbol=candidate.symbol,
+            theme=candidate.theme,
+            ai_phase=AiPhase.NONE,
+            role=Role.ROTATION,
+        )
+
+    def _display_name(self, symbol: str) -> str:
+        from swing_trader.instrument_names import name_for
+
+        candidate = self._discovery_candidate(symbol)
+        return candidate.display_name if candidate is not None else name_for(symbol)
 
     def _ingest_news(self) -> None:
         """Archive CN news into the shared knowledge store (fail-closed)."""

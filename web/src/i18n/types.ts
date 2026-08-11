@@ -84,6 +84,9 @@ export interface FinanceTranslations {
       description: string;
       vix: string;
       breadth: string;
+      riskOn: string;
+      neutral: string;
+      riskOff: string;
       unavailable: string;
     };
     movers: {
@@ -110,6 +113,7 @@ export interface FinanceTranslations {
       title: string;
       description: string;
       empty: string;
+      sourceUnavailable: string;
       score: string;
       reasons: string;
       noReasons: string;

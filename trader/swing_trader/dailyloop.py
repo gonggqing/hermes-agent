@@ -719,6 +719,7 @@ class DailyLoop:
             clock=self.clock,
             anchor_symbol=anchor_symbol,
             vix_symbol=vix_symbol,
+            require_vix_for_risk_on=bool(vix_symbol),
         )
         self.portfolio_monitor = PortfolioMonitor(feed, broker, symbols=self.symbols,
                                                   clock=self.clock)

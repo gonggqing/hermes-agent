@@ -1723,6 +1723,7 @@ export interface Translations {
       discoveryTitle: string
       discoveryDescription: string
       discoveryEmpty: string
+      discoverySourceUnavailable: string
       discoveryScore: (score: string) => string
       discoveryReasons: string
       discoveryNoReasons: string

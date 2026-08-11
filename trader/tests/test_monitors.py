@@ -317,6 +317,20 @@ class TestMarketMonitor:
         assert snap.vix is None
         assert snap.risk_on_off == "neutral"
 
+    def test_market_without_volatility_index_uses_its_anchor_trend(self):
+        feed = FakeFeed(bars={"000001.SS": flat_bars("000001.SS", SPY_ABOVE)})
+        snap = MarketMonitor(
+            feed,
+            index_symbols=["000001.SS"],
+            breadth_symbols=[],
+            anchor_symbol="000001.SS",
+            vix_symbol="",
+            require_vix_for_risk_on=False,
+            clock=lambda: T0,
+        ).poll()
+        assert snap.vix is None
+        assert snap.risk_on_off == "risk_on"
+
     def test_failing_index_symbol_is_skipped(self):
         feed = FakeFeed(quotes={"^VIX": vix_quote(15.0)}, fail_bars={"SPY"})
         snap = market_monitor(feed).poll()

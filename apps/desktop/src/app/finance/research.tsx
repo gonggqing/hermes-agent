@@ -555,6 +555,9 @@ function SynthesisSection({ synthesis }: { synthesis: FinanceResearchBrief['cros
           </FinancePill>
         ))}
       </div>
+      {synthesis.headline && (
+        <p className="text-sm font-medium leading-6 text-foreground">{synthesis.headline}</p>
+      )}
       {synthesis.shared_themes.length === 0 ? (
         <div className="py-1 text-xs text-muted-foreground">{copy.synthesisEmpty}</div>
       ) : (
@@ -565,7 +568,19 @@ function SynthesisSection({ synthesis }: { synthesis: FinanceResearchBrief['cros
               <div className="mt-1 text-[0.62rem] text-muted-foreground">
                 CN {theme.cn_symbols.join(', ') || '—'} · HK {theme.hk_symbols.join(', ') || '—'}
               </div>
+              {theme.relationship && (
+                <p className="mt-2 text-xs leading-5 text-muted-foreground">{theme.relationship}</p>
+              )}
             </FinanceCard>
+          ))}
+        </div>
+      )}
+      {(synthesis.analysis?.length ?? 0) > 0 && (
+        <div className="space-y-3 border-t border-(--ui-stroke-tertiary) pt-3">
+          {synthesis.analysis!.slice(0, 2).map(paragraph => (
+            <p className="whitespace-pre-line text-xs leading-5 text-muted-foreground" key={paragraph}>
+              {paragraph}
+            </p>
           ))}
         </div>
       )}
@@ -580,7 +595,9 @@ function DiscoverySection({ pool }: { pool?: FinanceDiscoveryPool | null }) {
   return (
     <section className="space-y-2">
       <ExplainedSectionLabel description={copy.discoveryDescription}>{copy.discoveryTitle}</ExplainedSectionLabel>
-      {!pool || pool.candidates.length === 0 ? (
+      {pool && (pool.status === 'unavailable' || pool.source_count === 0) ? (
+        <div className="py-1 text-xs text-destructive">{copy.discoverySourceUnavailable}</div>
+      ) : !pool || pool.candidates.length === 0 ? (
         <div className="py-1 text-xs text-muted-foreground">{copy.discoveryEmpty}</div>
       ) : (
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
@@ -874,7 +891,7 @@ function RegimeSection({ regime }: { regime: FinanceRegimeView | null }) {
                 </div>
               </div>
             </FinanceCard>
-            <StatTile label={market.vix} value={fmtPrice(regime.vix)} />
+            {regime.vix !== null && <StatTile label={market.vix} value={fmtPrice(regime.vix)} />}
             <StatTile label={market.breadth} value={fmtPct(regime.breadth_pct_above_50dma)} />
           </div>
 
