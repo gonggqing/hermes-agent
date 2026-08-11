@@ -210,7 +210,7 @@ function NarrativeBrief({
                             {action.display_name}
                           </span>
                         )}
-                        <Badge variant="outline">
+                        <Badge tone="outline">
                           {copy.stances[action.stance] ?? action.stance}
                         </Badge>
                         <span className="text-xs text-text-tertiary">
