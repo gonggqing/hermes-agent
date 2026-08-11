@@ -85,12 +85,11 @@ _MARKET_LENSES = {
 def _default_complete(settings: LLMSettings, system: str, prompt: str) -> str:
     # Reasoning providers spend a substantial part of the output budget on
     # reasoning BEFORE emitting the JSON, and that reasoning counts against
-    # max_tokens. At 4800 the larger markets (US/HK/CN — many sections, dense
-    # zh-CN) truncated mid-object, so _extract_object found no complete JSON and
-    # the whole narrative was dropped. The isolated brief worker has a
-    # five-minute ceiling, so budget generously for reasoning + a full 4-7
-    # section report.
-    return http_complete(settings, system, prompt, max_tokens=12000)
+    # max_tokens. Production CN packets with 39 bounded signals have also used
+    # the entire 12k budget before closing the JSON object. The isolated brief
+    # worker has a five-minute ceiling, so reserve enough room for reasoning +
+    # one complete 4-7 section report rather than publishing a truncated draft.
+    return http_complete(settings, system, prompt, max_tokens=20000)
 
 
 def _compact_evidence(brief: ResearchBrief, market_id: str, market_label: str) -> dict:
