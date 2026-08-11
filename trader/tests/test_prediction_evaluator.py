@@ -15,6 +15,7 @@ from swing_trader.brief import (
 from swing_trader.datafeed import DataFeedError
 from swing_trader.interfaces import Bar, DataFeed
 from swing_trader.prediction_evaluator import (
+    PermanentUnscorable,
     PredictionCloseEvaluator,
     latest_closed_trading_date,
 )
@@ -125,6 +126,81 @@ def test_latest_closed_session_observes_market_delay_and_weekend():
     assert latest_closed_trading_date(
         "US", datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
     ) == date(2026, 7, 17)
+
+
+@pytest.mark.parametrize(
+    ("entity_key", "expected"),
+    [
+        ("EARNINGS:GEV/GOOGL/NOW", ("GEV", "GOOGL", "NOW")),
+        ("GEV-2026-07-22", ("GEV",)),
+        ("GOOGL-EARNINGS-2026-07-22", ("GOOGL",)),
+        ("META 2026-07-29 EARNINGS", ("META",)),
+    ],
+)
+def test_historical_event_labels_resolve_only_exact_listed_underlyings(
+    entity_key, expected
+):
+    assert PredictionCloseEvaluator._entity_symbols(
+        {"entity_type": "event", "entity_key": entity_key, "market": "US"},
+        {},
+    ) == expected
+
+
+@pytest.mark.parametrize(
+    "entity_key",
+    [
+        "EARNINGS-WEEK-2026-07-28-TO-2026-07-31",
+        "CXMT_IPO_2026",
+        "EARNINGS-2026-07-22",
+    ],
+)
+def test_generic_or_unlisted_event_labels_are_retired_without_feed_calls(entity_key):
+    with pytest.raises(PermanentUnscorable, match="no exact listed"):
+        PredictionCloseEvaluator._entity_symbols(
+            {"entity_type": "event", "entity_key": entity_key, "market": "US"},
+            {},
+        )
+
+
+def test_instrument_alias_and_pseudo_ticker_validation():
+    assert PredictionCloseEvaluator._entity_symbols(
+        {"entity_type": "instrument", "entity_key": "SOX", "market": "US"},
+        {},
+    ) == ("^SOX",)
+    with pytest.raises(PermanentUnscorable, match="not an exact"):
+        PredictionCloseEvaluator._entity_symbols(
+            {
+                "entity_type": "instrument",
+                "entity_key": "MSFT-2026-07-29",
+                "market": "US",
+            },
+            {},
+        )
+
+    assert PredictionCloseEvaluator._entity_symbols(
+        {"entity_type": "instrument", "entity_key": "HSI", "market": "HK"},
+        {},
+    ) == ("^HSI",)
+    assert PredictionCloseEvaluator._entity_symbols(
+        {
+            "entity_type": "event",
+            "entity_key": "0981.HK EARNINGS 2026-08-06",
+            "market": "HK",
+        },
+        {},
+    ) == ("0981.HK",)
+
+
+def test_theme_leaders_normalize_indices_and_drop_cross_market_or_labels():
+    assert PredictionCloseEvaluator._entity_symbols(
+        {"entity_type": "theme", "entity_key": "chips", "market": "US"},
+        {"payload_json": '{"leaders":["SOX","1211.HK","EARNINGS-WEEK"]}'},
+    ) == ("^SOX",)
+    with pytest.raises(PermanentUnscorable, match="no price representation"):
+        PredictionCloseEvaluator._entity_symbols(
+            {"entity_type": "theme", "entity_key": "cross-market", "market": "US"},
+            {"payload_json": '{"leaders":["1211.HK","1810.HK"]}'},
+        )
 
 
 def test_close_worker_scores_due_paths_and_aggregate_is_idempotent(tmp_path):

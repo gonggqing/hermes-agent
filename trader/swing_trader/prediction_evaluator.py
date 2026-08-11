@@ -8,6 +8,7 @@ ledger. It never creates candidates, approvals, orders, fills, or FX actions.
 from __future__ import annotations
 
 import json
+import re
 import threading
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
@@ -51,9 +52,91 @@ MARKET_CLOSE_READY = {
     "KR": time(16, 0),
 }
 
+_INDEX_ALIASES = {
+    ("US", "SOX"): "^SOX",
+    ("HK", "HSI"): "^HSI",
+    ("HK", "HSTECH"): "^HSTECH",
+    ("KR", "KOSPI"): "^KS11",
+}
+_EVENT_WORDS = {
+    "ANNOUNCEMENT",
+    "CALL",
+    "EARNINGS",
+    "EVENT",
+    "IPO",
+    "RESULT",
+    "RESULTS",
+    "TO",
+    "WEEK",
+}
+_DATE_FRAGMENT_RE = re.compile(r"(?:19|20)\d{2}(?:[-_/ ]\d{1,2}){0,2}")
+_SYMBOL_TOKEN_RE = re.compile(
+    r"(?<![A-Z0-9])(?:\^[A-Z0-9]{1,10}|[A-Z0-9][A-Z0-9]{0,9}"
+    r"(?:-[A-Z])?(?:\.(?:HK|KS|KQ|SS|SZ|BJ))?)(?![A-Z0-9])"
+)
+
 
 class PermanentUnscorable(ValueError):
     """The claim has no deterministic price representation."""
+
+
+def _is_price_symbol(symbol: str, market: str) -> bool:
+    """Return whether ``symbol`` is an exact ticker for the claim market.
+
+    Forecast prose sometimes supplied event labels such as
+    ``GOOGL-EARNINGS-2026-07-22`` as if they were tickers.  Those strings can
+    never produce a price series and must be retired as permanently
+    unscorable instead of retrying Yahoo on every restart.
+    """
+    if not symbol or _DATE_FRAGMENT_RE.search(symbol):
+        return False
+    if any(char in symbol for char in (" ", ":", "/", "_")):
+        return False
+    if not re.fullmatch(
+        r"(?:\^[A-Z0-9]{1,10}|[A-Z0-9]{1,10}(?:-[A-Z])?"
+        r"(?:\.(?:HK|KS|KQ|SS|SZ|BJ))?)",
+        symbol,
+    ):
+        return False
+    suffix = symbol.rsplit(".", 1)[-1] if "." in symbol else ""
+    if market == "CN":
+        return suffix in {"SS", "SZ", "BJ"}
+    if market == "HK":
+        return suffix == "HK" or symbol.startswith("^")
+    if market == "KR":
+        return suffix in {"KS", "KQ"} or symbol.startswith("^")
+    if market == "US":
+        return suffix not in {"HK", "KS", "KQ", "SS", "SZ", "BJ"}
+    return False
+
+
+def _event_symbols(entity_key: str, market: str) -> tuple[str, ...]:
+    """Extract listed underlyings from a historical event identifier.
+
+    New prompts require one exact ticker per event claim, but old append-only
+    records used forms such as ``EARNINGS:GEV/GOOGL/NOW`` and
+    ``META-2026-07-29-EARNINGS``.  Resolve only unambiguous listed tickers;
+    generic calendar labels and IPO names without a market ticker remain
+    auditable ``unscorable`` observations.
+    """
+    cleaned = _DATE_FRAGMENT_RE.sub(" ", entity_key.upper())
+    tokens = [
+        token
+        for token in _SYMBOL_TOKEN_RE.findall(cleaned)
+        if token not in _EVENT_WORDS
+    ]
+    if "IPO" in entity_key.upper():
+        # A company name around an IPO is not evidence that a listed ticker
+        # exists.  Require the exchange suffix outside the US market; US IPO
+        # labels are likewise not accepted until the claim names a plain exact
+        # instrument instead of an event alias.
+        return ()
+    symbols: list[str] = []
+    for token in tokens:
+        symbol = _INDEX_ALIASES.get((market, token), token)
+        if _is_price_symbol(symbol, market) and symbol not in symbols:
+            symbols.append(symbol)
+    return tuple(symbols)
 
 
 @dataclass(frozen=True)
@@ -272,8 +355,21 @@ class PredictionCloseEvaluator:
     def _entity_symbols(series: dict[str, Any], revision: dict[str, Any]) -> tuple[str, ...]:
         entity_type = str(series["entity_type"]).lower()
         entity_key = str(series["entity_key"]).strip().upper()
-        if entity_type in {"instrument", "event"} and entity_key:
-            return (entity_key,)
+        market = str(series["market"]).upper()
+        if entity_type == "instrument" and entity_key:
+            symbol = _INDEX_ALIASES.get((market, entity_key), entity_key)
+            if not _is_price_symbol(symbol, market):
+                raise PermanentUnscorable(
+                    f"instrument claim {entity_key!r} is not an exact {market} ticker"
+                )
+            return (symbol,)
+        if entity_type == "event" and entity_key:
+            symbols = _event_symbols(entity_key, market)
+            if symbols:
+                return symbols
+            raise PermanentUnscorable(
+                f"event claim {entity_key!r} has no exact listed {market} ticker"
+            )
         if entity_type == "market":
             proxy = revision.get("benchmark") or MARKET_PROXIES.get(series["market"].upper())
             if proxy:
@@ -285,12 +381,16 @@ class PredictionCloseEvaluator:
                 payload = {}
             leaders = payload.get("leaders") if isinstance(payload, dict) else None
             symbols = tuple(
-                str(symbol).strip().upper()
-                for symbol in (leaders or [])
-                if str(symbol).strip()
+                normalized
+                for raw in (leaders or [])
+                if (normalized := _INDEX_ALIASES.get(
+                    (market, str(raw).strip().upper()),
+                    str(raw).strip().upper(),
+                ))
+                and _is_price_symbol(normalized, market)
             )
             if symbols:
-                return symbols
+                return tuple(dict.fromkeys(symbols))
         raise PermanentUnscorable(
             f"{entity_type or 'unknown'} claim {entity_key!r} has no price representation"
         )
