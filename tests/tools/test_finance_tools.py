@@ -94,17 +94,19 @@ def test_finance_toolset_registered_and_read_only():
     names = set(registry.get_tool_names_for_toolset("finance"))
     assert names == {
         "get_quote", "get_kline", "analyze_symbol",
-        "research_brief", "search_research", "account_view",
-        # Phase 0.9 portfolio: read + DRAFT-ONLY (no confirm/place tool).
+        "research_brief", "refresh_research", "research_history",
+        "search_research", "account_view",
+        # Portfolio access is read-only. Draft handlers remain available to
+        # authenticated Finance surfaces, but are deliberately not model tools.
         "portfolio_accounts", "portfolio_holdings", "portfolio_valuation",
-        "draft_portfolio_trade", "draft_close_position",
     }
-    # HARD guardrail (Loop.md §3/§8, P0.9 boundary #4/#8): the toolset exposes NO
-    # write/order/approve capability AND no portfolio-CONFIRM/mutate tool — the
-    # LLM may only draft; a human confirms on an authenticated surface.
+    # HARD guardrail: the general agent exposes no portfolio mutation,
+    # order-placement, approval, or confirmation capability.
     forbidden = {"place_order", "approve", "approve_candidate", "cancel_order",
                  "submit_order", "execute", "confirm_portfolio_event",
                  "confirm_draft", "update_position", "commit_portfolio"}
+    assert "draft_portfolio_trade" not in names
+    assert "draft_close_position" not in names
     assert not (names & forbidden)
     for n in names:
         entry = registry.get_entry(n)
