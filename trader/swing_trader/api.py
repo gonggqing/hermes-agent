@@ -857,7 +857,7 @@ def create_app(runtime: FinanceRuntime):
         now — the manual recovery button for a market the twice-daily cycle
         missed. Read-only research output (no orders), so NOT human-gated.
         Runs in the BACKGROUND on the brief worker; the tab's poll picks up the
-        new narrative when it lands (~1-3 min). Unlike /research/run this also
+        new narrative when it lands (~2-5 min). Unlike /research/run this also
         rewrites the LLM narrative, and it bypasses the 4h freshness guard so a
         deliberate click always regenerates. 503 if the brief worker is off."""
         coordinator = runtime.brief_coordinator
@@ -874,7 +874,7 @@ def create_app(runtime: FinanceRuntime):
         return {
             "status": "started" if started else "already_running",
             "market": key,
-            "note": "regenerating brief in the background (~1-3 min)",
+            "note": "regenerating brief in the background (~2-5 min)",
         }
 
     @app.get(f"/{API_VERSION}/research/synthesis")

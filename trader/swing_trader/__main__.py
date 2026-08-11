@@ -514,11 +514,12 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         brief_writer = ResearchBriefWriter(
             replace(
                 brief_llm_settings,
-                # Primary reasoning models need materially longer than the
-                # compact search/extraction tier to synthesize a cited 4-7
-                # section report. This runs on the isolated brief worker, so
-                # the larger bound cannot delay Telegram or order execution.
-                timeout=max(180.0, brief_llm_settings.timeout),
+                # The full cross-industry CN packet contains dozens of bounded
+                # signals. MiniMax-M3 has exceeded 180s on a valid 39-signal
+                # packet, so retain a five-minute ceiling rather than dropping
+                # evidence or using a weaker model. This isolated worker cannot
+                # delay Telegram callbacks or order execution.
+                timeout=max(300.0, brief_llm_settings.timeout),
             ),
             history_loader=lambda market, before, limit: (
                 runtime.brief_store.get_recent_distinct(

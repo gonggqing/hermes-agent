@@ -87,8 +87,9 @@ def _default_complete(settings: LLMSettings, system: str, prompt: str) -> str:
     # reasoning BEFORE emitting the JSON, and that reasoning counts against
     # max_tokens. At 4800 the larger markets (US/HK/CN — many sections, dense
     # zh-CN) truncated mid-object, so _extract_object found no complete JSON and
-    # the whole narrative was dropped. The 180s brief-worker timeout leaves
-    # ample room, so budget generously for reasoning + a full 4-7 section report.
+    # the whole narrative was dropped. The isolated brief worker has a
+    # five-minute ceiling, so budget generously for reasoning + a full 4-7
+    # section report.
     return http_complete(settings, system, prompt, max_tokens=12000)
 
 
