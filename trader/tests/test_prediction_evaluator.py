@@ -104,6 +104,10 @@ class _Feed(DataFeed):
                 _bar("SPY", 16, 100.0, high=101.0, low=99.0),
                 _bar("SPY", 17, 102.0, high=103.0, low=98.0),
             ],
+            "^SOX": [
+                _bar("^SOX", 16, 100.0, high=101.0, low=99.0),
+                _bar("^SOX", 17, 103.0, high=104.0, low=98.0),
+            ],
         }.get(symbol)
         if rows is None:
             raise DataFeedError(f"no {symbol}")
@@ -244,3 +248,17 @@ def test_missing_close_is_deferred_not_scored_as_failure(tmp_path):
     summary = ledger.aggregate_statistics(due_as_of="2026-07-17")
     assert summary["overview"]["evaluated_checkpoints"] == 0
     assert summary["overview"]["due_checkpoints"] == 2
+
+
+def test_benchmark_index_alias_is_normalized_before_feed_lookup(tmp_path):
+    ledger = PredictionLedger(f"sqlite:///{tmp_path / 'predictions.db'}")
+    brief = _brief()
+    brief.narrative.claims[0].benchmark = "SOX"
+    ledger.record_brief("us", brief)
+    feed = _Feed()
+
+    report = PredictionCloseEvaluator(ledger, feed).run_market("us", "2026-07-17")
+
+    assert report.evaluated == 2
+    assert "^SOX" in feed.calls
+    assert "SOX" not in feed.calls

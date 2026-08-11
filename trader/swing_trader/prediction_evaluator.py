@@ -322,7 +322,10 @@ class PredictionCloseEvaluator:
             ),
         )
 
-        benchmark_symbol = revision.get("benchmark") or MARKET_PROXIES[market]
+        raw_benchmark = str(
+            revision.get("benchmark") or MARKET_PROXIES[market]
+        ).strip().upper()
+        benchmark_symbol = _INDEX_ALIASES.get((market, raw_benchmark), raw_benchmark)
         benchmark_return = None
         if benchmark_symbol and benchmark_symbol not in symbols:
             benchmark_return = self._basket_path(
