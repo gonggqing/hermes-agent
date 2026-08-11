@@ -17,9 +17,11 @@ from fastapi.testclient import TestClient
 
 from swing_trader.api import FinanceRuntime, create_app
 from swing_trader.dailyloop import DailyLoop, TelegramSurfaceAdapter
+from swing_trader.decision import DecisionParams, RuleBasedDecisionCore
 from swing_trader.ledger import Ledger
 from swing_trader.paper_broker import PaperBroker
-from swing_trader.schemas import CandidateStatus, Mode, OrderType, Side
+from swing_trader.risk import RiskParams
+from swing_trader.schemas import CandidateStatus, Mode, OrderType, Role, Side
 from swing_trader.simulate import (
     MutableClock,
     SimFeed,
@@ -91,9 +93,24 @@ def e2e(tmp_path_factory):
     telegram = TelegramSurfaceAdapter(transport, chat_id="42",
                                       allowed_users={"gongqing"})
     reports: list[str] = []
+    # This fixture must exercise both fills and the day-12 crash stop. Its
+    # synthetic bars only trade 0.4% below the prior close, while production's
+    # default entry discount is 0.5%, and the default take-profit exits before
+    # the crash. Keep production defaults untouched; tune only this simulation
+    # so the intended end-to-end states are reachable and deterministic.
+    decision = RuleBasedDecisionCore(
+        params=DecisionParams(entry_limit_discount_pct=0.3, tp_atr_mult=15.0)
+    )
+    risk_params = RiskParams(role_caps={
+        Role.CORE: 60.0,
+        Role.CONVICTION: 60.0,
+        Role.ROTATION: 60.0,
+        Role.HEDGE: 60.0,
+    })
     loop = DailyLoop(feed, broker, ledger, symbols=SYMBOLS, clock=clock,
                      runtime=runtime, telegram=telegram,
-                     notify=reports.append)
+                     notify=reports.append, decision_core=decision,
+                     risk_params=risk_params)
     client = TestClient(create_app(runtime))
 
     morning: list[str] = []

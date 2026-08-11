@@ -198,6 +198,63 @@ def test_execution_rechecks_cn_grid_lot_and_session_after_approval(tmp_path):
     assert len(report.placed) == 1
 
 
+def test_cn_approved_bracket_runs_through_t_plus_one_protection(tmp_path):
+    symbol = "510300.SS"
+    broker = PaperBroker(
+        starting_cash=1,
+        starting_cash_by_currency={"CNY": 100_000},
+        base_currency="CNY",
+        apply_cn_fees=True,
+    )
+    ledger = Ledger(url=f"sqlite:///{tmp_path / 'cn-lifecycle.db'}")
+    engine = ExecutionEngine(broker, ledger, mode=Mode.PAPER)
+    candidate = CandidateOrder(
+        symbol=symbol,
+        market="CN",
+        side=Side.BUY,
+        qty=100,
+        order_type=OrderType.BRACKET,
+        limit=4.500,
+        stop=4.300,
+        tp=4.800,
+        tif=TimeInForce.DAY,
+        rationale="grounded mainland paper test",
+        confidence=0.8,
+        ref_px=4.520,
+        status=CandidateStatus.APPROVED,
+    )
+    ledger.record_candidate(candidate, Mode.PAPER)
+
+    report = engine.execute([candidate], {symbol: 4.520}, _cn(10, 30))
+    assert len(report.placed) == 1
+
+    entry_bar = _bar(symbol, ts=_cn(13, 0), px=4.5)
+    entry_fills = broker.step({symbol: entry_bar}, execution_ts=_cn(13, 0))
+    assert len(entry_fills) == 1 and entry_fills[0].side is Side.BUY
+    assert broker.get_positions()[0].qty == 100
+
+    # The stop is live immediately for audit/protection, but A-share shares
+    # bought today are not sellable. A same-day stop-cross therefore cannot
+    # fabricate an illegal round trip.
+    stop_bar = _bar(symbol, ts=_cn(14, 0), px=4.2)
+    assert broker.step({symbol: stop_bar}, execution_ts=_cn(14, 0)) == []
+    assert broker.get_positions()[0].qty == 100
+
+    exit_fills = broker.step(
+        {symbol: _bar(symbol, ts=_cn(9, 35, day=12), px=4.2)},
+        execution_ts=_cn(9, 35, day=12),
+    )
+    assert len(exit_fills) == 1 and exit_fills[0].side is Side.SELL
+    assert broker.get_positions() == []
+    child_states = {
+        order.order_type: order.status
+        for order in broker.get_orders()
+        if order.parent_order_id
+    }
+    assert child_states[OrderType.STP] is OrderStatus.FILLED
+    assert child_states[OrderType.LMT] is OrderStatus.CANCELLED
+
+
 def test_cn_discretionary_exit_is_day_limit_not_unsupported_moc():
     symbol = "600519.SS"
     signal = Signal(

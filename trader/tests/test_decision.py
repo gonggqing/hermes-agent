@@ -23,10 +23,17 @@ from swing_trader.schemas import (
 )
 
 
-def sig(symbol="NVDA", direction=Direction.LONG, conf=0.7, thesis="debate synthesis"):
+def sig(
+    symbol="NVDA",
+    direction=Direction.LONG,
+    conf=0.7,
+    thesis="debate synthesis",
+    features=None,
+):
     return Signal(
         source_agent="debate", symbol=symbol, thesis=thesis,
         direction=direction, confidence=conf,
+        features_json=features or {},
     )
 
 
@@ -36,6 +43,18 @@ def view(symbol="NVDA", last=100.0, atr=4.0, pool=Role.CONVICTION):
 
 def account(equity=2000.0, cash=2000.0):
     return AccountSnapshot(mode=Mode.PAPER, equity=equity, cash=cash)
+
+
+def cn_account(equity=100_000.0, cash=100_000.0):
+    return AccountSnapshot(
+        mode=Mode.PAPER,
+        equity=equity,
+        cash=cash,
+        base_currency="CNY",
+        cash_by_currency={"CNY": cash},
+        equity_by_currency={"CNY": equity},
+        fx_to_base={"CNY": 1.0},
+    )
 
 
 def core(**kw) -> RuleBasedDecisionCore:
@@ -129,6 +148,42 @@ class TestEntries:
         out = core().propose(signals, views, account(equity=50_000, cash=50_000), [])
         assert len(out) == 3
         assert [c.symbol for c in out] == ["MU", "TSM", "ANET"]  # sorted by conf
+
+    def test_mainland_entry_requires_grounded_nontechnical_support(self):
+        technical_only = sig(
+            "510300.SS",
+            features={"nontechnical_long_sources": []},
+        )
+        supported = sig(
+            "510300.SS",
+            features={"nontechnical_long_sources": ["fundamental"]},
+        )
+        views = {"510300.SS": view("510300.SS", last=4.7, atr=2.0)}
+        cn_core = core(market_id="CN")
+
+        assert cn_core.propose([technical_only], views, cn_account(), []) == []
+        out = cn_core.propose([supported], views, cn_account(), [])
+        assert len(out) == 1
+        assert out[0].qty % 100 == 0
+
+    def test_mainland_exit_does_not_require_nontechnical_support(self):
+        held = [Position(symbol="510300.SS", qty=400, avg_px=4.6)]
+        signal = sig(
+            "510300.SS",
+            direction=Direction.SHORT,
+            features={"nontechnical_long_sources": []},
+        )
+
+        out = core(market_id="CN").propose(
+            [signal],
+            {"510300.SS": view("510300.SS", last=4.5)},
+            cn_account(),
+            held,
+        )
+
+        assert len(out) == 1
+        assert out[0].side is Side.SELL
+        assert out[0].order_type is OrderType.LMT
 
     def test_all_candidates_validate_protection(self):
         """Every generated entry satisfies the §4 never-naked invariant."""

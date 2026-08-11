@@ -59,6 +59,9 @@ def test_healthy_decide_allows_entries_and_publishes_status(loop_env):
     assert runtime.health.level is HealthLevel.OK
     assert runtime.health.entries_allowed is True
     assert loop._health.entries_allowed is True
+    candidates = loop.ledger.get_candidates()
+    assert candidates
+    assert all(candidate.ts == clock.now for candidate in candidates)
     # No halt alert when healthy.
     assert not any("dead-man" in r for r in reports)
 

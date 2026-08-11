@@ -45,6 +45,8 @@ Requirements:
 - News items carry publication time, age, source quality and prior-brief recurrence. A repeated headline is not a new catalyst. Never describe a recurring article as "news accumulating"; say it adds no new information unless a distinct supplied update changes the thesis.
 - Explain relationships: what is driving the tape, whether breadth confirms the index, whether themes and movers agree, what fresh news/signals change the thesis, where evidence conflicts, and what deserves follow-up.
 - Extract the useful conclusion from every populated module: regime, portfolio risk when present, movers, themes, discovery, news, signals, events, and uncertainty. Do not mechanically repeat every number or count.
+- Respect account boundaries in the evidence packet. `portfolio_risk` is the isolated paper-execution sleeve when mode=paper; `current_holdings` are read-only live-account context. They are intentionally different accounts, never a reconciliation conflict. Analyze live holdings for the investor, and use paper cash/risk only when discussing simulated order capacity.
+- A discovery row with `theme_verified=false` was sampled from an unverified upstream category bucket. You may discuss the instrument's measured price/volume evidence, but must not claim that bucket is the company's real industry, business model, supply chain, or investment theme.
 - Distinguish observed facts from your inference. Mention concrete symbols, themes and figures when they support a conclusion.
 - A discovery score is only a research-priority input. Do not describe operational checks, approval status, or screening gates in the prose.
 - If evidence is missing or contradictory, say exactly how that limits the conclusion. Do not pad the report with generic disclaimers.
@@ -117,6 +119,17 @@ def _compact_evidence(brief: ResearchBrief, market_id: str, market_label: str) -
         "trading_date": brief.trading_date,
         "as_of": brief.as_of.isoformat(),
         "mode": brief.mode.value,
+        "account_boundaries": {
+            "portfolio_risk_scope": (
+                "isolated paper execution sleeve; governs simulated order capacity"
+                if brief.mode.value == "paper"
+                else "execution account risk"
+            ),
+            "current_holdings_scope": (
+                "read-only live accounts; investor portfolio context, not paper broker state"
+            ),
+            "must_not_reconcile_together": brief.mode.value == "paper",
+        },
         "freshness": brief.freshness.model_dump(mode="json"),
         "regime": brief.regime.model_dump(mode="json") if brief.regime else None,
         "portfolio_risk": brief.risk.model_dump(mode="json") if brief.risk else None,
@@ -283,8 +296,12 @@ def _validate_action_views(rows: list, brief: ResearchBrief) -> list[ThesisActio
     code instead of trusting prompt compliance.
     """
 
-    discovery_symbols = {
-        row.symbol for row in (brief.discovery.candidates if brief.discovery else [])
+    discovery_rows = brief.discovery.candidates if brief.discovery else []
+    discovery_symbols = {row.symbol for row in discovery_rows}
+    discovery_nontechnical_support = {
+        row.symbol
+        for row in discovery_rows
+        if any(item.kind.value != "market_screen" for item in row.evidence)
     }
     allowed_symbols = {
         *(row.symbol for row in brief.holdings),
@@ -321,7 +338,7 @@ def _validate_action_views(rows: list, brief: ResearchBrief) -> list[ThesisActio
         if action.symbol not in allowed_symbols:
             raise ValueError(f"action symbol not present in evidence: {action.symbol}")
         if action.stance == "buy_on_confirmation" and not (
-            action.symbol in discovery_symbols
+            action.symbol in discovery_nontechnical_support
             or action.symbol in fresh_positive_news
             or signal_support.get(action.symbol)
         ):

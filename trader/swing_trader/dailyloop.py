@@ -924,10 +924,16 @@ class DailyLoop:
             earnings_symbols={e.symbol for e in self._earnings
                               if getattr(e, "imminent", False)},
         )
-        # Stamp every candidate with this loop's market so it is scoped away
-        # from any other concurrent session sharing the same paper `mode`.
+        # Stamp every candidate with this loop's market AND trading clock. The
+        # pydantic default uses the process wall clock, which is correct in
+        # production but makes replay/backtest candidates belong to whichever
+        # real calendar day the simulation happened to run. Confirmation,
+        # recovery and expiry all key off this timestamp, so session time is
+        # the only authoritative value here.
+        candidate_ts = self.clock()
         candidates = [
-            c.model_copy(update={"market": self.market_id}) for c in candidates
+            c.model_copy(update={"market": self.market_id, "ts": candidate_ts})
+            for c in candidates
         ]
 
         self._risk_approved = []

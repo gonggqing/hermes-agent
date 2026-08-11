@@ -94,6 +94,7 @@ def make_signal(
     thesis: str = "t",
     source: str = "technical",
     symbol: str = "TEST",
+    features: dict | None = None,
 ) -> Signal:
     return Signal(
         source_agent=source,
@@ -101,6 +102,7 @@ def make_signal(
         thesis=thesis,
         direction=direction,
         confidence=confidence,
+        features_json=features or {},
     )
 
 
@@ -459,6 +461,34 @@ class TestDebateAgent:
         assert sig.confidence == pytest.approx(0.8)
         assert sig.features_json["net_weight"] == pytest.approx(1.0)
         assert sig.features_json["disagreement_penalty"] == 0.0
+
+    def test_tracks_only_grounded_nontechnical_long_sources(self) -> None:
+        signals = [
+            make_signal(Direction.LONG, 0.8, source="technical"),
+            make_signal(Direction.LONG, 0.7, source="fundamental"),
+            make_signal(
+                Direction.LONG,
+                0.6,
+                source="llm:fast",
+                features={"n_research": 2},
+            ),
+            make_signal(Direction.LONG, 0.5, source="llm:ungrounded"),
+            make_signal(Direction.SHORT, 0.4, source="sentiment"),
+        ]
+
+        debated = DebateAgent().debate("TEST", signals)
+
+        assert debated.features_json["source_agents"] == [
+            "technical",
+            "fundamental",
+            "llm:fast",
+            "llm:ungrounded",
+            "sentiment",
+        ]
+        assert debated.features_json["nontechnical_long_sources"] == [
+            "fundamental",
+            "llm:fast",
+        ]
 
     def test_majority_long_no_penalty_at_boundary(self) -> None:
         # long share 0.8, short share 0.2 (NOT > 0.2 -> no penalty)

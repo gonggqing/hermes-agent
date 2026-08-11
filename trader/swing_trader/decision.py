@@ -229,6 +229,15 @@ class RuleBasedDecisionCore:
             confidence = self._memory_adjusted_confidence(sig)
             if confidence < p.min_entry_confidence:
                 continue
+            if self.market_id == "CN" and not sig.features_json.get(
+                "nontechnical_long_sources"
+            ):
+                # Mainland discovery starts from public market screens. Price
+                # and volume alignment is useful for research priority, but is
+                # not enough to spend simulated capital: require a dated
+                # research/news/fundamental voice in the debate before
+                # generating a human-confirmable order.
+                continue
 
             raw_entry = view.last * (1 - p.entry_limit_discount_pct / 100.0)
             atr_dollars = view.last * view.atr_pct / 100.0

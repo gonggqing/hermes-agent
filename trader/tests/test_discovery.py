@@ -233,6 +233,8 @@ def test_sina_fallback_selects_live_leader_per_industry_not_fixed_tickers():
     seeds = provider.seeds("CN", NOW)
     assert [row.symbol for row in seeds] == ["300308.SZ", "600055.SS"]
     assert [row.theme for row in seeds] == ["A股/机械行业", "A股/医疗器械"]
+    assert all(row.theme_verified is False for row in seeds)
+    assert all("不代表公司主营归属" in row.relationship for row in seeds)
     assert all(row.evidence[0].source == "新浪财经行业行情" for row in seeds)
     assert provider.seeds("US", NOW) == []
 

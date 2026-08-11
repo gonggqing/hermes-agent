@@ -12,6 +12,13 @@ from swing_trader.brief import (
     SignalView,
 )
 from swing_trader.brief_writer import ResearchBriefWriter
+from swing_trader.discovery import (
+    DiscoveryCandidate,
+    DiscoveryEvidence,
+    DiscoveryFeatures,
+    DiscoveryPool,
+    EvidenceKind,
+)
 from swing_trader.llm import LLMSettings
 from swing_trader.schemas import Mode
 
@@ -93,6 +100,8 @@ def test_writer_returns_valid_market_specific_narrative_and_caches() -> None:
     assert "A-share brief" in calls[0]
     assert '"id": "CN"' in calls[0]
     assert '"freshness"' in calls[0] and '"uncertainty"' in calls[0]
+    assert '"must_not_reconcile_together": true' in calls[0]
+    assert "read-only live accounts" in calls[0]
     assert SETTINGS.api_key not in calls[0]
 
 
@@ -231,3 +240,62 @@ def test_writer_rejects_technical_only_buy_guidance() -> None:
     )
 
     assert writer.write(_brief(), market_id="CN", market_label="Mainland China") is None
+
+
+def test_writer_rejects_market_screen_only_discovery_buy_guidance() -> None:
+    evidence = DiscoveryEvidence(
+        kind=EvidenceKind.MARKET_SCREEN,
+        source="live screen",
+        url="https://example.test/screen",
+        observed_at=NOW,
+        summary="turnover and trend screen",
+        confidence=0.7,
+    )
+    candidate = DiscoveryCandidate(
+        symbol="SCREEN.SS",
+        display_name="筛选标的",
+        market="CN",
+        exchange="SSE",
+        currency="CNY",
+        theme="A股/旧分类",
+        theme_verified=False,
+        component="旧分类",
+        relationship="仅为动态行情抽样",
+        score=72,
+        rank=1,
+        reasons=["成交活跃"],
+        features=DiscoveryFeatures(
+            adv20=1_000_000,
+            volume_ratio=2,
+            trend_20d_pct=8,
+            relative_strength_20d_pct=5,
+            news_heat=0,
+            event_score=0,
+            moat_score=0,
+            etf_change_score=0,
+        ),
+        evidence=[evidence],
+    )
+    brief = _brief().model_copy(
+        update={
+            "discovery": DiscoveryPool(
+                market="CN",
+                as_of=NOW,
+                source_count=1,
+                candidates=[candidate],
+            )
+        }
+    )
+    bad = (
+        _reply()
+        .replace('"symbol": "TEST"', '"symbol": "SCREEN.SS"')
+        .replace('"display_name": "测试标的"', '"display_name": "筛选标的"')
+        .replace('"stance": "watch"', '"stance": "buy_on_confirmation"')
+    )
+
+    writer = ResearchBriefWriter(
+        SETTINGS,
+        complete=lambda _settings, _system, _prompt: bad,
+    )
+
+    assert writer.write(brief, market_id="CN", market_label="Mainland China") is None

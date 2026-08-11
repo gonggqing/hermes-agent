@@ -87,6 +87,11 @@ class DiscoverySeed(BaseModel):
     exchange: str = Field(min_length=1, max_length=32)
     currency: str = Field(min_length=3, max_length=3)
     theme: str = Field(min_length=1, max_length=120)
+    # ``False`` means the label is only the upstream screener bucket used to
+    # diversify coverage, not a verified statement about the issuer's actual
+    # industry. Sina's legacy nodes are useful for breadth but contain known
+    # stale classifications (for example mining companies in retail buckets).
+    theme_verified: bool = True
     component: str = Field(min_length=1, max_length=160)
     relationship: str = Field(min_length=1, max_length=500)
     instrument_resolved: bool = True
@@ -124,6 +129,7 @@ class DiscoveryCandidate(BaseModel):
     exchange: str
     currency: str
     theme: str
+    theme_verified: bool = True
     component: str
     relationship: str
     score: float = Field(ge=0.0, le=100.0)
@@ -460,7 +466,8 @@ class SinaIndustryUniverse:
                 continue
             symbol, exchange = resolved
             relationship = (
-                f"新浪行业成交额动态样本；{industry}当前成交活跃标的，"
+                f"新浪旧版{industry}节点的成交额动态样本；该节点仅用于分散抽样，"
+                "未经交易所/上市公司协会行业分类交叉验证，不代表公司主营归属；"
                 f"成交额 {turnover / 1e8:.1f} 亿元，当日涨跌 {daily:+.1f}%"
             )
             return DiscoverySeed(
@@ -470,6 +477,7 @@ class SinaIndustryUniverse:
                 exchange=exchange,
                 currency="CNY",
                 theme=f"A股/{industry}",
+                theme_verified=False,
                 component=industry,
                 relationship=relationship,
                 evidence=[DiscoveryEvidence(
@@ -769,6 +777,7 @@ class MarketDiscoveryScanner:
                 exchange=seed.exchange,
                 currency=seed.currency,
                 theme=seed.theme,
+                theme_verified=seed.theme_verified,
                 component=seed.component,
                 relationship=seed.relationship,
                 score=score,

@@ -552,6 +552,22 @@ class DebateAgent:
         # says which day's prices it rests on, even though the debate itself has
         # no bar.
         bar_dates = [s.as_of_bar for s in signals if s.as_of_bar is not None]
+        source_agents = [s.source_agent for s in signals]
+        nontechnical_long_sources = [
+            s.source_agent
+            for s in signals
+            if s.direction is Direction.LONG
+            and (
+                s.source_agent in {"fundamental", "sentiment"}
+                or (
+                    s.source_agent.startswith("llm:")
+                    and (
+                        float(s.features_json.get("n_headlines") or 0) > 0
+                        or float(s.features_json.get("n_research") or 0) > 0
+                    )
+                )
+            )
+        ]
         return Signal(
             source_agent=self.source_agent,
             symbol=symbol,
@@ -565,6 +581,8 @@ class DebateAgent:
                 "long_weight": long_share,
                 "short_weight": short_share,
                 "disagreement_penalty": penalty,
+                "source_agents": source_agents,
+                "nontechnical_long_sources": nontechnical_long_sources,
             },
         )
 
