@@ -358,6 +358,7 @@ function useWatchSymbolData(config: WatchSymbolConfig, timeframe: TimeframeId, e
   })
 
   const baseBars = barsQuery.data?.bars ?? NO_BARS
+
   const baseQuote = useMemo<FinanceQuote | undefined>(() => {
     const last = baseBars.at(-1)
 
@@ -373,6 +374,7 @@ function useWatchSymbolData(config: WatchSymbolConfig, timeframe: TimeframeId, e
         }
       : undefined
   }, [baseBars, barsQuery.data?.note, dataSymbol])
+
   // ¥/gram factor = CNY-per-USD ÷ grams-per-ounce, applied to the USD/oz base.
   const fxLast = fxQuery.data?.last ?? null
   const factor = derived && fxLast !== null && Number.isFinite(fxLast) ? fxLast / derived.gramsPerOunce : null
@@ -760,7 +762,6 @@ function KlineChart({
   const isDark = useIsDark()
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<Chart | null>(null)
-  const barsRef = useRef<KLineData[]>([])
   const createdRef = useRef<Partial<Record<IndicatorKey, boolean>>>({})
 
   const klineData = useMemo<KLineData[]>(
@@ -811,6 +812,7 @@ function KlineChart({
 
   // Init once; dispose on unmount (no leak). A symbol change remounts this
   // component (keyed by symbol upstream), so the instance is always fresh.
+  // eslint-disable-next-line no-restricted-syntax -- klinecharts exposes an imperative lifecycle only
   useEffect(() => {
     const el = containerRef.current
 
@@ -868,7 +870,7 @@ function KlineChart({
     chartRef.current?.setPeriod(period)
   }, [period])
 
-  // Feed the bars. A fresh data loader forces klinecharts to reload from the ref
+  // Feed the bars. A fresh data loader forces klinecharts to reload from this snapshot
   // (more=false disables its scroll-to-load-more, since we hold the full range).
   useEffect(() => {
     const chart = chartRef.current
@@ -877,8 +879,7 @@ function KlineChart({
       return
     }
 
-    barsRef.current = klineData
-    chart.setDataLoader({ getBars: ({ callback }) => callback(barsRef.current, false) })
+    chart.setDataLoader({ getBars: ({ callback }) => callback(klineData, false) })
   }, [klineData])
 
   // Reset the frame on a TIMEFRAME switch. klinecharts keeps the user's prior

@@ -29,8 +29,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import {
-  type FinanceAccountType,
   type FinanceAccountEnvironment,
+  type FinanceAccountType,
   type FinanceDraftActionPayload,
   type FinanceImportPreview,
   type FinanceInstrumentMatch,
@@ -77,9 +77,9 @@ import {
   fmtSignedPct,
   fmtTs,
   idempotencyKeyFor,
-  randomId,
   parseFinanceError,
   pnlClass,
+  randomId,
   settleIdempotencyKey
 } from './lib'
 import { FinanceCard, FinancePill, FinanceSectionLabel, FinanceTable, QuerySection, StatTile } from './primitives'
