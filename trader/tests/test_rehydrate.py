@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from swing_trader.execution import ExecutionEngine
+from swing_trader.broker_view import CurrencyBrokerView
 from swing_trader.interfaces import Bar
 from swing_trader.ledger import Ledger
 from swing_trader.paper_broker import PaperBroker
@@ -187,7 +188,30 @@ class TestEdgeCases:
         ledger.record_snapshot(snap)
         fresh = PaperBroker(starting_cash=999.0)  # wrong base
         report = rehydrate_from_ledger(fresh, ledger, Mode.PAPER)
-        assert any("starting-cash" in w for w in report.warnings)
+        assert any("starting cash" in w for w in report.warnings)
+
+    def test_scoped_hkd_snapshot_is_not_compared_with_all_currency_cash(self, session):
+        ledger, original = session
+        multi = PaperBroker(
+            starting_cash_by_currency={"USD": 10_000.0, "HKD": 16_000.0},
+        )
+        # Recreate the USD ledger state in a broker that also owns an untouched
+        # HKD sleeve, then persist the kind of HK-only snapshot emitted by the
+        # independent HK loop after the USD fills.
+        report = rehydrate_from_ledger(multi, ledger, Mode.PAPER)
+        assert not report.warnings
+        hk_snapshot = CurrencyBrokerView(multi, "HKD").get_account().model_copy(
+            update={"ts": NOW + timedelta(hours=2)}
+        )
+        ledger.record_snapshot(hk_snapshot)
+
+        fresh = PaperBroker(
+            starting_cash_by_currency={"USD": 10_000.0, "HKD": 16_000.0},
+        )
+        restarted = rehydrate_from_ledger(fresh, ledger, Mode.PAPER)
+
+        assert not restarted.warnings
+        assert fresh.get_account().cash_by_currency["HKD"] == 16_000.0
 
     def test_restore_refuses_dirty_broker(self, session):
         ledger, original = session

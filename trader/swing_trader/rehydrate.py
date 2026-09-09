@@ -116,30 +116,48 @@ def rehydrate_from_ledger(
     # Cross-check replayed cash against the latest recorded snapshot.
     snapshots = ledger.get_snapshots(mode)
     if snapshots:
-        last = snapshots[-1]
+        base_snapshots = [
+            snapshot
+            for snapshot in snapshots
+            if snapshot.base_currency == broker.base_currency
+            and broker.base_currency in snapshot.cash_by_currency
+        ]
+        last_base = base_snapshots[-1] if base_snapshots else None
         # Backwards-compatible recovery for ledgers created before per-symbol
         # market marks existed. Aggregate equity can be decomposed safely only
-        # when exactly one position is open.
+        # when exactly one base-currency position is open and the comparison
+        # snapshot belongs to that same currency sleeve.
         if (
-            len(positions) == 1
+            last_base is not None
+            and len(positions) == 1
             and positions[0].mkt_px is None
             and positions[0].qty > 0
             and positions[0].currency == broker.base_currency
         ):
-            inferred = (last.equity - last.cash) / positions[0].qty
+            inferred = (last_base.equity - last_base.cash) / positions[0].qty
             if inferred >= 0:
                 positions[0].mkt_px = inferred
-        # Only comparable when no fills landed after that snapshot.
-        later_fills = [f for f in fills if f.ts > last.ts]
-        replayed_base_cash = sum(
-            value * broker._fx_to_base.get(currency, 0.0)
-            for currency, value in cash_by_currency.items()
-        )
-        if not later_fills and abs(last.cash - replayed_base_cash) > _SNAPSHOT_CASH_TOLERANCE:
-            warnings.append(
-                f"replayed cash {replayed_base_cash:.2f} != last snapshot cash "
-                f"{last.cash:.2f} — was --starting-cash changed for this ledger?"
-            )
+        # Currency-scoped loops persist USD/HKD/CNY snapshots into one ledger.
+        # Compare each replayed sleeve only with the latest snapshot that
+        # actually contains that currency; comparing a latest HKD-only scalar
+        # with an all-currency base total creates a false restart warning.
+        latest_by_currency = {}
+        for snapshot in snapshots:
+            for currency, amount in snapshot.cash_by_currency.items():
+                latest_by_currency[currency] = (snapshot.ts, amount)
+        for currency, replayed_cash in cash_by_currency.items():
+            observed = latest_by_currency.get(currency)
+            if observed is None:
+                continue
+            observed_at, observed_cash = observed
+            if any(fill.currency == currency and fill.ts > observed_at for fill in fills):
+                continue
+            if abs(observed_cash - replayed_cash) > _SNAPSHOT_CASH_TOLERANCE:
+                warnings.append(
+                    f"replayed cash {replayed_cash:.2f} {currency} != last "
+                    f"snapshot cash {observed_cash:.2f} {currency} — was the "
+                    "starting cash changed for this sleeve?"
+                )
 
     restore_warnings = broker.restore_state(
         cash_by_currency, positions, open_orders, fills=fills
