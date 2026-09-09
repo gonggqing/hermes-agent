@@ -74,7 +74,7 @@ class _RecordingTelegram:
 
 class TestTelegramDraftPush:
     def _client_with_tg(self, tmp_path, tg):
-        url = f"sqlite:///{tmp_path/'tg.db'}"
+        url = f"sqlite:///{tmp_path / 'tg.db'}"
         journal = PortfolioJournal(url=url)
         runtime = FinanceRuntime(ledger=Ledger(url=url), clock=lambda: NOW)
         runtime.portfolio = journal
@@ -231,16 +231,12 @@ class TestPaperAccountProjection:
         url = f"sqlite:///{tmp_path / 'paper-multi.db'}"
         journal = PortfolioJournal(url=url)
         journal.ensure_default_paper_account()
-        broker = PaperBroker(
-            starting_cash_by_currency={"USD": 2_000, "CNY": 100_000}
-        )
+        broker = PaperBroker(starting_cash_by_currency={"USD": 2_000, "CNY": 100_000})
         broker.restore_state(
             {"USD": 1_500, "CNY": 90_000},
             [
                 Position(symbol="VST", currency="USD", qty=3, avg_px=165),
-                Position(
-                    symbol="510300.SS", currency="CNY", qty=1_000, avg_px=4.2
-                ),
+                Position(symbol="510300.SS", currency="CNY", qty=1_000, avg_px=4.2),
             ],
             [],
         )
@@ -398,15 +394,44 @@ class TestAggregateReconcileImport:
     def _seed(self, client, qty=10):
         a = _make_account(client)
         d = _draft_buy(client, a["id"], qty=qty)
-        client.post(f"/v1/portfolio/drafts/{d['id']}/action",
-                    json=dict(action="confirm", actor="gongqing", idempotency_key="s"),
-                    headers={"X-Finance-Surface": "web"})
+        client.post(
+            f"/v1/portfolio/drafts/{d['id']}/action",
+            json=dict(action="confirm", actor="gongqing", idempotency_key="s"),
+            headers={"X-Finance-Surface": "web"},
+        )
         return a
 
     def test_aggregate(self, client):
         self._seed(client)
         agg = client.get("/v1/portfolio/aggregate").json()
         assert agg["holdings"][0]["symbol"] == "NVDA" and agg["holdings"][0]["qty"] == 10.0
+
+    def test_aggregate_defaults_live_and_paper_requires_explicit_filter(self, client):
+        self._seed(client)
+        paper = _make_account(
+            client,
+            name="simulation",
+            environment="paper",
+        )
+        draft = _draft_buy(client, paper["id"], symbol="AMD", qty=2)
+        client.post(
+            f"/v1/portfolio/drafts/{draft['id']}/action",
+            json=dict(action="confirm", actor="gongqing", idempotency_key="paper"),
+            headers={"X-Finance-Surface": "web"},
+        )
+
+        default_symbols = {
+            row["symbol"] for row in client.get("/v1/portfolio/aggregate").json()["holdings"]
+        }
+        paper_symbols = {
+            row["symbol"]
+            for row in client.get(
+                "/v1/portfolio/aggregate", params={"environment": "paper"}
+            ).json()["holdings"]
+        }
+
+        assert default_symbols == {"NVDA"}
+        assert paper_symbols == {"AMD"}
 
     def test_reconcile_manual_authoritative(self, client):
         a = self._seed(client)
@@ -415,54 +440,73 @@ class TestAggregateReconcileImport:
 
     def test_import_preview_then_commit(self, client):
         a = _make_account(client)
-        csv = ("date,event_type,symbol,market,currency,qty,price\n"
-               "2026-07-01,buy,NVDA,US,USD,10,100\n"
-               "2026-07-02,buy,AMD,US,USD,5,50\n")
-        pv = client.post(f"/v1/portfolio/accounts/{a['id']}/import/preview",
-                         json={"csv": csv}).json()
+        csv = (
+            "date,event_type,symbol,market,currency,qty,price\n"
+            "2026-07-01,buy,NVDA,US,USD,10,100\n"
+            "2026-07-02,buy,AMD,US,USD,5,50\n"
+        )
+        pv = client.post(
+            f"/v1/portfolio/accounts/{a['id']}/import/preview", json={"csv": csv}
+        ).json()
         assert pv["n_valid"] == 2 and pv["committable"] is True
-        c = client.post(f"/v1/portfolio/accounts/{a['id']}/import/commit",
-                        json={"csv": csv, "actor": "gongqing"},
-                        headers={"X-Finance-Surface": "web"}).json()
+        c = client.post(
+            f"/v1/portfolio/accounts/{a['id']}/import/commit",
+            json={"csv": csv, "actor": "gongqing"},
+            headers={"X-Finance-Surface": "web"},
+        ).json()
         assert c["n_committed"] == 2
-        syms = {h["symbol"] for h in
-                client.get(f"/v1/portfolio/accounts/{a['id']}/holdings").json()["holdings"]}
+        syms = {
+            h["symbol"]
+            for h in client.get(f"/v1/portfolio/accounts/{a['id']}/holdings").json()["holdings"]
+        }
         assert syms == {"NVDA", "AMD"}
 
     def test_import_commit_requires_actor(self, client):
         a = _make_account(client)
-        r = client.post(f"/v1/portfolio/accounts/{a['id']}/import/commit",
-                        json={"csv": "date,event_type\n2026-07-01,fee\n"})
+        r = client.post(
+            f"/v1/portfolio/accounts/{a['id']}/import/commit",
+            json={"csv": "date,event_type\n2026-07-01,fee\n"},
+        )
         assert r.status_code == 422
 
 
 class TestSessionTrigger:
     def _client(self, tmp_path, attach=True):
-        ledger = Ledger(url=f"sqlite:///{tmp_path/'sess.db'}")
+        ledger = Ledger(url=f"sqlite:///{tmp_path / 'sess.db'}")
         runtime = FinanceRuntime(ledger=ledger, clock=lambda: NOW)
         calls = {}
         if attach:
-            runtime.run_session = lambda **kw: {"risk_approved": 2, "pushed": 2,
-                                                "cutoff_et": "16:00", **calls}
+            runtime.run_session = lambda **kw: {
+                "risk_approved": 2,
+                "pushed": 2,
+                "cutoff_et": "16:00",
+                **calls,
+            }
             runtime.finalize_session = lambda: {"approved": 1, "expired": 1}
         return TestClient(create_app(runtime))
 
     def test_run_requires_human_surface(self, tmp_path):
         client = self._client(tmp_path)
         # system surface refused
-        r = client.post("/v1/session/run", json={"actor": "gongqing"},
-                        headers={"X-Finance-Surface": "system"})
+        r = client.post(
+            "/v1/session/run", json={"actor": "gongqing"}, headers={"X-Finance-Surface": "system"}
+        )
         assert r.status_code == 403
         # LLM actor refused
-        r = client.post("/v1/session/run", json={"actor": "hermes"},
-                        headers={"X-Finance-Surface": "web"})
+        r = client.post(
+            "/v1/session/run", json={"actor": "hermes"}, headers={"X-Finance-Surface": "web"}
+        )
         assert r.status_code == 403
 
     def test_run_by_human_ok(self, tmp_path):
         import time as _t
+
         client = self._client(tmp_path)
-        r = client.post("/v1/session/run", json={"actor": "gongqing", "window_minutes": 90},
-                        headers={"X-Finance-Surface": "web"})
+        r = client.post(
+            "/v1/session/run",
+            json={"actor": "gongqing", "window_minutes": 90},
+            headers={"X-Finance-Surface": "web"},
+        )
         # background run: returns immediately with "started"
         assert r.status_code == 200 and r.json()["status"] == "started"
         assert r.json()["market"] == "us"
@@ -477,21 +521,24 @@ class TestSessionTrigger:
 
     def test_finalize_by_human_ok(self, tmp_path):
         client = self._client(tmp_path)
-        r = client.post("/v1/session/finalize", json={"actor": "gongqing"},
-                        headers={"X-Finance-Surface": "web"})
+        r = client.post(
+            "/v1/session/finalize", json={"actor": "gongqing"}, headers={"X-Finance-Surface": "web"}
+        )
         assert r.status_code == 200 and r.json()["approved"] == 1
 
     def test_503_when_loop_not_attached(self, tmp_path):
         client = self._client(tmp_path, attach=False)
-        r = client.post("/v1/session/run", json={"actor": "gongqing"},
-                        headers={"X-Finance-Surface": "web"})
+        r = client.post(
+            "/v1/session/run", json={"actor": "gongqing"}, headers={"X-Finance-Surface": "web"}
+        )
         assert r.status_code == 503
 
 
 class TestUnavailable:
     def test_503_without_portfolio(self, tmp_path):
-        client = TestClient(create_app(FinanceRuntime(ledger=Ledger(
-            url=f"sqlite:///{tmp_path/'x.db'}"))))
+        client = TestClient(
+            create_app(FinanceRuntime(ledger=Ledger(url=f"sqlite:///{tmp_path / 'x.db'}")))
+        )
         assert client.get("/v1/portfolio/accounts").status_code == 503
         assert client.get("/v1/portfolio/drafts").status_code == 503
         assert client.get("/v1/portfolio/aggregate").status_code == 503

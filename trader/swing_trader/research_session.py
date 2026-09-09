@@ -334,12 +334,8 @@ class ResearchSession:
                     market_label=self.market_label,
                     language="zh-CN" if self.lang == "zh" else self.lang,
                 )
-            elif self.runtime is not None:
-                previous = self.runtime.latest_briefs.get(self.market_id.lower())
-                if isinstance(previous, dict) and previous.get("narrative") is not None:
-                    from swing_trader.brief import ResearchNarrative
-
-                    brief.narrative = ResearchNarrative.model_validate(previous["narrative"])
+            # A structured refresh never borrows prose from an older packet.
+            # The canonical Beijing brief coordinator owns narrative creation.
         except Exception:  # brief must never break the loop
             logger.exception("cn research brief build failed")
             return None

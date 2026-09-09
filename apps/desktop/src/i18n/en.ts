@@ -2535,6 +2535,7 @@ export const en: Translations = {
       narrativeTitle: 'Brief',
       narrativeUnavailable:
         'The analytical brief was not generated. Refresh research after the model connection is available; the measurements below remain usable.',
+      narrativeFailure: reason => `Primary-model synthesis failed for this edition: ${reason}`,
       narrativeWatchNext: 'What to watch next',
       narrativeSincePrior: 'What changed since the prior brief',
       narrativeActionMap: 'Trend action map',

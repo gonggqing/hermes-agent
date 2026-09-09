@@ -174,15 +174,11 @@ class TelegramSurfaceAdapter:
         self._command_handler: Optional[Callable[[str], Optional[str]]] = None
         self._update_handler: Optional[Callable[[str], Optional[str]]] = None
 
-    def set_command_handler(
-        self, fn: Optional[Callable[[str], Optional[str]]]
-    ) -> None:
+    def set_command_handler(self, fn: Optional[Callable[[str], Optional[str]]]) -> None:
         """Wire the slash-command handler (``text -> reply`` or None)."""
         self._command_handler = fn
 
-    def set_update_handler(
-        self, fn: Optional[Callable[[str], Optional[str]]]
-    ) -> None:
+    def set_update_handler(self, fn: Optional[Callable[[str], Optional[str]]]) -> None:
         """Wire the DM update-holdings handler (``text -> reply`` or None if the
         text isn't an update-holdings edit)."""
         self._update_handler = fn
@@ -319,9 +315,7 @@ class TelegramSurfaceAdapter:
                 )
             lines.append("状态：订单已提交/挂起，尚不代表已经成交。")
         for candidate, order in report.recovered:
-            lines.append(
-                f"♻️ {candidate.symbol} 已恢复既有挂单 {order.id}，未重复提交。"
-            )
+            lines.append(f"♻️ {candidate.symbol} 已恢复既有挂单 {order.id}，未重复提交。")
         for candidate, reason in report.skipped:
             lines.append(f"⚠️ {candidate.symbol} 未提交：{reason}")
         for order, reason in report.rejected:
@@ -341,13 +335,13 @@ class TelegramSurfaceAdapter:
         if not market:
             symbol = str(getattr(item, "symbol", "") or "").upper()
             market = (
-                "cn" if symbol.endswith((".SS", ".SZ"))
-                else "hk" if symbol.endswith(".HK")
+                "cn"
+                if symbol.endswith((".SS", ".SZ"))
+                else "hk"
+                if symbol.endswith(".HK")
                 else "us"
             )
-        return self._candidate_account_labels.get(
-            market, self._candidate_account_label
-        )
+        return self._candidate_account_labels.get(market, self._candidate_account_label)
 
     def poll(self, service: Optional[ConfirmationService], now_utc: datetime) -> None:
         # ``service`` may be None before the daily decide phase — draft
@@ -380,9 +374,7 @@ class TelegramSurfaceAdapter:
         # Portfolio-draft cards carry t="d" — route to the draft service
         # (real-holdings journal), NOT the candidate ConfirmationService.
         if data.get("t") == DRAFT_CALLBACK_TYPE:
-            self._handle_draft_callback(
-                cb_id, data, callback.get("from", {}) or {}, now_utc
-            )
+            self._handle_draft_callback(cb_id, data, callback.get("from", {}) or {}, now_utc)
             return
         short = str(data.get("id", ""))
         full_id = self._by_short_id.get(short)
@@ -392,9 +384,7 @@ class TelegramSurfaceAdapter:
         action = {"ok": "approve", "no": "reject", "edit": "edit"}.get(data.get("a"))
         if full_id is None or action is None:
             if data.get("a") == "edit":
-                self._transport.answer_callback(
-                    cb_id, "edit via the Finance portal (Desktop/Web)"
-                )
+                self._transport.answer_callback(cb_id, "edit via the Finance portal (Desktop/Web)")
             else:
                 self._transport.answer_callback(cb_id, "unknown candidate")
             return
@@ -498,12 +488,17 @@ class TelegramSurfaceAdapter:
         actor = f"telegram:{sender.get('username') or sender.get('id') or 'user'}"
         if action == "ok":
             result = self._drafts.confirm_draft(
-                full_id, actor=actor, surface=Surface.TELEGRAM.value,
-                idempotency_key=f"tg-draft:{cb_id}", now=now_utc,
+                full_id,
+                actor=actor,
+                surface=Surface.TELEGRAM.value,
+                idempotency_key=f"tg-draft:{cb_id}",
+                now=now_utc,
             )
         else:
             result = self._drafts.reject_draft(
-                full_id, actor=actor, surface=Surface.TELEGRAM.value,
+                full_id,
+                actor=actor,
+                surface=Surface.TELEGRAM.value,
                 idempotency_key=f"tg-draft:{cb_id}",
             )
         self._transport.answer_callback(cb_id, self._draft_toast(result, action))
@@ -572,8 +567,12 @@ class TelegramSurfaceAdapter:
         in a group — and only for allowlisted users. Otherwise stay quiet (the
         finance bot is the confirmation channel, not a group chatterbox). A DM
         also records trades (see _record_trade); analysis is _respond_text."""
-        if (self._respond_text is None and self._record_trade is None
-                and self._command_handler is None and self._update_handler is None):
+        if (
+            self._respond_text is None
+            and self._record_trade is None
+            and self._command_handler is None
+            and self._update_handler is None
+        ):
             return
         text = str(message.get("text") or "").strip()
         if not text:
@@ -592,8 +591,7 @@ class TelegramSurfaceAdapter:
             # route here instead of the group (recording stays private).
             self._dm_chat_id = chat_id
         if mentioned and username:
-            text = re.sub(rf"@{re.escape(username)}", "", text,
-                          flags=re.IGNORECASE).strip()
+            text = re.sub(rf"@{re.escape(username)}", "", text, flags=re.IGNORECASE).strip()
         # Slash command (/持仓 /研究 /记账 /帮助 …) — works in DM or @mention.
         if self._command_handler is not None and text.startswith("/"):
             try:
@@ -696,20 +694,17 @@ class DailyLoop:
         self._tz_name = schedule.tz.key
         self._push_time = schedule.event_times.get(Event.PUSH_CANDIDATES, _PUSH_TIME)
         self._cutoff_time = schedule.event_times.get(Event.CONFIRM_CUTOFF, _CUTOFF_TIME)
-        self._market_close_time = schedule.event_times.get(
-            Event.MARKET_CLOSE, _MARKET_CLOSE_TIME
-        )
+        self._market_close_time = schedule.event_times.get(Event.MARKET_CLOSE, _MARKET_CLOSE_TIME)
         self._market_label = _MARKET_LABELS.get(self.market_id, self.market_id)
         # Currency sleeve this market's brief risk/net-value reports — each
         # market its OWN sleeve, never the FX-blended base total (US → the USD
         # sleeve, HK → HKD), so US and HK net values are never conflated.
-        self._brief_currency = {
-            "US": "USD", "HK": "HKD", "CN": "CNY", "KR": "KRW"
-        }.get(self.market_id)
+        self._brief_currency = {"US": "USD", "HK": "HKD", "CN": "CNY", "KR": "KRW"}.get(
+            self.market_id
+        )
         # Pre-cutoff nudge = 30 min before the cutoff (11:00 for a 11:30 cutoff).
         self._pre_cutoff_reminder = (
-            datetime.combine(date(2000, 1, 1), self._cutoff_time)
-            - timedelta(minutes=30)
+            datetime.combine(date(2000, 1, 1), self._cutoff_time) - timedelta(minutes=30)
         ).time()
         self.clock = clock
         self.risk_params = risk_params or RiskParams()
@@ -735,8 +730,7 @@ class DailyLoop:
         self.market_monitor = MarketMonitor(
             feed,
             index_symbols=(
-                list(index_symbols) if index_symbols is not None
-                else list(DEFAULT_INDEX_SYMBOLS)
+                list(index_symbols) if index_symbols is not None else list(DEFAULT_INDEX_SYMBOLS)
             ),
             breadth_symbols=self.symbols,
             clock=self.clock,
@@ -744,11 +738,11 @@ class DailyLoop:
             vix_symbol=vix_symbol,
             require_vix_for_risk_on=bool(vix_symbol),
         )
-        self.portfolio_monitor = PortfolioMonitor(feed, broker, symbols=self.symbols,
-                                                  clock=self.clock)
+        self.portfolio_monitor = PortfolioMonitor(
+            feed, broker, symbols=self.symbols, clock=self.clock
+        )
         self.news_monitor = NewsMonitor(feed, clock=self.clock)
-        self.account_monitor = AccountRiskMonitor(broker, self.risk_params,
-                                                  clock=self.clock)
+        self.account_monitor = AccountRiskMonitor(broker, self.risk_params, clock=self.clock)
         self.tech = TechnicalAgent()
         self.fundamentals_provider = fundamentals
         self.fund = FundamentalAgent(fundamentals or StaticFundamentals({}))
@@ -818,15 +812,14 @@ class DailyLoop:
         status = self.account_monitor.poll()
         self._risk_status = status
         self.ledger.record_snapshot(status.snapshot)
-        text = morning_summary(self.broker, self.ledger, self.mode,
-                               since_utc=now - timedelta(hours=24))
+        text = morning_summary(
+            self.broker, self.ledger, self.mode, since_utc=now - timedelta(hours=24)
+        )
         if self.runtime is not None:
             self.runtime.latest_reports[f"morning_{self.market_id.lower()}"] = text
             if self.market_id == "US":
                 self.runtime.latest_reports["morning"] = text
-        self.notify(
-            text if self.market_id == "US" else f"[{self._market_label}]\n{text}"
-        )
+        self.notify(text if self.market_id == "US" else f"[{self._market_label}]\n{text}")
         logger.info("morning report done", extra={"warnings": status.warnings})
 
     def on_monitor(self) -> None:
@@ -835,13 +828,9 @@ class DailyLoop:
             try:
                 self._discovery = self.discovery_scanner.scan(self.market_id)
             except Exception:
-                logger.exception(
-                    "market discovery scan failed", extra={"market": self.market_id}
-                )
+                logger.exception("market discovery scan failed", extra={"market": self.market_id})
                 self._discovery = None
-        discovered = [
-            row.symbol for row in (self._discovery.candidates if self._discovery else [])
-        ]
+        discovered = [row.symbol for row in (self._discovery.candidates if self._discovery else [])]
         research_symbols = list(dict.fromkeys([*self.symbols, *discovered]))
         self._portfolio = self.portfolio_monitor.poll(research_symbols)
         self._news = self.news_monitor.poll(research_symbols)
@@ -918,11 +907,13 @@ class DailyLoop:
             self._alert_unhealthy(health)
 
         candidates = self.decision.propose(
-            debates, views, account, positions,
+            debates,
+            views,
+            account,
+            positions,
             risk_on_off=self._market.risk_on_off if self._market else "neutral",
             open_order_symbols=open_syms,
-            earnings_symbols={e.symbol for e in self._earnings
-                              if getattr(e, "imminent", False)},
+            earnings_symbols={e.symbol for e in self._earnings if getattr(e, "imminent", False)},
         )
         # Stamp every candidate with this loop's market AND trading clock. The
         # pydantic default uses the process wall clock, which is correct in
@@ -932,8 +923,7 @@ class DailyLoop:
         # the only authoritative value here.
         candidate_ts = self.clock()
         candidates = [
-            c.model_copy(update={"market": self.market_id, "ts": candidate_ts})
-            for c in candidates
+            c.model_copy(update={"market": self.market_id, "ts": candidate_ts}) for c in candidates
         ]
 
         self._risk_approved = []
@@ -942,11 +932,16 @@ class DailyLoop:
             self.ledger.record_candidate(cand, self.mode)
             liquidity = self.portfolio_monitor.liquidity_for(cand.symbol)
             decision = self.risk_engine.evaluate(
-                cand, account, positions, liquidity, entries_today=entries_seen,
+                cand,
+                account,
+                positions,
+                liquidity,
+                entries_today=entries_seen,
                 system_healthy=health.entries_allowed,
             )
             self.ledger.update_candidate(
-                cand.id, decision.candidate.status,
+                cand.id,
+                decision.candidate.status,
                 risk_note=decision.candidate.risk_note,
             )
             if decision.approved:
@@ -955,20 +950,20 @@ class DailyLoop:
                 self._risk_approved.append(decision.candidate)
 
         self._confirmation = ConfirmationService(
-            self.ledger, mode=self.mode, push_time_et=self._push_time,
-            cutoff_et=self._cutoff_time, market_tz=self._tz_name,
+            self.ledger,
+            mode=self.mode,
+            push_time_et=self._push_time,
+            cutoff_et=self._cutoff_time,
+            market_tz=self._tz_name,
             revalidate=self._revalidate_edit,
         )
         if self.runtime is not None:
             self.runtime.confirmation = self._confirmation
-            self.runtime.confirmation_by_market[self.market_id.lower()] = (
-                self._confirmation
-            )
+            self.runtime.confirmation_by_market[self.market_id.lower()] = self._confirmation
         self._publish_brief()  # refresh with today's signals/candidates
         logger.info(
             "decide complete",
-            extra={"proposed": len(candidates),
-                   "risk_approved": len(self._risk_approved)},
+            extra={"proposed": len(candidates), "risk_approved": len(self._risk_approved)},
         )
 
     def on_push(self) -> None:
@@ -1040,23 +1035,22 @@ class DailyLoop:
         expired = self._confirmation.expire(now) if self._confirmation else []
         approved_count = self._approved_for_date(now)
         report = self._execute_approved(now, trigger="cutoff")
-        self._entries_placed_today = sum(
-            1 for o in report.placed if o.side is Side.BUY
-        ) + sum(
+        self._entries_placed_today = sum(1 for o in report.placed if o.side is Side.BUY) + sum(
             1 for _, o in report.recovered if o.side is Side.BUY
         )
         logger.info(
             "cutoff execution done",
-            extra={"approved": approved_count,
-                   "placed": len(report.placed),
-                   "recovered": len(report.recovered),
-                   "skipped": len(report.skipped),
-                   "rejected": len(report.rejected),
-                   "expired": len(expired)},
+            extra={
+                "approved": approved_count,
+                "placed": len(report.placed),
+                "recovered": len(report.recovered),
+                "skipped": len(report.skipped),
+                "rejected": len(report.rejected),
+                "expired": len(expired),
+            },
         )
 
-    def run_session_now(self, now: datetime | None = None, *,
-                        window_minutes: int = 60) -> dict:
+    def run_session_now(self, now: datetime | None = None, *, window_minutes: int = 60) -> dict:
         """Manually run a full trading session on demand (Loop.md §4b
         missed-session catch-up): fresh monitors → decide (RiskEngine + the P0.8
         dead-man's switch) → push the risk-approved candidates into a
@@ -1079,14 +1073,16 @@ class DailyLoop:
             cutoff_t = et_now.replace(hour=23, minute=59, second=59).time()
 
         self._confirmation = ConfirmationService(
-            self.ledger, mode=self.mode, push_time_et=push_t, cutoff_et=cutoff_t,
-            market_tz=self._tz_name, revalidate=self._revalidate_edit,
+            self.ledger,
+            mode=self.mode,
+            push_time_et=push_t,
+            cutoff_et=cutoff_t,
+            market_tz=self._tz_name,
+            revalidate=self._revalidate_edit,
         )
         if self.runtime is not None:
             self.runtime.confirmation = self._confirmation
-            self.runtime.confirmation_by_market[self.market_id.lower()] = (
-                self._confirmation
-            )
+            self.runtime.confirmation_by_market[self.market_id.lower()] = self._confirmation
         self.on_push()  # publishes into the now-anchored window
 
         halted = self._health is not None and not self._health.entries_allowed
@@ -1108,8 +1104,12 @@ class DailyLoop:
         (§3) — this only acts on what the human already confirmed."""
         stamp = now or self.clock()
         if self._confirmation is None:
-            return {"ran_at": stamp.isoformat(), "approved": 0, "expired": 0,
-                    "note": "no active session to finalize"}
+            return {
+                "ran_at": stamp.isoformat(),
+                "approved": 0,
+                "expired": 0,
+                "note": "no active session to finalize",
+            }
         placed_before = len(self.broker.get_orders(active_only=True))
         self.on_cutoff()  # poll + expire + execute approved
         placed_after = len(self.broker.get_orders(active_only=True))
@@ -1158,9 +1158,8 @@ class DailyLoop:
     def _candidates(self, *statuses: CandidateStatus) -> list[CandidateOrder]:
         wanted = set(statuses)
         return [
-            candidate for candidate in self.ledger.get_candidates(
-                mode=self.mode, market=self.market_id
-            )
+            candidate
+            for candidate in self.ledger.get_candidates(mode=self.mode, market=self.market_id)
             if candidate.status in wanted
         ]
 
@@ -1168,7 +1167,8 @@ class DailyLoop:
         self, trading_date: date, *statuses: CandidateStatus
     ) -> list[CandidateOrder]:
         return [
-            candidate for candidate in self._candidates(*statuses)
+            candidate
+            for candidate in self._candidates(*statuses)
             if self._et_date(candidate) == trading_date
         ]
 
@@ -1191,8 +1191,11 @@ class DailyLoop:
             CandidateStatus.REJECTED,
         )
         service = ConfirmationService(
-            self.ledger, mode=self.mode, push_time_et=self._push_time,
-            cutoff_et=self._cutoff_time, market_tz=self._tz_name,
+            self.ledger,
+            mode=self.mode,
+            push_time_et=self._push_time,
+            cutoff_et=self._cutoff_time,
+            market_tz=self._tz_name,
             revalidate=self._revalidate_edit,
         )
         restored = service.restore(candidates)
@@ -1226,9 +1229,7 @@ class DailyLoop:
                 reason="missed execution: service recovered after the trading session",
                 include_current=et_now.time() >= self._market_close_time,
             )
-            risk_approved = self._candidates_for_date(
-                today, CandidateStatus.RISK_APPROVED
-            )
+            risk_approved = self._candidates_for_date(today, CandidateStatus.RISK_APPROVED)
             restored: list[CandidateOrder] = []
             report = ExecutionReport()
 
@@ -1245,16 +1246,15 @@ class DailyLoop:
             else:
                 for candidate in risk_approved:
                     self._expire_candidate(
-                        candidate, now,
+                        candidate,
+                        now,
                         "missed confirmation window after service restart",
                         action="expire",
                     )
                 if self._confirmation is not None:
                     self._confirmation.expire(now)
                 if et_now.time() < self._market_close_time:
-                    report = self._execute_approved(
-                        now, trigger="restart_recovery", rerisk=True
-                    )
+                    report = self._execute_approved(now, trigger="restart_recovery", rerisk=True)
 
             summary = {
                 "status": "recovered",
@@ -1271,22 +1271,19 @@ class DailyLoop:
 
     def _post_approval_review_complete(self, candidate_id: str) -> bool:
         return any(
-            event.action in {
+            event.action
+            in {
                 "post_approval_review_keep",
                 "post_approval_review_revision",
             }
-            for event in self.ledger.get_audit(
-                mode=self.mode, candidate_id=candidate_id
-            )
+            for event in self.ledger.get_audit(mode=self.mode, candidate_id=candidate_id)
         )
 
     def _post_approval_review_failures(self, candidate_id: str) -> list[AuditEvent]:
         return sorted(
             (
                 event
-                for event in self.ledger.get_audit(
-                    mode=self.mode, candidate_id=candidate_id
-                )
+                for event in self.ledger.get_audit(mode=self.mode, candidate_id=candidate_id)
                 if event.action == "post_approval_review_failed"
             ),
             key=lambda event: event.ts,
@@ -1302,9 +1299,7 @@ class DailyLoop:
         delay = _REVIEW_RETRY_DELAYS[len(failures) - 1]
         return now >= failures[-1].ts + delay
 
-    def _record_review_failure(
-        self, candidate: CandidateOrder, now: datetime, detail: str
-    ) -> bool:
+    def _record_review_failure(self, candidate: CandidateOrder, now: datetime, detail: str) -> bool:
         """Persist one bounded attempt; return True only for the first alert."""
         failures = self._post_approval_review_failures(candidate.id)
         attempt = len(failures) + 1
@@ -1321,9 +1316,7 @@ class DailyLoop:
         )
         return not failures
 
-    def _launch_post_approval_reviews(
-        self, candidates: list[CandidateOrder]
-    ) -> None:
+    def _launch_post_approval_reviews(self, candidates: list[CandidateOrder]) -> None:
         """Start one bounded, non-blocking fresh-market review per approval."""
         now = self.clock()
         for candidate in candidates:
@@ -1391,9 +1384,7 @@ class DailyLoop:
             if service is None:
                 return
             if not review.needs_reconfirmation:
-                kept = service.record_post_approval_review(
-                    candidate.id, now, review.reason_zh
-                )
+                kept = service.record_post_approval_review(candidate.id, now, review.reason_zh)
                 if kept is not None and self.telegram is not None:
                     self.telegram.push_recovery_notice(
                         f"🔎 {candidate.symbol} 已按最新行情完成二次复核："
@@ -1403,13 +1394,15 @@ class DailyLoop:
 
             payload = candidate.model_dump()
             payload.update(review.edits)
-            payload.update({
-                "id": uuid.uuid4().hex,
-                "ts": now,
-                "ref_px": quote.last,
-                "status": CandidateStatus.RISK_APPROVED,
-                "rationale": f"{candidate.rationale}\n二次复核：{review.reason_zh}",
-            })
+            payload.update(
+                {
+                    "id": uuid.uuid4().hex,
+                    "ts": now,
+                    "ref_px": quote.last,
+                    "status": CandidateStatus.RISK_APPROVED,
+                    "rationale": f"{candidate.rationale}\n二次复核：{review.reason_zh}",
+                }
+            )
             revised = CandidateOrder.model_validate(payload)
             ok, reason = self._revalidate_edit(revised)
             if not ok:
@@ -1422,9 +1415,7 @@ class DailyLoop:
                         "原批准已失效，没有挂单。"
                     )
                 return
-            pushed = service.request_reconfirmation(
-                candidate.id, revised, now, review.reason_zh
-            )
+            pushed = service.request_reconfirmation(candidate.id, revised, now, review.reason_zh)
             if pushed is not None and self.telegram is not None:
                 self.telegram.push_recovery_notice(
                     f"🔁 {candidate.symbol} 最新行情触发参数/观点修订；"
@@ -1518,7 +1509,8 @@ class DailyLoop:
 
         if rerisk:
             pending_risk = [
-                candidate for candidate in candidates
+                candidate
+                for candidate in candidates
                 if candidate.id not in self._restart_risk_validated
             ]
             if pending_risk:
@@ -1539,7 +1531,8 @@ class DailyLoop:
                     ok, reason = self._revalidate_edit(candidate)
                     if not ok:
                         self._expire_candidate(
-                            candidate, now,
+                            candidate,
+                            now,
                             f"restart risk re-validation failed: {reason}",
                             action="expire_risk_revalidation",
                         )
@@ -1552,8 +1545,11 @@ class DailyLoop:
 
         for candidate in candidates:
             self._audit_once(
-                candidate, now, action="finalize",
-                prev=candidate.status, new=candidate.status,
+                candidate,
+                now,
+                action="finalize",
+                prev=candidate.status,
+                new=candidate.status,
                 detail=f"{trigger}: approved candidate selected for execution",
                 key=f"finalize:{candidate.id}",
             )
@@ -1569,7 +1565,9 @@ class DailyLoop:
         for candidate, reason in report.skipped:
             if "no fresh quote" not in reason:
                 self._expire_candidate(
-                    candidate, now, f"execution re-validation failed: {reason}",
+                    candidate,
+                    now,
+                    f"execution re-validation failed: {reason}",
                     action="expire_execution_revalidation",
                 )
         rejected_by_candidate = {
@@ -1579,7 +1577,8 @@ class DailyLoop:
         for candidate in self._approved_candidates(now):
             if candidate.id in rejected_by_candidate:
                 self._expire_candidate(
-                    candidate, now,
+                    candidate,
+                    now,
                     f"broker rejected order: {rejected_by_candidate[candidate.id]}",
                     action="expire_broker_rejected",
                 )
@@ -1626,7 +1625,8 @@ class DailyLoop:
                 expired.append(candidate)
         if expired and self.telegram is not None:
             approved = [
-                candidate for candidate in expired
+                candidate
+                for candidate in expired
                 if candidate.status in {CandidateStatus.APPROVED, CandidateStatus.EDITED}
             ]
             if approved:
@@ -1646,9 +1646,11 @@ class DailyLoop:
         action: str,
     ) -> bool:
         current = next(
-            (row for row in self.ledger.get_candidates(
-                mode=self.mode, market=self.market_id)
-             if row.id == candidate.id),
+            (
+                row
+                for row in self.ledger.get_candidates(mode=self.mode, market=self.market_id)
+                if row.id == candidate.id
+            ),
             None,
         )
         if current is None or current.status not in {
@@ -1659,12 +1661,14 @@ class DailyLoop:
         }:
             return False
         note = f"missed execution: {reason}" if "missed execution" not in reason else reason
-        self.ledger.update_candidate(
-            current.id, CandidateStatus.EXPIRED, risk_note=note
-        )
+        self.ledger.update_candidate(current.id, CandidateStatus.EXPIRED, risk_note=note)
         self._audit_once(
-            current, now, action=action, prev=current.status,
-            new=CandidateStatus.EXPIRED, detail=note,
+            current,
+            now,
+            action=action,
+            prev=current.status,
+            new=CandidateStatus.EXPIRED,
+            detail=note,
             key=f"{action}:{current.id}",
         )
         return True
@@ -1680,22 +1684,22 @@ class DailyLoop:
         detail: str,
         key: str,
     ) -> None:
-        if self.ledger.get_audit(
-            mode=self.mode, candidate_id=candidate.id, idempotency_key=key
-        ):
+        if self.ledger.get_audit(mode=self.mode, candidate_id=candidate.id, idempotency_key=key):
             return
-        self.ledger.record_audit(AuditEvent(
-            ts=now,
-            mode=self.mode.value,
-            candidate_id=candidate.id,
-            action=action,
-            actor="system",
-            surface=Surface.SYSTEM.value,
-            idempotency_key=key,
-            prev_status=prev.value,
-            new_status=new.value,
-            detail=detail,
-        ))
+        self.ledger.record_audit(
+            AuditEvent(
+                ts=now,
+                mode=self.mode.value,
+                candidate_id=candidate.id,
+                action=action,
+                actor="system",
+                surface=Surface.SYSTEM.value,
+                idempotency_key=key,
+                prev_status=prev.value,
+                new_status=new.value,
+                detail=detail,
+            )
+        )
 
     # ------------------------------------------------------------- wiring
 
@@ -1719,9 +1723,7 @@ class DailyLoop:
         views: dict[str, SymbolView] = {}
         watch = self._portfolio.watch if self._portfolio else {}
         news_items = self._rebuild_news_items()
-        discovered = [
-            row.symbol for row in (self._discovery.candidates if self._discovery else [])
-        ]
+        discovered = [row.symbol for row in (self._discovery.candidates if self._discovery else [])]
         for symbol in dict.fromkeys([*self.symbols, *discovered]):
             state = watch.get(symbol)
             if state is None:
@@ -1745,9 +1747,7 @@ class DailyLoop:
                 from swing_trader.rag import research_snippets, retrieve_research
 
                 query = f"{symbol} " + " ".join(n.headline for n in sym_news[:2])
-                hits = retrieve_research(
-                    self.knowledge, self.knowledge_index, query, k=4
-                )
+                hits = retrieve_research(self.knowledge, self.knowledge_index, query, k=4)
                 llm_sig = self.llm_analyst.analyze(
                     symbol,
                     features=tech.features_json,
@@ -1785,14 +1785,16 @@ class DailyLoop:
         for raw in self._news.items:
             try:
                 ts = datetime.fromisoformat(raw["ts"])
-                items.append(NewsItem(
-                    symbol=raw.get("symbol"),
-                    ts=ts,
-                    headline=raw.get("headline", ""),
-                    source=raw.get("source", ""),
-                    url=raw.get("url", ""),
-                    sentiment=raw.get("sentiment"),
-                ))
+                items.append(
+                    NewsItem(
+                        symbol=raw.get("symbol"),
+                        ts=ts,
+                        headline=raw.get("headline", ""),
+                        source=raw.get("source", ""),
+                        url=raw.get("url", ""),
+                        sentiment=raw.get("sentiment"),
+                    )
+                )
             except (KeyError, ValueError, TypeError):
                 continue
         return curate_news(items, as_of=self.clock(), across_symbols=False).items
@@ -1846,7 +1848,9 @@ class DailyLoop:
         liquidity = self.portfolio_monitor.liquidity_for(cand.symbol)
         decision = self.risk_engine.evaluate(
             cand.model_copy(update={"status": cand.status}),
-            status.snapshot, positions, liquidity,
+            status.snapshot,
+            positions,
+            liquidity,
             entries_today=self._entries_placed_today,
             # Dead-man's switch also gates human edits: if the data the loop
             # depends on went stale/drifted since decide, don't let an edit
@@ -1857,8 +1861,7 @@ class DailyLoop:
             return False, decision.candidate.risk_note
         if decision.final_qty < cand.qty:
             return False, (
-                f"edited qty {cand.qty:g} exceeds risk limits "
-                f"(max allowed {decision.final_qty:g})"
+                f"edited qty {cand.qty:g} exceeds risk limits (max allowed {decision.final_qty:g})"
             )
         return True, ""
 
@@ -1873,9 +1876,7 @@ class DailyLoop:
                 submitted = [order.ts for order in active if order.symbol == symbol]
                 earliest = min(submitted) if submitted else None
                 try:
-                    candles = self.feed.get_bars(
-                        symbol, self.close_timeframe, limit=12
-                    )
+                    candles = self.feed.get_bars(symbol, self.close_timeframe, limit=12)
                 except (DataFeedError, ValueError):
                     continue
                 for candle in candles:
@@ -1906,19 +1907,18 @@ class DailyLoop:
 
         try:
             brief = build_research_brief(
-                self.ledger, self.mode,
-                market=self._market, portfolio=self._portfolio,
+                self.ledger,
+                self.mode,
+                market=self._market,
+                portfolio=self._portfolio,
                 news=self._news,
                 llm_enabled=self.llm_analyst is not None,
                 now=self.clock(),
-                earnings=(self._earnings
-                          if self.earnings_provider is not None else None),
+                earnings=(self._earnings if self.earnings_provider is not None else None),
                 discovery=self._discovery,
                 currency=self._brief_currency,
                 signals=list(self._latest_signals),
-                candidates=self.ledger.get_candidates(
-                    mode=self.mode, market=self.market_id
-                ),
+                candidates=self.ledger.get_candidates(mode=self.mode, market=self.market_id),
                 risk_status=self._risk_status,
                 watchlist_lookup=self.watchlist_lookup,
                 trading_tz=self._tz,
@@ -1936,23 +1936,8 @@ class DailyLoop:
                     market_label=self._market_label,
                     language="zh-CN",
                 )
-            else:
-                # Intraday monitor refreshes update deterministic evidence but
-                # must not erase the last promised 09:00/21:00 primary-model
-                # narrative. Read THIS market's previous brief (not the US slot)
-                # so an HK refresh keeps the HK narrative, never the US one.
-                previous = self.runtime.latest_briefs.get(slot) or (
-                    self.runtime.latest_brief if self.market_id == "US" else None
-                )
-                if (
-                    isinstance(previous, dict)
-                    and previous.get("narrative") is not None
-                ):
-                    from swing_trader.brief import ResearchNarrative
-
-                    brief.narrative = ResearchNarrative.model_validate(
-                        previous["narrative"]
-                    )
+            # Intraday evidence never inherits a narrative from a prior run.
+            # Only BriefCycleCoordinator may attach canonical prose.
             dump = brief.model_dump(mode="json")
             # Write the PER-MARKET slot; only US owns the canonical latest_brief
             # so an HK/CN/KR refresh never clobbers the US brief.
@@ -1977,7 +1962,8 @@ class DailyLoop:
             self._earnings = upcoming_earnings(
                 self.earnings_provider,
                 watchlist_mod.earnings_symbols(self.symbols),
-                now=self.clock(), within_days=14,
+                now=self.clock(),
+                within_days=14,
             )
         except Exception:  # earnings must never break the loop
             logger.exception("earnings calendar refresh failed")
@@ -2005,17 +1991,15 @@ class DailyLoop:
                     except Exception:  # one bad symbol never blocks the rest
                         metrics = None
                     if metrics:
-                        doc = build_fundamentals_doc(symbol, metrics, trading_date,
-                                                     self.clock())
+                        doc = build_fundamentals_doc(symbol, metrics, trading_date, self.clock())
                         if doc is not None:
                             docs.append(doc)
             for e in self._earnings:
-                docs.append(build_earnings_doc(e.symbol, e.date, e.days_until,
-                                               trading_date, self.clock()))
-            if docs:
-                ingest_research_documents(
-                    self.knowledge, self.knowledge_index, docs, trading_date
+                docs.append(
+                    build_earnings_doc(e.symbol, e.date, e.days_until, trading_date, self.clock())
                 )
+            if docs:
+                ingest_research_documents(self.knowledge, self.knowledge_index, docs, trading_date)
         except Exception:
             logger.exception("research ingestion failed (fail-closed)")
 
@@ -2028,17 +2012,17 @@ class DailyLoop:
         from swing_trader.knowledge_pipeline import ingest_news_snapshot
 
         try:
-            trading_date = (
-                self.clock().astimezone(ZoneInfo("America/New_York")).date()
-            )
+            trading_date = self.clock().astimezone(ZoneInfo("America/New_York")).date()
             report = ingest_news_snapshot(
                 self.knowledge, self.knowledge_index, self._news, trading_date
             )
             logger.info(
                 "news ingested into knowledge store",
-                extra={"n_docs": report.n_docs_written,
-                       "n_dupes": report.n_duplicates,
-                       "vector_ok": report.vector_ok},
+                extra={
+                    "n_docs": report.n_docs_written,
+                    "n_dupes": report.n_duplicates,
+                    "vector_ok": report.vector_ok,
+                },
             )
         except Exception:
             logger.exception("knowledge ingestion failed (fail-closed)")

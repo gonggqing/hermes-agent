@@ -141,13 +141,14 @@ def test_latest_closed_session_observes_market_delay_and_weekend():
         ("META 2026-07-29 EARNINGS", ("META",)),
     ],
 )
-def test_historical_event_labels_resolve_only_exact_listed_underlyings(
-    entity_key, expected
-):
-    assert PredictionCloseEvaluator._entity_symbols(
-        {"entity_type": "event", "entity_key": entity_key, "market": "US"},
-        {},
-    ) == expected
+def test_historical_event_labels_resolve_only_exact_listed_underlyings(entity_key, expected):
+    assert (
+        PredictionCloseEvaluator._entity_symbols(
+            {"entity_type": "event", "entity_key": entity_key, "market": "US"},
+            {},
+        )
+        == expected
+    )
 
 
 @pytest.mark.parametrize(
@@ -186,6 +187,14 @@ def test_instrument_alias_and_pseudo_ticker_validation():
         {},
     ) == ("^HSI",)
     assert PredictionCloseEvaluator._entity_symbols(
+        {"entity_type": "instrument", "entity_key": "$VIX", "market": "US"},
+        {},
+    ) == ("^VIX",)
+    assert PredictionCloseEvaluator._entity_symbols(
+        {"entity_type": "instrument", "entity_key": "000300.SH", "market": "CN"},
+        {},
+    ) == ("000300.SS",)
+    assert PredictionCloseEvaluator._entity_symbols(
         {
             "entity_type": "event",
             "entity_key": "0981.HK EARNINGS 2026-08-06",
@@ -193,6 +202,26 @@ def test_instrument_alias_and_pseudo_ticker_validation():
         },
         {},
     ) == ("0981.HK",)
+
+
+def test_index_and_indicator_are_explicit_price_backed_entity_types():
+    assert PredictionCloseEvaluator._entity_symbols(
+        {"entity_type": "index", "entity_key": "HSI", "market": "HK"},
+        {},
+    ) == ("^HSI",)
+    assert PredictionCloseEvaluator._entity_symbols(
+        {"entity_type": "indicator", "entity_key": "$VIX", "market": "US"},
+        {},
+    ) == ("^VIX",)
+    with pytest.raises(PermanentUnscorable, match="no supported price series"):
+        PredictionCloseEvaluator._entity_symbols(
+            {
+                "entity_type": "indicator",
+                "entity_key": "0981.HK.SMA20",
+                "market": "HK",
+            },
+            {},
+        )
 
 
 def test_theme_leaders_normalize_indices_and_drop_cross_market_or_labels():
@@ -205,6 +234,13 @@ def test_theme_leaders_normalize_indices_and_drop_cross_market_or_labels():
             {"entity_type": "theme", "entity_key": "cross-market", "market": "US"},
             {"payload_json": '{"leaders":["1211.HK","1810.HK"]}'},
         )
+
+
+def test_market_claim_rejects_synthetic_benchmark_and_uses_market_proxy():
+    assert PredictionCloseEvaluator._entity_symbols(
+        {"entity_type": "market", "entity_key": "CN", "market": "CN"},
+        {"benchmark": "CN-SEMICONDUCTOR"},
+    ) == ("000001.SS",)
 
 
 def test_close_worker_scores_due_paths_and_aggregate_is_idempotent(tmp_path):

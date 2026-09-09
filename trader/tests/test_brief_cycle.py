@@ -82,6 +82,8 @@ def test_evening_cycle_uses_same_pipeline_for_all_markets(tmp_path):
         payload = runtime.latest_brief if market == "us" else runtime.latest_briefs[market]
         assert payload["narrative"]["model"] == "primary-model"
         assert payload["narrative"]["edition"] == "evening"
+        assert payload["publication"]["status"] == "complete"
+        assert payload["publication"]["edition_id"] == f"2026-07-16:evening:{market}"
         assert runtime.brief_store.get_latest(market)["narrative"] is not None
 
 
@@ -102,18 +104,18 @@ def test_failed_primary_synthesis_is_visible_and_never_template_replaced(tmp_pat
 
     assert result["failed"] == ["us"]
     assert runtime.latest_brief["narrative"] is None
+    assert runtime.latest_brief["publication"]["status"] == "narrative_failed"
     assert "主模型简报生成失败" in runtime.latest_brief["uncertainty"][-1]
-    assert "没有使用模板或弱模型替代" in sent[0]
+    assert "旧版文字不会与本版数据混合" in sent[0]
 
 
-def test_failed_synthesis_preserves_last_good_narrative(tmp_path):
-    """Regression: a flaky completion must not blank a market that already had
-    prose. The prior edition's complete brief (evidence+narrative) is kept."""
+def test_failed_synthesis_keeps_new_evidence_without_old_narrative(tmp_path):
+    """A flaky completion cannot attach the prior edition to new evidence."""
     runtime = _runtime(tmp_path)
     # First edition succeeds → US gets a real narrative.
-    BriefCycleCoordinator(
-        runtime, _Writer(), notify=[].append, markets=("us",)
-    ).run_cycle("morning")
+    BriefCycleCoordinator(runtime, _Writer(), notify=[].append, markets=("us",)).run_cycle(
+        "morning"
+    )
     good_headline = runtime.latest_brief["narrative"]["headline"]
     assert good_headline
 
@@ -127,11 +129,12 @@ def test_failed_synthesis_preserves_last_good_narrative(tmp_path):
     ).run_cycle("evening")
 
     assert result["failed"] == ["us"]
-    # last-good prose is retained rather than wiped to None
-    assert runtime.latest_brief["narrative"] is not None
-    assert runtime.latest_brief["narrative"]["headline"] == good_headline
-    assert runtime.brief_store.get_latest("us")["narrative"] is not None
-    assert "已保留上一版完整简报" in sent[0]
+    assert runtime.latest_brief["narrative"] is None
+    assert runtime.latest_brief["publication"]["status"] == "narrative_failed"
+    assert runtime.latest_brief["publication"]["edition"] == "evening"
+    assert good_headline not in str(runtime.latest_brief)
+    assert runtime.brief_store.get_latest("us")["narrative"] is None
+    assert "旧版文字不会与本版数据混合" in sent[0]
 
 
 def test_fresh_same_edition_market_is_skipped_on_restart(tmp_path):
@@ -148,9 +151,7 @@ def test_fresh_same_edition_market_is_skipped_on_restart(tmp_path):
     runtime.latest_briefs["cn"] = _brief("cn")  # narrative-less again
     writer2 = _Writer()
     sent: list[str] = []
-    result = BriefCycleCoordinator(runtime, writer2, notify=sent.append).run_cycle(
-        "evening"
-    )
+    result = BriefCycleCoordinator(runtime, writer2, notify=sent.append).run_cycle("evening")
 
     # only CN regenerated; us/hk/kr skipped (fresh) → no duplicate notify
     assert writer2.calls == ["cn"]
@@ -176,6 +177,4 @@ def test_latest_due_slot_uses_beijing_wall_clock():
     before_morning = datetime(2026, 7, 16, 0, 30, tzinfo=timezone.utc)
     edition, due = latest_due_brief_slot(before_morning)
     assert edition == "evening"
-    assert due.astimezone(timezone.utc) == datetime(
-        2026, 7, 15, 13, 0, tzinfo=timezone.utc
-    )
+    assert due.astimezone(timezone.utc) == datetime(2026, 7, 15, 13, 0, tzinfo=timezone.utc)

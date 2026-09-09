@@ -12,16 +12,20 @@ from swing_trader.ledger import Ledger
 
 
 def _store(tmp_path):
-    return BriefStore(url=f"sqlite:///{tmp_path/'briefs.db'}")
+    return BriefStore(url=f"sqlite:///{tmp_path / 'briefs.db'}")
 
 
 def _kr_brief(as_of="2026-07-14T09:11:34Z", trading_date="2026-07-14"):
     return {
-        "as_of": as_of, "trading_date": trading_date, "mode": "paper",
-        "movers": {"top": [{"symbol": "005930.KS"}, {"symbol": "000660.KS"}],
-                   "bottom": []},
-        "signals_today": [{"symbol": "005930.KS"}, {"symbol": "000660.KS"},
-                          {"symbol": "000990.KS"}],
+        "as_of": as_of,
+        "trading_date": trading_date,
+        "mode": "paper",
+        "movers": {"top": [{"symbol": "005930.KS"}, {"symbol": "000660.KS"}], "bottom": []},
+        "signals_today": [
+            {"symbol": "005930.KS"},
+            {"symbol": "000660.KS"},
+            {"symbol": "000990.KS"},
+        ],
     }
 
 
@@ -45,8 +49,14 @@ def test_list_is_newest_first_and_counts_are_derived(tmp_path):
 def test_market_filter_and_get_by_date(tmp_path):
     st = _store(tmp_path)
     st.save("kr", _kr_brief())
-    st.save("cn", {"as_of": "2026-07-14T01:30:00Z", "trading_date": "2026-07-14",
-                   "movers": {"top": [{"symbol": "9988.HK"}]}})
+    st.save(
+        "cn",
+        {
+            "as_of": "2026-07-14T01:30:00Z",
+            "trading_date": "2026-07-14",
+            "movers": {"top": [{"symbol": "9988.HK"}]},
+        },
+    )
     assert len(st.list_snapshots("kr")) == 1
     assert len(st.list_snapshots("cn")) == 1
     assert len(st.list_snapshots()) == 2  # no filter → all markets
@@ -65,12 +75,12 @@ def test_get_by_date_returns_latest_run_of_the_day(tmp_path):
 
 def test_get_latest_returns_newest_snapshot_across_dates(tmp_path):
     st = _store(tmp_path)
-    st.save("kr", _kr_brief(as_of="2026-07-13T09:11:00Z",
-                             trading_date="2026-07-13"))
-    st.save("kr", _kr_brief(as_of="2026-07-14T09:11:00Z",
-                             trading_date="2026-07-14"))
-    st.save("cn", {"as_of": "2026-07-15T01:00:00Z",
-                   "trading_date": "2026-07-15", "marker": "other-market"})
+    st.save("kr", _kr_brief(as_of="2026-07-13T09:11:00Z", trading_date="2026-07-13"))
+    st.save("kr", _kr_brief(as_of="2026-07-14T09:11:00Z", trading_date="2026-07-14"))
+    st.save(
+        "cn",
+        {"as_of": "2026-07-15T01:00:00Z", "trading_date": "2026-07-15", "marker": "other-market"},
+    )
 
     got = st.get_latest("KR")
     assert got is not None and got["trading_date"] == "2026-07-14"
@@ -98,7 +108,7 @@ def test_snapshot_table_isolated_from_ledger(tmp_path):
     vice versa (same DB-file could otherwise cross-pollute)."""
     assert "research_brief_snapshots" in BRIEF_METADATA.tables
     # the ledger's metadata knows nothing about the brief table
-    Ledger(url=f"sqlite:///{tmp_path/'l.db'}")  # constructs cleanly, no collision
+    Ledger(url=f"sqlite:///{tmp_path / 'l.db'}")  # constructs cleanly, no collision
 
 
 def test_unknown_snapshot_id_returns_none(tmp_path):
@@ -117,6 +127,68 @@ def test_same_edition_and_evidence_hash_is_idempotent(tmp_path):
     assert len(st.list_snapshots("cn")) == 1
 
 
+def test_stable_edition_updates_failed_slot_in_place(tmp_path):
+    st = _store(tmp_path)
+    failed = _brief_with_edition("morning", as_of="2026-07-14T01:00:00Z")
+    failed["narrative"] = None
+    failed["publication"] = {
+        "edition_id": "2026-07-14:morning:cn",
+        "edition": "morning",
+        "scheduled_for": "2026-07-14T01:00:00Z",
+        "evidence_as_of": "2026-07-14T01:00:00Z",
+        "status": "narrative_failed",
+        "failure": "provider timeout",
+    }
+    completed = _brief_with_edition("morning", as_of="2026-07-14T01:05:00Z")
+    completed["publication"] = {
+        **failed["publication"],
+        "evidence_as_of": "2026-07-14T01:05:00Z",
+        "status": "complete",
+        "failure": "",
+    }
+
+    first = st.save("cn", failed)
+    second = st.save("cn", completed)
+
+    assert second == first
+    assert len(st.list_snapshots("cn")) == 1
+    assert st.get(first)["publication"]["status"] == "complete"
+    assert st.get(first)["narrative"]["headline"] == "h"
+
+
+def test_stable_edition_identity_wins_if_trading_date_is_corrected(tmp_path):
+    st = _store(tmp_path)
+    first_payload = _brief_with_edition(
+        "morning",
+        as_of="2026-07-14T01:00:00Z",
+        trading_date="2026-07-13",
+    )
+    first_payload["publication"] = {
+        "edition_id": "2026-07-14:morning:us",
+        "edition": "morning",
+        "scheduled_for": "2026-07-14T01:00:00Z",
+        "evidence_as_of": "2026-07-14T01:00:00Z",
+        "status": "complete",
+        "failure": "",
+    }
+    corrected = {
+        **first_payload,
+        "trading_date": "2026-07-14",
+        "as_of": "2026-07-14T01:05:00Z",
+    }
+    corrected["publication"] = {
+        **first_payload["publication"],
+        "evidence_as_of": "2026-07-14T01:05:00Z",
+    }
+
+    first = st.save("us", first_payload)
+    second = st.save("us", corrected)
+
+    assert second == first
+    assert len(st.list_snapshots("us")) == 1
+    assert st.get(first)["trading_date"] == "2026-07-14"
+
+
 def test_recent_distinct_ignores_repeated_evidence_and_structured_only_rows(tmp_path):
     st = _store(tmp_path)
     old = _brief_with_edition("morning", as_of="2026-07-13T01:00:00Z")
@@ -130,9 +202,7 @@ def test_recent_distinct_ignores_repeated_evidence_and_structured_only_rows(tmp_
     st.save("cn", {**current, "narrative": None})
     st.save("cn", current)
 
-    history = st.get_recent_distinct(
-        "cn", before_generated_at="2026-07-15T00:00:00Z", limit=6
-    )
+    history = st.get_recent_distinct("cn", before_generated_at="2026-07-15T00:00:00Z", limit=6)
 
     assert [row["narrative"]["evidence_hash"] for row in history] == [
         "current",
@@ -158,10 +228,10 @@ def test_prune_duplicates_keeps_newest_per_market_date_edition(tmp_path):
 
     deleted = st.prune_duplicates()
 
-    assert deleted == 2  # only the two older CN 'evening' repeats
+    # save() now upserts a stable edition immediately, so no cleanup remains.
+    assert deleted == 0
     cn_evening = [
-        r for r in st.list_snapshots("cn")
-        if st.get(r["id"])["narrative"]["edition"] == "evening"
+        r for r in st.list_snapshots("cn") if st.get(r["id"])["narrative"]["edition"] == "evening"
     ]
     assert len(cn_evening) == 1 and cn_evening[0]["id"] == newest
     assert len(st.list_snapshots("cn")) == 2  # evening (newest) + morning

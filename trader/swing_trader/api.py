@@ -19,6 +19,7 @@ the pending queue is simply empty outside the confirmation window.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
@@ -122,6 +123,7 @@ class FinanceRuntime:
     prediction_evaluator: Any = None  # non-blocking market-close evaluator
     portfolio_controls: Any = None  # durable PortfolioControlStore
     apply_portfolio_controls: Any = None  # loop callback after an operator update
+    refresh_portfolio_marks: Any = None  # callable(environment) -> refresh report
     # User-set display-name overrides (finance-bot DM "改名"). Highest precedence.
     name_overrides: Any = None  # swing_trader.name_override.NameOverrideStore | None
     # Phase 0.95 (go-live gate): manual operator kill-switch (halts NEW entries).
@@ -425,7 +427,9 @@ def create_app(runtime: FinanceRuntime):
             # the close mark per-symbol (build_account_view flags the basis).
             quotes = _live_quotes_for_positions(runtime)
             view = build_account_view(
-                runtime.broker, runtime.ledger, m,
+                runtime.broker,
+                runtime.ledger,
+                m,
                 quotes=quotes or None,
                 price_as_of=runtime.clock() if quotes else None,
             )
@@ -509,10 +513,82 @@ def create_app(runtime: FinanceRuntime):
         if store is None:
             return None
         try:
-            return store.get_latest(market_key)
+            payload = store.get_latest(market_key)
+            return _coherent_brief(market_key, payload) if payload else None
         except Exception:  # noqa: BLE001 — corrupt archive degrades honestly
             logger.warning("latest brief archive read failed", extra={"market": market_key})
             return None
+
+    def _coherent_brief(market_key: str, raw: dict) -> dict:
+        """Fail closed when prose and structured evidence are different runs.
+
+        New canonical publications carry an explicit status/edition identity.
+        Legacy payloads are accepted only when the narrative timestamp remains
+        close to the evidence timestamp; this quarantines already-persisted
+        mixed snapshots without rewriting audit history.
+        """
+
+        payload = copy.deepcopy(raw)
+        narrative = payload.get("narrative")
+        if not isinstance(narrative, dict):
+            return payload
+        publication = payload.get("publication")
+        reason = ""
+        if isinstance(publication, dict):
+            if publication.get("status") != "complete":
+                reason = str(publication.get("failure") or "本版主模型叙事未完成")
+            elif narrative.get("edition") != publication.get("edition"):
+                reason = "研报叙事与本版 edition 不一致"
+            elif str(narrative.get("market") or "").lower() != market_key.lower():
+                reason = "研报叙事与本版市场不一致"
+            else:
+                try:
+                    generated = datetime.fromisoformat(
+                        str(narrative.get("generated_at")).replace("Z", "+00:00")
+                    )
+                    scheduled = datetime.fromisoformat(
+                        str(publication.get("scheduled_for")).replace("Z", "+00:00")
+                    )
+                    evidence = datetime.fromisoformat(
+                        str(publication.get("evidence_as_of")).replace("Z", "+00:00")
+                    )
+                    payload_as_of = datetime.fromisoformat(
+                        str(payload.get("as_of")).replace("Z", "+00:00")
+                    )
+                    if generated < scheduled:
+                        reason = "研报叙事早于本版计划发布时间"
+                    elif abs((evidence - payload_as_of).total_seconds()) > 300:
+                        reason = "研报叙事绑定的证据时间与本版数据不一致"
+                except (TypeError, ValueError):
+                    reason = "研报版本时间戳无效"
+        else:
+            try:
+                generated = datetime.fromisoformat(
+                    str(narrative.get("generated_at")).replace("Z", "+00:00")
+                )
+                evidence = datetime.fromisoformat(str(payload.get("as_of")).replace("Z", "+00:00"))
+                if abs((generated - evidence).total_seconds()) > 6 * 3600:
+                    reason = "历史研报叙事与当前结构化证据不属于同一次研究"
+            except (TypeError, ValueError):
+                reason = "历史研报缺少可验证的版本时间"
+        if not reason:
+            return payload
+        payload["narrative"] = None
+        warnings = list(payload.get("uncertainty") or [])
+        warning = f"{reason}；旧文字已隔离，请等待主模型重新生成"
+        if warning not in warnings:
+            warnings.append(warning)
+        payload["uncertainty"] = warnings
+        if not isinstance(publication, dict):
+            payload["publication"] = {
+                "edition_id": f"legacy-invalid:{market_key}:{payload.get('trading_date') or ''}",
+                "edition": str(narrative.get("edition") or "morning"),
+                "scheduled_for": str(narrative.get("generated_at") or payload.get("as_of")),
+                "evidence_as_of": str(payload.get("as_of")),
+                "status": "narrative_failed",
+                "failure": reason,
+            }
+        return payload
 
     def _market_from_brief(brief: object) -> Optional[dict]:
         """Map a persisted US research brief back to the market-card shape.
@@ -590,7 +666,10 @@ def create_app(runtime: FinanceRuntime):
     @app.get(f"/{API_VERSION}/research/watchlists")
     def research_watchlists() -> list[dict]:
         """User-created research groups; never part of the trading universe."""
-        return [_research_watchlist_payload(group) for group in _need_research_watchlists().list_groups()]
+        return [
+            _research_watchlist_payload(group)
+            for group in _need_research_watchlists().list_groups()
+        ]
 
     @app.post(f"/{API_VERSION}/research/watchlists", status_code=201)
     def create_research_watchlist(body: ResearchWatchlistCreateRequest) -> dict:
@@ -673,7 +752,9 @@ def create_app(runtime: FinanceRuntime):
                 ".KS": "KRX",
                 ".KQ": "KRX",
             }
-            exchange = next((value for suffix, value in suffixes.items() if upper.endswith(suffix)), None)
+            exchange = next(
+                (value for suffix, value in suffixes.items() if upper.endswith(suffix)), None
+            )
             if exchange is not None:
                 code = upper.split(".", 1)[0]
                 security_type = (
@@ -723,8 +804,14 @@ def create_app(runtime: FinanceRuntime):
             return payload
         from swing_trader.research_synthesis import build_cn_hk_synthesis
 
-        cn = payload if key == "cn" else (runtime.latest_briefs.get("cn") or _archived_brief("cn"))
-        hk = payload if key == "hk" else (runtime.latest_briefs.get("hk") or _archived_brief("hk"))
+        cn_raw = (
+            payload if key == "cn" else (runtime.latest_briefs.get("cn") or _archived_brief("cn"))
+        )
+        hk_raw = (
+            payload if key == "hk" else (runtime.latest_briefs.get("hk") or _archived_brief("hk"))
+        )
+        cn = _coherent_brief("cn", cn_raw) if cn_raw else None
+        hk = _coherent_brief("hk", hk_raw) if hk_raw else None
         return {
             **payload,
             "cross_market_synthesis": build_cn_hk_synthesis(cn, hk, now=runtime.clock()).model_dump(
@@ -749,8 +836,11 @@ def create_app(runtime: FinanceRuntime):
         if not cur or not quotes:
             return brief
         view = build_account_view(
-            runtime.broker, runtime.ledger, runtime.mode,
-            quotes=quotes, price_as_of=runtime.clock(),
+            runtime.broker,
+            runtime.ledger,
+            runtime.mode,
+            quotes=quotes,
+            price_as_of=runtime.clock(),
         )
         eq = view.equity_by_currency.get(cur)
         if eq is None:
@@ -758,7 +848,8 @@ def create_app(runtime: FinanceRuntime):
         return {
             **brief,
             "risk": {
-                **risk, "equity": eq,
+                **risk,
+                "equity": eq,
                 "cash": view.cash_by_currency.get(cur, risk.get("cash")),
                 "currency": cur,
             },
@@ -779,7 +870,8 @@ def create_app(runtime: FinanceRuntime):
                 runtime.latest_brief_cn if key == "cn" else None
             )
             if cached:
-                return _overlay_live_risk(key, _with_cn_hk_synthesis(key, cached))
+                coherent = _coherent_brief(key, cached)
+                return _overlay_live_risk(key, _with_cn_hk_synthesis(key, coherent))
             archived = _archived_brief(key)
             if archived:
                 runtime.latest_briefs[key] = archived
@@ -805,7 +897,7 @@ def create_app(runtime: FinanceRuntime):
             return _with_cn_hk_synthesis(key, brief.model_dump(mode="json"))
 
         if runtime.latest_brief:
-            return _overlay_live_risk("us", runtime.latest_brief)
+            return _overlay_live_risk("us", _coherent_brief("us", runtime.latest_brief))
         archived = _archived_brief("us")
         if archived:
             runtime.latest_brief = archived
@@ -882,8 +974,10 @@ def create_app(runtime: FinanceRuntime):
         """Explicit CN↔HK synthesis; source briefs keep independent state."""
         from swing_trader.research_synthesis import build_cn_hk_synthesis
 
-        cn = runtime.latest_briefs.get("cn") or _archived_brief("cn")
-        hk = runtime.latest_briefs.get("hk") or _archived_brief("hk")
+        cn_raw = runtime.latest_briefs.get("cn") or _archived_brief("cn")
+        hk_raw = runtime.latest_briefs.get("hk") or _archived_brief("hk")
+        cn = _coherent_brief("cn", cn_raw) if cn_raw else None
+        hk = _coherent_brief("hk", hk_raw) if hk_raw else None
         return build_cn_hk_synthesis(cn, hk, now=runtime.clock()).model_dump(mode="json")
 
     @app.get(f"/{API_VERSION}/research/history")
@@ -1417,13 +1511,21 @@ def create_app(runtime: FinanceRuntime):
             quote = live.get(position.symbol)
             if quote is not None:
                 marks[position.symbol] = Mark(
-                    position.symbol, quote, position.currency,
-                    now, "live", "paper-broker",
+                    position.symbol,
+                    quote,
+                    position.currency,
+                    now,
+                    "live",
+                    "paper-broker",
                 )
             elif position.mkt_px is not None:
                 marks[position.symbol] = Mark(
-                    position.symbol, position.mkt_px, position.currency,
-                    snap_ts, "close", "paper-broker",
+                    position.symbol,
+                    position.mkt_px,
+                    position.currency,
+                    snap_ts,
+                    "close",
+                    "paper-broker",
                 )
         return marks
 
@@ -1673,7 +1775,7 @@ def create_app(runtime: FinanceRuntime):
     @app.get(f"/{API_VERSION}/portfolio/aggregate")
     def portfolio_aggregate(
         include_in_risk_only: bool = Query(default=False),
-        environment: Optional[str] = Query(default=None),
+        environment: Optional[str] = Query(default="live"),
     ) -> dict:
         agg = _portfolio_aggregate(
             _portfolio_environment(environment),
@@ -1851,7 +1953,7 @@ def create_app(runtime: FinanceRuntime):
     @app.get(f"/{API_VERSION}/portfolio/valuation")
     def portfolio_valuation_all(
         include_in_risk_only: bool = Query(default=False),
-        environment: Optional[str] = Query(default=None),
+        environment: Optional[str] = Query(default="live"),
     ) -> dict:
         from swing_trader.valuation import value_aggregate
 
@@ -1898,54 +2000,16 @@ def create_app(runtime: FinanceRuntime):
         }
 
     @app.post(f"/{API_VERSION}/portfolio/marks/refresh")
-    def portfolio_refresh_marks() -> dict:
+    def portfolio_refresh_marks(
+        environment: Optional[str] = Query(default="live"),
+    ) -> dict:
         """Refresh marks from the live feed for HELD, quotable symbols (exchange
         tickers). 场外基金 (bare fund codes) are skipped — no live feed."""
-        pf = _need_portfolio()
-        if runtime.feed is None:
+        _need_portfolio()
+        env = _portfolio_environment(environment)
+        if runtime.refresh_portfolio_marks is None:
             raise HTTPException(503, "data feed not available")
-        symbols = {e.symbol for e in pf.get_events() if e.symbol}
-        refreshed, failed, skipped = [], [], []
-        for sym in sorted(symbols):
-            base = sym.split(".")[0]
-            quotable = sym.endswith((".SS", ".SZ", ".HK")) or base.isalpha()
-            if quotable:
-                ccy = (
-                    "CNY"
-                    if sym.endswith((".SS", ".SZ"))
-                    else "HKD"
-                    if sym.endswith(".HK")
-                    else "USD"
-                )
-                try:
-                    q = runtime.feed.get_quote(sym)
-                    pf.set_mark(
-                        sym,
-                        q.last,
-                        currency=ccy,
-                        source="live",
-                        actor="system",
-                        as_of=runtime.clock(),
-                    )
-                    refreshed.append(sym)
-                except Exception:  # noqa: BLE001 — one bad symbol must not fail the batch
-                    failed.append(sym)
-                continue
-            # 场外基金 (bare fund code): use the NAV provider when configured.
-            nav = None
-            if runtime.nav_provider is not None:
-                try:
-                    nav = runtime.nav_provider.get_nav(sym)
-                except Exception:  # noqa: BLE001
-                    nav = None
-            if nav is not None:
-                pf.set_mark(
-                    sym, nav.price, currency="CNY", source="live", actor="system", as_of=nav.as_of
-                )
-                refreshed.append(sym)
-            else:
-                skipped.append(sym)  # no NAV source / lookup failed
-        return {"refreshed": refreshed, "failed": failed, "skipped": skipped}
+        return runtime.refresh_portfolio_marks(env).model_dump()
 
     # ---- manual trading-session trigger (missed-session catch-up, P0.9) ----
 
@@ -1999,15 +2063,19 @@ def create_app(runtime: FinanceRuntime):
             except Exception:
                 logger.exception("manual session run failed", extra={"market": market})
                 runtime.last_session_summary[market] = {
-                    "error": "session run failed — see service logs", "market": market,
+                    "error": "session run failed — see service logs",
+                    "market": market,
                 }
             finally:
                 runtime.session_running.discard(market)
 
         threading.Thread(target=_run, daemon=True).start()
-        return {"status": "started", "market": market,
-                "note": "session running in the background (~1-2 min); "
-                        "approve the cards below when they appear, then finalize"}
+        return {
+            "status": "started",
+            "market": market,
+            "note": "session running in the background (~1-2 min); "
+            "approve the cards below when they appear, then finalize",
+        }
 
     @app.get(f"/{API_VERSION}/session/status")
     def session_status(market: str = Query(default="us")) -> dict:

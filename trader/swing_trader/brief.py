@@ -24,7 +24,7 @@ layer can return them unchanged.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Callable, Optional, TypeVar
+from typing import Callable, Literal, Optional, TypeVar
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -69,6 +69,7 @@ __all__ = [
     "NarrativeSection",
     "PendingCandidate",
     "ProvenanceLink",
+    "ResearchPublication",
     "RegimeView",
     "ResearchBrief",
     "ResearchNarrative",
@@ -112,8 +113,7 @@ DATA_SOURCE_URL: str = "https://finance.yahoo.com"
 
 #: Honest unknown: NewsMonitor.get_earnings_calendar is a Phase-0.5 TODO.
 EARNINGS_NOT_WIRED_NOTE: str = (
-    "earnings calendar feed is not wired yet (Phase 0.5 TODO) — "
-    "no earnings events are shown"
+    "earnings calendar feed is not wired yet (Phase 0.5 TODO) — no earnings events are shown"
 )
 
 #: Candidate statuses still awaiting action (shown under "pending").
@@ -340,7 +340,7 @@ class ForecastClaim(BaseModel):
     session horizons without parsing prose after publication.
     """
 
-    entity_type: str = Field(pattern=r"^(market|instrument|theme|event)$")
+    entity_type: str = Field(pattern=r"^(market|instrument|index|indicator|theme|event)$")
     entity_key: str = Field(min_length=1, max_length=160)
     claim_type: str = Field(min_length=1, max_length=80)
     direction: str = Field(min_length=1, max_length=32)
@@ -373,9 +373,7 @@ class ThesisAction(BaseModel):
             r"exit_if_invalidated|watch|avoid)$"
         )
     )
-    thesis_state: str = Field(
-        pattern=r"^(new|strengthened|unchanged|weakened|invalidated)$"
-    )
+    thesis_state: str = Field(pattern=r"^(new|strengthened|unchanged|weakened|invalidated)$")
     confidence: float = Field(ge=0.0, le=1.0)
     horizon_sessions: int = Field(ge=1, le=60)
     what_changed: str = Field(min_length=1, max_length=500)
@@ -415,6 +413,29 @@ class ResearchNarrative(BaseModel):
         return v
 
 
+class ResearchPublication(BaseModel):
+    """Identity and outcome of one promised 09:00/21:00 publication.
+
+    The status lives beside, rather than inside, ``narrative`` so a failed
+    primary-model completion can still publish the new structured evidence
+    without borrowing prose from an older edition.
+    """
+
+    edition_id: str = Field(min_length=1, max_length=96)
+    edition: Literal["morning", "evening"]
+    scheduled_for: datetime
+    evidence_as_of: datetime
+    status: Literal["pending", "complete", "narrative_failed"]
+    failure: str = Field(default="", max_length=500)
+
+    @field_validator("scheduled_for", "evidence_as_of")
+    @classmethod
+    def _publication_timestamps_tz_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("publication timestamps must be timezone-aware")
+        return value
+
+
 class ResearchBrief(BaseModel):
     """The daily Investment Research brief (Loop.md §7 Phase 0.5 acceptance:
     as-of time, citations/unknowns, PAPER/LIVE mode, actionable warnings)."""
@@ -437,6 +458,10 @@ class ResearchBrief(BaseModel):
     # Phase 0.95: research-only symbols discovered outside the static
     # watchlist. This object deliberately contains no order/candidate state.
     discovery: Optional[DiscoveryPool] = None
+    # Present on canonical Beijing 09:00/21:00 publications. Older archives
+    # remain readable without it; API compatibility validation rejects an old
+    # narrative when its timestamp is materially detached from current data.
+    publication: Optional[ResearchPublication] = None
     # Optional for old archives, degraded runs, or a failed/unconfigured model.
     # Never substitute deterministic template prose for a missing narrative.
     narrative: Optional[ResearchNarrative] = None
@@ -491,9 +516,7 @@ def _dist_pct(last: float, sma: Optional[float]) -> Optional[float]:
     return (last - sma) / sma * 100.0
 
 
-def _safe(
-    label: str, fn: Callable[[], _T], default: _T, unknowns: list[str]
-) -> _T:
+def _safe(label: str, fn: Callable[[], _T], default: _T, unknowns: list[str]) -> _T:
     """Run a ledger accessor; on ANY failure degrade honestly, never raise.
 
     Loop.md §5.9: unavailable data is an explicit warning — the failure is
@@ -502,9 +525,7 @@ def _safe(
     try:
         return fn()
     except Exception as exc:  # noqa: BLE001 — brief must never raise
-        logger.warning(
-            "brief: %s unavailable — degrading", label, extra={"error": str(exc)}
-        )
+        logger.warning("brief: %s unavailable — degrading", label, extra={"error": str(exc)})
         unknowns.append(f"{label} unavailable ({exc}) — brief shown without it")
         return default
 
@@ -520,8 +541,7 @@ def _source_freshness(
         return (
             None,
             True,
-            f"{name} data is missing — the {name} monitor has not produced "
-            "a snapshot",
+            f"{name} data is missing — the {name} monitor has not produced a snapshot",
         )
     age = max(0.0, (now - as_of).total_seconds() / 60.0)
     if age > STALE_AFTER_MINUTES:
@@ -588,9 +608,7 @@ def _stats_dict(stats: TradeStats) -> dict[str, float]:
     }
 
 
-_BREAKER_WARNING = (
-    "daily drawdown circuit breaker is TRIPPED — no new entries today"
-)
+_BREAKER_WARNING = "daily drawdown circuit breaker is TRIPPED — no new entries today"
 
 
 def _risk_view(
@@ -611,14 +629,8 @@ def _risk_view(
         warnings = list(risk_status.warnings)
         if snap.breaker_state is BreakerState.TRIPPED:
             warnings.append(_BREAKER_WARNING)
-        equity = (
-            snap.equity_by_currency.get(currency, snap.equity)
-            if currency else snap.equity
-        )
-        cash = (
-            snap.cash_by_currency.get(currency, snap.cash)
-            if currency else snap.cash
-        )
+        equity = snap.equity_by_currency.get(currency, snap.equity) if currency else snap.equity
+        cash = snap.cash_by_currency.get(currency, snap.cash) if currency else snap.cash
         return RiskView(
             equity=equity,
             cash=cash,
@@ -627,8 +639,7 @@ def _risk_view(
             drawdown_pct=snap.drawdown_pct,
             breaker_state=snap.breaker_state.value,
             pool_exposure_pct={
-                Role(role).value: pct
-                for role, pct in risk_status.per_pool_exposure_pct.items()
+                Role(role).value: pct for role, pct in risk_status.per_pool_exposure_pct.items()
             },
             warnings=warnings,
             stats=stats,
@@ -650,14 +661,8 @@ def _risk_view(
     if snap.breaker_state is BreakerState.TRIPPED:
         warnings.append(_BREAKER_WARNING)
     return RiskView(
-        equity=(
-            snap.equity_by_currency.get(currency, snap.equity)
-            if currency else snap.equity
-        ),
-        cash=(
-            snap.cash_by_currency.get(currency, snap.cash)
-            if currency else snap.cash
-        ),
+        equity=(snap.equity_by_currency.get(currency, snap.equity) if currency else snap.equity),
+        cash=(snap.cash_by_currency.get(currency, snap.cash) if currency else snap.cash),
         currency=currency or snap.base_currency,
         day_pnl=snap.day_pnl,
         drawdown_pct=snap.drawdown_pct,
@@ -693,9 +698,7 @@ def _build_movers(
                 dist_sma20_pct=dist20,
                 dist_sma50_pct=_dist_pct(state.last, state.sma50),
                 theme=item.theme if item is not None else "unknown",
-                ai_phase=(
-                    item.ai_phase.value if item is not None else AiPhase.NONE.value
-                ),
+                ai_phase=(item.ai_phase.value if item is not None else AiPhase.NONE.value),
                 role=item.role.value if item is not None else Role.ROTATION.value,
                 region=_region_of(symbol),
             )
@@ -713,9 +716,7 @@ def _build_movers(
     return MoversView(top=top, bottom=bottom), movers
 
 
-def _build_themes(
-    watch: dict[str, WatchState], lookup: Callable
-) -> list[ThemeView]:
+def _build_themes(watch: dict[str, WatchState], lookup: Callable) -> list[ThemeView]:
     grouped: dict[str, list[tuple[str, float]]] = {}
     for symbol in sorted(watch):
         state = watch[symbol]
@@ -728,10 +729,7 @@ def _build_themes(
     views: list[ThemeView] = []
     for theme, rows in grouped.items():
         avg = sum(dist for _, dist in rows) / len(rows)
-        leaders = [
-            sym
-            for sym, _ in sorted(rows, key=lambda r: (-r[1], r[0]))[:THEME_LEADERS]
-        ]
+        leaders = [sym for sym, _ in sorted(rows, key=lambda r: (-r[1], r[0]))[:THEME_LEADERS]]
         views.append(
             ThemeView(
                 theme=theme,
@@ -790,9 +788,7 @@ def _build_news(news: Optional[NewsSnapshot], now: datetime) -> NewsSection:
             published_at=item.ts.astimezone(timezone.utc),
             age_hours=max(
                 0.0,
-                (
-                    now.astimezone(timezone.utc) - item.ts.astimezone(timezone.utc)
-                ).total_seconds()
+                (now.astimezone(timezone.utc) - item.ts.astimezone(timezone.utc)).total_seconds()
                 / 3600,
             ),
             source_quality=source_quality(item.source)[0],
@@ -809,14 +805,11 @@ def _build_news(news: Optional[NewsSnapshot], now: datetime) -> NewsSection:
 
     return NewsSection(
         items=items,
-        per_symbol_sentiment={
-            key: sum(values) / len(values) for key, values in sentiments.items()
-        },
+        per_symbol_sentiment={key: sum(values) / len(values) for key, values in sentiments.items()},
         stale_items_excluded=per_symbol.stale_excluded,
         future_items_excluded=per_symbol.future_excluded,
         duplicate_items_excluded=(
-            per_symbol.duplicates_excluded
-            + max(0, len(per_symbol.items) - len(digest.items))
+            per_symbol.duplicates_excluded + max(0, len(per_symbol.items) - len(digest.items))
         ),
     )
 
@@ -835,9 +828,7 @@ def _build_provenance(items: list[NewsDigestItem]) -> list[ProvenanceLink]:
     return links
 
 
-def _signal_views(
-    signals: list[Signal], trading_date: str, tz: ZoneInfo
-) -> list[SignalView]:
+def _signal_views(signals: list[Signal], trading_date: str, tz: ZoneInfo) -> list[SignalView]:
     """Today's (session-tz) signals, debate verdicts first, then confidence."""
     todays = [s for s in signals if _local_date(s.ts, tz) == trading_date]
     todays.sort(
@@ -868,9 +859,7 @@ def _signal_views(
     ]
 
 
-def _holding_views(
-    portfolio: Optional[PortfolioSnapshot], environment: str
-) -> list[HoldingView]:
+def _holding_views(portfolio: Optional[PortfolioSnapshot], environment: str) -> list[HoldingView]:
     if portfolio is None:
         return []
     rows: list[HoldingView] = []
@@ -1011,31 +1000,23 @@ def build_research_brief(
 
     if earnings is not None:
         earnings_rows = [
-            e.model_dump(mode="json") if hasattr(e, "model_dump") else dict(e)
-            for e in earnings
+            e.model_dump(mode="json") if hasattr(e, "model_dump") else dict(e) for e in earnings
         ]
         notes: list[str] = []
         if not earnings_rows:
-            notes.append(
-                "no upcoming earnings for the watchlist in the lookahead window"
-            )
+            notes.append("no upcoming earnings for the watchlist in the lookahead window")
         events = EventsView(earnings=earnings_rows, notes=notes)
         imminent = [e for e in earnings_rows if e.get("imminent")]
         if imminent:
-            names = ", ".join(
-                f"{e.get('symbol')} ({e.get('days_until')}d)" for e in imminent
-            )
+            names = ", ".join(f"{e.get('symbol')} ({e.get('days_until')}d)" for e in imminent)
             unknowns.append(
-                f"earnings imminent: {names} — avoid opening fresh positions "
-                "into the print"
+                f"earnings imminent: {names} — avoid opening fresh positions into the print"
             )
     else:
         events = EventsView(earnings=[], notes=[EARNINGS_NOT_WIRED_NOTE])
 
     # ---------------------------------------------- auto-collected unknowns
-    missing_atr = sorted(
-        symbol for symbol, state in watch.items() if state.atr_pct is None
-    )
+    missing_atr = sorted(symbol for symbol, state in watch.items() if state.atr_pct is None)
     if missing_atr:
         unknowns.append(
             f"ATR unavailable for {len(missing_atr)} watch symbol(s): "
@@ -1055,18 +1036,14 @@ def build_research_brief(
             "72 hours; they are historical context, not current catalysts"
         )
     if news_section.future_items_excluded:
-        unknowns.append(
-            f"excluded {news_section.future_items_excluded} future-dated news item(s)"
-        )
+        unknowns.append(f"excluded {news_section.future_items_excluded} future-dated news item(s)")
     if llm_enabled:
         unknowns.append(
             "LLM analyst is enabled — its output is analysis-only, "
             "confidence-capped, and never places orders"
         )
     else:
-        unknowns.append(
-            "LLM analyst is disabled — analysis is rule-based only"
-        )
+        unknowns.append("LLM analyst is disabled — analysis is rule-based only")
 
     brief = ResearchBrief(
         as_of=now,

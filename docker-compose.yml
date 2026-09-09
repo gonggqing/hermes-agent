@@ -36,9 +36,9 @@ services:
     # Current Hermes runtime secrets live on the host at ~/.hermes/.env.
     # Docker mounts that directory at /opt/data, while env_file exports the
     # values into the supervised gateway process (including Telegram and
-    # model-provider keys such as GLM_API_KEY / DEEPSEEK_API_KEY).
+    # model-provider API keys).
     # Model routing belongs in ~/.hermes/config.yaml, not here: this local
-    # profile currently uses Z.AI GLM-5.1 as primary and DeepSeek subagents.
+    # profile's current primary/subagent choices are resolved there at runtime.
     # This is NOT the final finance deployment location: trader/ is still an
     # independent paper-trading core and has not yet been adapted to Hermes.
     # Its own future runtime secrets/config must be wired through a dedicated
@@ -152,6 +152,9 @@ services:
       # infrastructure: authoritative documents stay in documents.db and
       # execution/ledger state never lives here.
       - FINANCE_QDRANT_URL=http://hermes-finance-vector:6333
+      # HK simulation mirrors the US/CN confirmation and execution lifecycle.
+      # This remains PaperBroker-only; it does not grant IBKR live authority.
+      - HK_ORDERS_ENABLED=true
     entrypoint:
       - /opt/hermes/trader/.venv/bin/python
       - -m

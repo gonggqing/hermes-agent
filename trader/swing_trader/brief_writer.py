@@ -55,10 +55,11 @@ Requirements:
 - For every action view, state what changed, the intended trading-session horizon, an observable invalidation, and supplied evidence references. Prioritize current holdings, material thesis changes and the highest-conviction opportunities; do not fill a quota.
 - 'watch_next' must contain 2-6 concrete questions, events, levels, symbols or evidence changes to monitor next.
 - Also emit 0-12 measurable forecast claims. A claim is a research view, not an order. Use instrument horizons 1/3/5/10/20 sessions, market regime 1/3/5, discovery/theme 5/20/60, and event 1/5. Do not emit a claim when the evidence cannot support a direction and confidence.
-- Claims about an instrument must use its exact listed ticker as entity_key. Event claims are only measurable when tied to one listed instrument: emit one claim per affected ticker and use that exact ticker as entity_key; never use event names, dates, joined ticker lists, private-company names, or labels such as "EARNINGS:..." as entity_key. Claims must name an invalidation condition and cite supplied evidence references (ticker, source URL, or signal source_agent).
+- Classify claims precisely: `instrument` is one listed stock/ETF, `index` is one canonical index ticker, `indicator` is one directly price-observable series such as `^VIX`, `theme` requires a supplied listed-leader basket, and `market` uses the market benchmark. Never encode SMA/RSI labels, dates or prose as ticker-like entity keys.
+- Instrument/index/indicator claims must use an exact provider-resolvable ticker as entity_key. Event claims are only measurable when tied to one listed instrument: emit one claim per affected ticker and use that exact ticker as entity_key; never use event names, dates, joined ticker lists, private-company names, or labels such as "EARNINGS:..." as entity_key. Claims must name an invalidation condition and cite supplied evidence references (ticker, source URL, or signal source_agent).
 
 Return ONLY one JSON object with this exact shape:
-{"headline":"concise market-specific conclusion","summary":"2-4 paragraph executive synthesis","change_summary":["material change since prior brief"],"action_views":[{"symbol":"exact ticker","display_name":"optional supplied name","stance":"buy_on_confirmation|hold|reduce_on_weakness|exit_if_invalidated|watch|avoid","thesis_state":"new|strengthened|unchanged|weakened|invalidated","confidence":0.0,"horizon_sessions":5,"what_changed":"specific delta","rationale":"multi-factor reasoning","invalidation":"observable condition","evidence_refs":["supplied reference"]}],"sections":[{"title":"market-specific section title","analysis":"2-5 analytical sentences"}],"watch_next":["concrete follow-up"],"claims":[{"entity_type":"market|instrument|theme|event","entity_key":"exact identifier","claim_type":"regime|swing_direction|discovery|theme|event","direction":"long|short|neutral|risk_on|risk_off|positive|negative","confidence":0.0,"horizons":[1,3,5],"thesis":"evidence-bound claim","invalidation":"observable invalidation","benchmark":"optional ticker","expected_condition":"measurable expected state","evidence_refs":["supplied reference"]}]}
+{"headline":"concise market-specific conclusion","summary":"2-4 paragraph executive synthesis","change_summary":["material change since prior brief"],"action_views":[{"symbol":"exact ticker","display_name":"optional supplied name","stance":"buy_on_confirmation|hold|reduce_on_weakness|exit_if_invalidated|watch|avoid","thesis_state":"new|strengthened|unchanged|weakened|invalidated","confidence":0.0,"horizon_sessions":5,"what_changed":"specific delta","rationale":"multi-factor reasoning","invalidation":"observable condition","evidence_refs":["supplied reference"]}],"sections":[{"title":"market-specific section title","analysis":"2-5 analytical sentences"}],"watch_next":["concrete follow-up"],"claims":[{"entity_type":"market|instrument|index|indicator|theme|event","entity_key":"exact identifier","claim_type":"regime|swing_direction|discovery|theme|event","direction":"long|short|neutral|risk_on|risk_off|positive|negative","confidence":0.0,"horizons":[1,3,5],"thesis":"evidence-bound claim","invalidation":"observable invalidation","benchmark":"optional ticker","expected_condition":"measurable expected state","evidence_refs":["supplied reference"]}]}
 """
 
 _MARKET_LENSES = {
@@ -204,7 +205,8 @@ def _build_history_context(
             state = "new"
         elif (
             previous.get("direction") == current.get("direction")
-            and abs(float(previous.get("confidence") or 0) - float(current.get("confidence") or 0)) < 0.05
+            and abs(float(previous.get("confidence") or 0) - float(current.get("confidence") or 0))
+            < 0.05
             and previous.get("thesis") == current.get("thesis")
         ):
             state = "unchanged"
@@ -342,9 +344,7 @@ def _validate_action_views(rows: list, brief: ResearchBrief) -> list[ThesisActio
             or action.symbol in fresh_positive_news
             or signal_support.get(action.symbol)
         ):
-            raise ValueError(
-                f"technical-only buy_on_confirmation is not allowed: {action.symbol}"
-            )
+            raise ValueError(f"technical-only buy_on_confirmation is not allowed: {action.symbol}")
         canonical_name = display_names.get(action.symbol)
         if canonical_name:
             action = action.model_copy(update={"display_name": canonical_name})
@@ -379,9 +379,7 @@ class ResearchBriefWriter:
         history: list[dict] = []
         if self._history_loader is not None:
             try:
-                history = self._history_loader(
-                    market_id.lower(), brief.as_of.isoformat(), 6
-                )
+                history = self._history_loader(market_id.lower(), brief.as_of.isoformat(), 6)
             except Exception as exc:  # history improves judgment, never availability
                 logger.warning(
                     "research history unavailable",
@@ -427,9 +425,7 @@ class ResearchBriefWriter:
 
         try:
             data = _extract_object(raw)
-            sections = [
-                NarrativeSection.model_validate(row) for row in data["sections"][:7]
-            ]
+            sections = [NarrativeSection.model_validate(row) for row in data["sections"][:7]]
             narrative = ResearchNarrative(
                 generated_at=brief.as_of,
                 market=market_id.upper(),
@@ -440,21 +436,14 @@ class ResearchBriefWriter:
                 headline=str(data["headline"]).strip(),
                 summary=str(data["summary"]).strip(),
                 change_summary=[
-                    str(row).strip()
-                    for row in data.get("change_summary", [])
-                    if str(row).strip()
+                    str(row).strip() for row in data.get("change_summary", []) if str(row).strip()
                 ][:6],
-                action_views=_validate_action_views(
-                    data.get("action_views", [])[:12], brief
-                )[:12],
+                action_views=_validate_action_views(data.get("action_views", [])[:12], brief)[:12],
                 sections=sections,
                 watch_next=[
                     str(row).strip() for row in data.get("watch_next", []) if str(row).strip()
                 ][:6],
-                claims=[
-                    ForecastClaim.model_validate(row)
-                    for row in data.get("claims", [])[:20]
-                ],
+                claims=[ForecastClaim.model_validate(row) for row in data.get("claims", [])[:20]],
             )
         except Exception as first_exc:
             # Reasoning models occasionally use their output budget before
@@ -482,19 +471,15 @@ class ResearchBriefWriter:
                         for row in data.get("change_summary", [])
                         if str(row).strip()
                     ][:6],
-                    action_views=_validate_action_views(
-                        data.get("action_views", [])[:12], brief
-                    )[:12],
-                    sections=[
-                        NarrativeSection.model_validate(row)
-                        for row in data["sections"][:7]
+                    action_views=_validate_action_views(data.get("action_views", [])[:12], brief)[
+                        :12
                     ],
+                    sections=[NarrativeSection.model_validate(row) for row in data["sections"][:7]],
                     watch_next=[
                         str(row).strip() for row in data.get("watch_next", []) if str(row).strip()
                     ][:6],
                     claims=[
-                        ForecastClaim.model_validate(row)
-                        for row in data.get("claims", [])[:20]
+                        ForecastClaim.model_validate(row) for row in data.get("claims", [])[:20]
                     ],
                 )
             except Exception as retry_exc:  # never break the market loop

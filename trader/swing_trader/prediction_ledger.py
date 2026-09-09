@@ -215,8 +215,12 @@ def _stable_evidence(brief: ResearchBrief) -> dict[str, Any]:
     value.pop("as_of", None)
     freshness = value.get("freshness") or {}
     for key in (
-        "market_as_of", "news_as_of", "portfolio_as_of",
-        "market_age_minutes", "news_age_minutes", "portfolio_age_minutes",
+        "market_as_of",
+        "news_as_of",
+        "portfolio_as_of",
+        "market_age_minutes",
+        "news_age_minutes",
+        "portfolio_age_minutes",
     ):
         freshness.pop(key, None)
     narrative = value.get("narrative")
@@ -228,12 +232,10 @@ def _stable_evidence(brief: ResearchBrief) -> dict[str, Any]:
 def _series_key(market: str, claim: _ClaimInput) -> str:
     entity_key = (
         claim.entity_key.strip().upper()
-        if claim.entity_type == "instrument"
+        if claim.entity_type in {"instrument", "index", "indicator", "event"}
         else claim.entity_key.strip()
     )
-    return _stable_hash(
-        [market, claim.entity_type, entity_key, claim.claim_type, claim.producer]
-    )
+    return _stable_hash([market, claim.entity_type, entity_key, claim.claim_type, claim.producer])
 
 
 def _market_schedule(market: str):
@@ -296,9 +298,7 @@ def _claim_fingerprint(claim: _ClaimInput) -> str:
             "payload": claim.payload or {},
             "evidence": sorted(
                 claim.evidence,
-                key=lambda item: json.dumps(
-                    item, ensure_ascii=False, sort_keys=True, default=str
-                ),
+                key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True, default=str),
             ),
         }
     )
@@ -311,12 +311,14 @@ class PredictionLedger:
         connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
         self._engine = create_engine(url, connect_args=connect_args)
         if url.startswith("sqlite"):
+
             @event.listens_for(self._engine, "connect")
             def _sqlite_pragmas(dbapi_connection, _connection_record) -> None:
                 cursor = dbapi_connection.cursor()
                 cursor.execute("PRAGMA journal_mode=WAL")
                 cursor.execute("PRAGMA foreign_keys=ON")
                 cursor.close()
+
         PREDICTION_METADATA.create_all(self._engine)
         self._backfill_checkpoint_dates()
 
@@ -361,14 +363,22 @@ class PredictionLedger:
         market = market.strip().upper()
         narrative = parsed.narrative
         evidence_hash = (
-            narrative.evidence_hash if narrative and narrative.evidence_hash
+            narrative.evidence_hash
+            if narrative and narrative.evidence_hash
             else _stable_hash(_stable_evidence(parsed))
         )
         edition = narrative.edition if narrative else ""
         model = narrative.model if narrative else ""
         prompt_version = narrative.prompt_version if narrative else ""
-        run_key = _stable_hash(
-            [market, parsed.trading_date, edition, model, prompt_version, evidence_hash]
+        # Canonical 09:00/21:00 publications have one stable identity even if
+        # an operator retries generation. Historical/unscheduled records keep
+        # their content-derived identity for backwards compatibility.
+        run_key = (
+            _stable_hash(["canonical-edition", parsed.publication.edition_id])
+            if parsed.publication is not None
+            else _stable_hash(
+                [market, parsed.trading_date, edition, model, prompt_version, evidence_hash]
+            )
         )
         with Session(self._engine) as session:
             existing = session.exec(
@@ -400,13 +410,11 @@ class PredictionLedger:
                 series_key = _series_key(market, claim)
                 entity_key = (
                     claim.entity_key.strip().upper()
-                    if claim.entity_type == "instrument"
+                    if claim.entity_type in {"instrument", "index", "indicator", "event"}
                     else claim.entity_key.strip()
                 )
                 series = session.exec(
-                    select(ForecastSeriesRow).where(
-                        ForecastSeriesRow.series_key == series_key
-                    )
+                    select(ForecastSeriesRow).where(ForecastSeriesRow.series_key == series_key)
                 ).first()
                 if series is None:
                     series = ForecastSeriesRow(
@@ -423,9 +431,7 @@ class PredictionLedger:
                     session.add(series)
                     session.flush()
                 elif series.latest_revision_id:
-                    latest = session.get(
-                        ForecastRevisionRow, series.latest_revision_id
-                    )
+                    latest = session.get(ForecastRevisionRow, series.latest_revision_id)
                     if latest is not None and self._revision_fingerprint(
                         session, latest
                     ) == _claim_fingerprint(claim):
@@ -458,9 +464,7 @@ class PredictionLedger:
                 for horizon in claim.horizons:
                     session.add(
                         ForecastCheckpointRow(
-                            id=uuid.uuid5(
-                                uuid.NAMESPACE_URL, f"{revision.id}:{horizon}"
-                            ).hex,
+                            id=uuid.uuid5(uuid.NAMESPACE_URL, f"{revision.id}:{horizon}").hex,
                             revision_id=revision.id,
                             horizon_sessions=horizon,
                             due_trading_date=_advance_trading_sessions(
@@ -480,8 +484,7 @@ class PredictionLedger:
                             source_id=str(item.get("source_id") or ""),
                             source_url=str(item.get("url") or ""),
                             observed_at=(
-                                _utc_iso(item["observed_at"])
-                                if item.get("observed_at") else None
+                                _utc_iso(item["observed_at"]) if item.get("observed_at") else None
                             ),
                             stance=str(item.get("stance") or "support"),
                             weight=item.get("weight"),
@@ -500,18 +503,12 @@ class PredictionLedger:
         )
 
     @staticmethod
-    def _revision_fingerprint(
-        session: Session, revision: ForecastRevisionRow
-    ) -> str:
+    def _revision_fingerprint(session: Session, revision: ForecastRevisionRow) -> str:
         checkpoints = session.exec(
-            select(ForecastCheckpointRow).where(
-                ForecastCheckpointRow.revision_id == revision.id
-            )
+            select(ForecastCheckpointRow).where(ForecastCheckpointRow.revision_id == revision.id)
         ).all()
         evidence_rows = session.exec(
-            select(ForecastEvidenceRow).where(
-                ForecastEvidenceRow.revision_id == revision.id
-            )
+            select(ForecastEvidenceRow).where(ForecastEvidenceRow.revision_id == revision.id)
         ).all()
         evidence = []
         for row in evidence_rows:
@@ -589,12 +586,14 @@ class PredictionLedger:
                     thesis=signal.thesis,
                     baseline_value=signal.baseline_value,
                     producer_version=signal.source_agent,
-                    evidence=({
-                        "type": "signal",
-                        "source_id": signal.signal_id,
-                        "observed_at": signal.as_of_bar,
-                        "stance": "support",
-                    },),
+                    evidence=(
+                        {
+                            "type": "signal",
+                            "source_id": signal.signal_id,
+                            "observed_at": signal.as_of_bar,
+                            "stance": "support",
+                        },
+                    ),
                     payload=signal.model_dump(mode="json"),
                 )
             )
@@ -625,7 +624,11 @@ class PredictionLedger:
                     entity_key=theme.theme,
                     claim_type="theme_momentum",
                     producer="theme_aggregation",
-                    direction="positive" if distance > 0 else "negative" if distance < 0 else "neutral",
+                    direction="positive"
+                    if distance > 0
+                    else "negative"
+                    if distance < 0
+                    else "neutral",
                     confidence=min(1.0, abs(distance) / 10.0),
                     horizons=(5, 20, 60),
                     thesis=f"theme average distance to SMA50 is {distance:.4g}%",
@@ -809,9 +812,7 @@ class PredictionLedger:
                 losses = [row[0].log_loss for row in rows if row[0].log_loss is not None]
                 returns = [row[4].return_pct for row in rows if row[4].return_pct is not None]
                 excess_returns = [
-                    row[4].excess_return_pct
-                    for row in rows
-                    if row[4].excess_return_pct is not None
+                    row[4].excess_return_pct for row in rows if row[4].excess_return_pct is not None
                 ]
                 sample = len(absolute)
                 return {
@@ -823,15 +824,13 @@ class PredictionLedger:
                     ),
                     "excess_samples": len(excess),
                     "excess_accuracy": (
-                        sum(bool(value) for value in excess) / len(excess)
-                        if excess else None
+                        sum(bool(value) for value in excess) / len(excess) if excess else None
                     ),
                     "mean_brier": sum(brier) / len(brier) if brier else None,
                     "mean_log_loss": sum(losses) / len(losses) if losses else None,
                     "mean_return_pct": sum(returns) / len(returns) if returns else None,
                     "mean_excess_return_pct": (
-                        sum(excess_returns) / len(excess_returns)
-                        if excess_returns else None
+                        sum(excess_returns) / len(excess_returns) if excess_returns else None
                     ),
                     "sample_mature": sample >= 20,
                 }
@@ -846,17 +845,13 @@ class PredictionLedger:
                     else:
                         key = str(record[1].horizon_sessions)
                     buckets.setdefault(key, []).append(record)
-                return [
-                    {"key": key, **metrics(bucket)}
-                    for key, bucket in sorted(buckets.items())
-                ]
+                return [{"key": key, **metrics(bucket)} for key, bucket in sorted(buckets.items())]
 
             pending = [row for row in checkpoints if row.status == "pending"]
             due = [
                 row
                 for row in pending
-                if row.due_trading_date
-                and date.fromisoformat(row.due_trading_date) <= due_date
+                if row.due_trading_date and date.fromisoformat(row.due_trading_date) <= due_date
             ]
 
             market_names = {
@@ -869,9 +864,9 @@ class PredictionLedger:
             def display_name(series: ForecastSeriesRow) -> str:
                 if series.entity_type == "market":
                     return market_names.get(series.market, series.market)
-                if series.entity_type in {"instrument", "event"}:
+                if series.entity_type in {"instrument", "index", "indicator", "event"}:
                     return name_for(series.entity_key)
-                return ""
+                return series.entity_key
 
             def balanced_latest(rows, *, limit: int, market_of, dedup_key):
                 """Newest-first de-duplication with fair all-market slots.
@@ -891,18 +886,14 @@ class PredictionLedger:
                 if market_key:
                     return unique[:limit]
 
-                buckets: dict[str, list[Any]] = {
-                    key: [] for key in ("US", "HK", "CN", "KR")
-                }
+                buckets: dict[str, list[Any]] = {key: [] for key in ("US", "HK", "CN", "KR")}
                 for row in unique:
                     buckets.setdefault(market_of(row), []).append(row)
                 market_order = ["US", "HK", "CN", "KR"] + sorted(
                     key for key in buckets if key not in {"US", "HK", "CN", "KR"}
                 )
                 balanced = []
-                while len(balanced) < limit and any(
-                    buckets.get(key) for key in market_order
-                ):
+                while len(balanced) < limit and any(buckets.get(key) for key in market_order):
                     for key in market_order:
                         bucket = buckets.get(key, [])
                         if bucket and len(balanced) < limit:
@@ -929,9 +920,7 @@ class PredictionLedger:
                 )
                 if latest is None:
                     continue
-                latest_checkpoints = [
-                    row for row in checkpoints if row.revision_id == latest.id
-                ]
+                latest_checkpoints = [row for row in checkpoints if row.revision_id == latest.id]
                 active_forecasts.append(
                     {
                         "series_id": series.id,
@@ -947,9 +936,7 @@ class PredictionLedger:
                         "confidence": latest.confidence,
                         "thesis": latest.thesis,
                         "invalidation": latest.invalidation,
-                        "horizons": sorted(
-                            row.horizon_sessions for row in latest_checkpoints
-                        ),
+                        "horizons": sorted(row.horizon_sessions for row in latest_checkpoints),
                         "pending_checkpoints": sum(
                             row.status == "pending" for row in latest_checkpoints
                         ),
@@ -1111,11 +1098,7 @@ class PredictionLedger:
                     continue
                 series = session.get(ForecastSeriesRow, revision.series_id)
                 run = session.get(ForecastRunRow, revision.run_id)
-                if (
-                    series is None
-                    or run is None
-                    or (market and series.market != market.upper())
-                ):
+                if series is None or run is None or (market and series.market != market.upper()):
                     continue
                 result.append(
                     {
@@ -1157,7 +1140,11 @@ class PredictionLedger:
             if revision is None:
                 raise ValueError(f"checkpoint has no revision: {checkpoint_id}")
 
-            if return_pct is None and entity_value is not None and revision.baseline_value not in (None, 0.0):
+            if (
+                return_pct is None
+                and entity_value is not None
+                and revision.baseline_value not in (None, 0.0)
+            ):
                 return_pct = (entity_value / revision.baseline_value - 1.0) * 100.0
             excess_return_pct = (
                 return_pct - benchmark_return_pct
@@ -1218,8 +1205,10 @@ class PredictionLedger:
                 brier_score = (probability - observed) ** 2
                 log_loss = -math.log(probability if absolute_hit else 1.0 - probability)
             state = (
-                "confirmed" if absolute_hit is True
-                else "refuted" if absolute_hit is False
+                "confirmed"
+                if absolute_hit is True
+                else "refuted"
+                if absolute_hit is False
                 else "observed"
             )
             evaluation = ForecastEvaluationRow(
@@ -1265,11 +1254,11 @@ def persist_brief_artifacts(runtime, market: str, payload: dict) -> str | None:
         except Exception:
             logger.warning("brief snapshot archive failed", extra={"market": market})
     prediction_ledger = getattr(runtime, "prediction_ledger", None)
-    if prediction_ledger is not None:
+    publication = payload.get("publication") if isinstance(payload, dict) else None
+    canonical_failure = isinstance(publication, dict) and publication.get("status") != "complete"
+    if prediction_ledger is not None and not canonical_failure:
         try:
-            report = prediction_ledger.record_brief(
-                market, payload, brief_snapshot_id=snapshot_id
-            )
+            report = prediction_ledger.record_brief(market, payload, brief_snapshot_id=snapshot_id)
             logger.info(
                 "forecast revisions persisted",
                 extra={
@@ -1296,9 +1285,7 @@ def backfill_brief_history(
     for snapshot_id, market, payload in brief_store.iter_snapshots(limit=limit):
         snapshots += 1
         try:
-            report = prediction_ledger.record_brief(
-                market, payload, brief_snapshot_id=snapshot_id
-            )
+            report = prediction_ledger.record_brief(market, payload, brief_snapshot_id=snapshot_id)
         except Exception:
             logger.warning(
                 "historical prediction backfill skipped invalid snapshot",

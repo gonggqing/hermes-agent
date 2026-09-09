@@ -57,6 +57,7 @@ export interface FinanceTranslations {
     summary: {
       title: string;
       unavailable: string;
+      failed: string;
       watchNext: string;
       sincePrior: string;
       actionMap: string;

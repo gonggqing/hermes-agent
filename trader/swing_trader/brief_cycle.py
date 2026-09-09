@@ -14,13 +14,12 @@ approval polling or the US order state machine.
 
 from __future__ import annotations
 
-import copy
 import threading
 from datetime import datetime, timedelta
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
-from swing_trader.brief import ResearchBrief
+from swing_trader.brief import ResearchBrief, ResearchPublication
 from swing_trader.brief_telegram import render_research_brief
 from swing_trader.log import get_logger
 
@@ -55,6 +54,19 @@ def latest_due_brief_slot(now: datetime) -> tuple[str, datetime]:
     if local >= morning:
         return "morning", morning
     return "evening", evening - timedelta(days=1)
+
+
+def _scheduled_slot(edition: str, now: datetime) -> datetime:
+    """Most recent occurrence of ``edition`` on the Beijing schedule."""
+
+    local = now.astimezone(BEIJING)
+    hour = 9 if edition == "morning" else 21
+    due = local.replace(hour=hour, minute=0, second=0, microsecond=0)
+    return due if due <= local else due - timedelta(days=1)
+
+
+def _edition_id(market: str, edition: str, due: datetime) -> str:
+    return f"{due.astimezone(BEIJING).date().isoformat()}:{edition}:{market.lower()}"
 
 
 def _parse_ts(raw: object) -> Optional[datetime]:
@@ -125,8 +137,17 @@ class BriefCycleCoordinator:
         edition, due = latest_due_brief_slot(self.runtime.clock())
         for market in self.markets:
             payload = self._payload(market)
+            publication = payload.get("publication") if isinstance(payload, dict) else None
+            if (
+                isinstance(publication, dict)
+                and publication.get("status") == "complete"
+                and publication.get("edition_id") == _edition_id(market, edition, due)
+            ):
+                continue
             narrative = payload.get("narrative") if isinstance(payload, dict) else None
-            generated = _parse_ts(narrative.get("generated_at")) if isinstance(narrative, dict) else None
+            generated = (
+                _parse_ts(narrative.get("generated_at")) if isinstance(narrative, dict) else None
+            )
             if generated is None or generated < due.astimezone(generated.tzinfo):
                 logger.info(
                     "missed brief cycle detected",
@@ -150,13 +171,26 @@ class BriefCycleCoordinator:
 
     _FRESH_WINDOW = timedelta(hours=4)
 
-    def _is_fresh(self, payload: Optional[dict], edition: str, now: datetime) -> bool:
+    def _is_fresh(
+        self,
+        payload: Optional[dict],
+        market: str,
+        edition: str,
+        now: datetime,
+    ) -> bool:
         """True if this market already holds a narrative for THIS edition,
         generated within the last 4 hours — so a restart that catches up a
         different market never needlessly regenerates (and re-notifies /
         re-archives) the ones that are already current."""
         if not isinstance(payload, dict):
             return False
+        publication = payload.get("publication")
+        if isinstance(publication, dict):
+            due = _scheduled_slot(edition, now)
+            if publication.get("status") != "complete" or publication.get(
+                "edition_id"
+            ) != _edition_id(market, edition, due):
+                return False
         narrative = payload.get("narrative")
         if not isinstance(narrative, dict) or narrative.get("edition") != edition:
             return False
@@ -180,29 +214,32 @@ class BriefCycleCoordinator:
         if edition not in _EDITION_LABELS:
             raise ValueError(f"unknown brief edition {edition!r}")
         now = self.runtime.clock()
+        due = _scheduled_slot(edition, now)
         markets = only if only is not None else self.markets
         result = {"edition": edition, "completed": [], "failed": [], "skipped": []}
+        refresh_marks = getattr(self.runtime, "refresh_portfolio_marks", None)
+        if refresh_marks is not None:
+            try:
+                mark_report = refresh_marks("live")
+                logger.info(
+                    "live portfolio marks refreshed before brief cycle",
+                    extra=mark_report.model_dump(),
+                )
+            except Exception:
+                logger.exception("live portfolio mark refresh failed before brief cycle")
         for market in markets:
             refresh = self.runtime.run_research.get(market)
             if refresh is None:
                 result["skipped"].append(market)
                 continue
-            if not force and self._is_fresh(self._payload(market), edition, now):
+            if not force and self._is_fresh(self._payload(market), market, edition, now):
                 logger.info(
                     "brief already fresh; skipping regeneration",
                     extra={"market": market, "edition": edition},
                 )
                 result["skipped"].append(market)
                 continue
-            # Snapshot the last-good brief BEFORE refresh() overwrites the slot.
-            # If the primary model then fails, we restore this consistent
-            # evidence+prose pair instead of blanking a market that previously
-            # had a narrative — the recurring "简报消失" bug, where one flaky
-            # completion wiped a whole market's prose until the next edition.
-            previous = copy.deepcopy(self._payload(market))
-            prev_had_narrative = (
-                isinstance(previous, dict) and previous.get("narrative") is not None
-            )
+            brief = None
             try:
                 refresh()
                 payload = self._payload(market)
@@ -212,6 +249,14 @@ class BriefCycleCoordinator:
                 # Never carry an older edition's prose onto a new evidence
                 # packet if the primary model fails.
                 brief.narrative = None
+                publication = ResearchPublication(
+                    edition_id=_edition_id(market, edition, due),
+                    edition=edition,
+                    scheduled_for=due,
+                    evidence_as_of=brief.as_of,
+                    status="pending",
+                )
+                brief.publication = publication
                 narrative = self.writer.write(
                     brief,
                     market_id=market.upper(),
@@ -219,30 +264,25 @@ class BriefCycleCoordinator:
                     language="zh-CN",
                 )
                 if narrative is None:
-                    if prev_had_narrative:
-                        # Keep the last-good complete brief so the market does
-                        # not vanish from the dashboard. Its own freshness stamp
-                        # honestly shows it is the previous edition.
-                        self._store(market, previous)
-                        self._notify(
-                            f"⚠️ {_LABELS[market]} {_EDITION_LABELS[edition]}生成失败；"
-                            "已保留上一版完整简报（证据+叙述），未用模板或弱模型替代。"
-                        )
-                    else:
-                        brief.uncertainty.append(
-                            f"{_EDITION_LABELS[edition]}：主模型简报生成失败，等待安全重试"
-                        )
-                        self._store(market, brief.model_dump(mode="json"))
-                        self._notify(
-                            f"⚠️ {_LABELS[market]} {_EDITION_LABELS[edition]}生成失败；"
-                            "结构化证据已保存，没有使用模板或弱模型替代。"
-                        )
+                    failure = "主模型简报生成失败：未返回完整、可验证的研报 JSON"
+                    brief.publication = publication.model_copy(
+                        update={"status": "narrative_failed", "failure": failure}
+                    )
+                    brief.uncertainty.append(
+                        f"{_EDITION_LABELS[edition]}：{failure}；本版仅展示结构化证据"
+                    )
+                    self._store(market, brief.model_dump(mode="json"))
+                    self._notify(
+                        f"⚠️ {_LABELS[market]} {_EDITION_LABELS[edition]}生成失败；"
+                        "本版新证据已保存，旧版文字不会与本版数据混合。"
+                    )
                     result["failed"].append(market)
                     continue
                 narrative = narrative.model_copy(
                     update={"edition": edition, "generated_at": self.runtime.clock()}
                 )
                 brief.narrative = narrative
+                brief.publication = publication.model_copy(update={"status": "complete"})
                 self._store(market, brief.model_dump(mode="json"))
                 text = render_research_brief(
                     brief,
@@ -256,13 +296,22 @@ class BriefCycleCoordinator:
                     "brief cycle market failed",
                     extra={"edition": edition, "market": market},
                 )
-                # A mid-cycle failure (refresh/validate/store) may have left the
-                # slot with fresh-but-narrative-less evidence or a half write.
-                # Restore the last-good brief so the market keeps its prose.
-                if prev_had_narrative:
-                    current = self._payload(market)
-                    if not (isinstance(current, dict) and current.get("narrative")):
-                        self._store(market, previous)
+                # If evidence was built successfully, preserve THIS edition's
+                # structured packet and expose the failure. Never restore old
+                # prose over a newer market snapshot.
+                if brief is not None:
+                    failure = "研报发布流程异常；本版叙事不可用"
+                    brief.narrative = None
+                    brief.publication = ResearchPublication(
+                        edition_id=_edition_id(market, edition, due),
+                        edition=edition,
+                        scheduled_for=due,
+                        evidence_as_of=brief.as_of,
+                        status="narrative_failed",
+                        failure=failure,
+                    )
+                    brief.uncertainty.append(failure)
+                    self._store(market, brief.model_dump(mode="json"))
                 result["failed"].append(market)
         logger.info("brief cycle complete", extra=result)
         return result

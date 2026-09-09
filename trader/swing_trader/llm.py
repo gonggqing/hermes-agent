@@ -78,13 +78,22 @@ def hermes_primary_model(env: Optional[dict] = None) -> Optional[str]:
     e = env if env is not None else os.environ
     home = Path(e.get("HERMES_HOME") or (Path.home() / ".hermes"))
     path = home / "config.yaml"
+    model, _provider = _hermes_primary_config(path)
+    return model
+
+
+def _hermes_primary_config(path: Path) -> tuple[Optional[str], Optional[str]]:
+    """Read the active primary model and provider without importing Hermes."""
+
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return None
+        return None, None
 
     in_model = False
     model_indent = 0
+    model: Optional[str] = None
+    provider: Optional[str] = None
     for raw in lines:
         stripped = raw.strip()
         if not stripped or stripped.startswith("#"):
@@ -96,7 +105,7 @@ def hermes_primary_model(env: Optional[dict] = None) -> Optional[str]:
                 continue
             value = stripped.partition(":")[2].strip().strip("'\"")
             if value:
-                return value
+                return value, None
             in_model = True
             model_indent = indent
             continue
@@ -104,10 +113,37 @@ def hermes_primary_model(env: Optional[dict] = None) -> Optional[str]:
             key, sep, value = stripped.partition(":")
             if sep and key.strip() in {"default", "model"}:
                 value = value.split("#", 1)[0].strip().strip("'\"")
-                return value or None
+                model = value or None
+            elif sep and key.strip() == "provider":
+                value = value.split("#", 1)[0].strip().strip("'\"")
+                provider = value or None
         elif in_model and indent <= model_indent:
             break
-    return None
+    return model, provider
+
+
+def _normalized_provider(value: Optional[str]) -> str:
+    aliases = {
+        "deepseek": "deepseek",
+        "glm": "glm",
+        "zai": "glm",
+        "zhipu": "glm",
+        "zhipuai": "glm",
+        "minimax": "minimax",
+        "minimax-cn": "minimax",
+    }
+    return aliases.get((value or "").strip().lower(), "")
+
+
+def _provider_for_model(model: str) -> str:
+    lowered = model.lower()
+    if "minimax" in lowered:
+        return "minimax"
+    if lowered.startswith("glm"):
+        return "glm"
+    if "deepseek" in lowered:
+        return "deepseek"
+    return ""
 
 
 def llm_settings_from_env(
@@ -122,27 +158,56 @@ def llm_settings_from_env(
       the CHEAP flash model — ``FINANCE_LLM_SEARCH_MODEL`` (default the
       provider's flash: deepseek-v4-flash / glm5-turbo) — so it stays cheap
       even if a pricier decision model is configured via ``FINANCE_LLM_MODEL``.
-    - anything else: the general/decision tier — ``FINANCE_LLM_MODEL`` (default
-      the provider's own default model).
+    - anything else: the decision tier — ``FINANCE_LLM_MODEL`` when explicitly
+      set, otherwise exactly Hermes ``model.default`` + ``model.provider``.
+      Missing/incompatible primary credentials fail closed; no cheap fallback.
     """
     e = env if env is not None else os.environ
-    provider = e.get("FINANCE_LLM_PROVIDER", "").strip().lower()
+    provider = _normalized_provider(e.get("FINANCE_LLM_PROVIDER"))
+    if role != "search":
+        home = Path(e.get("HERMES_HOME") or (Path.home() / ".hermes"))
+        primary_model, primary_provider = _hermes_primary_config(home / "config.yaml")
+        explicit_model = (e.get("FINANCE_LLM_MODEL") or "").strip()
+        model = explicit_model or (primary_model or "").strip()
+        if not model:
+            # Decision-grade synthesis is fail-closed: never silently fall back
+            # to a provider's cheap default when no Hermes primary is known.
+            return None
+        # A normal decision request is inseparable from Hermes' configured
+        # primary model *and provider*. FINANCE_LLM_PROVIDER still selects the
+        # cheap search tier, but cannot redirect the primary model to a stale
+        # or incompatible endpoint. It becomes authoritative for decision
+        # work only together with an explicit FINANCE_LLM_MODEL override.
+        provider = (
+            (provider or _provider_for_model(model))
+            if explicit_model
+            else (_normalized_provider(primary_provider) or _provider_for_model(model))
+        )
+        if not provider:
+            available = [
+                name
+                for name, (_base, _default, key_var) in _PROVIDER_DEFAULTS.items()
+                if e.get(key_var, "").strip()
+            ]
+            provider = available[0] if len(available) == 1 else ""
+        if provider not in _PROVIDER_DEFAULTS:
+            return None
+        base, _default_model, key_var = _PROVIDER_DEFAULTS[provider]
+        key = e.get(key_var, "").strip()
+        if not key:
+            return None
+        return LLMSettings(
+            base_url=e.get("FINANCE_LLM_BASE_URL", base).rstrip("/"),
+            model=model,
+            api_key=key,
+        )
+
     order = [provider] if provider in _PROVIDER_DEFAULTS else list(_PROVIDER_DEFAULTS)
     for name in order:
         base, default_model, key_var = _PROVIDER_DEFAULTS[name]
         key = e.get(key_var, "").strip()
         if key:
-            if role == "search":
-                model = e.get("FINANCE_LLM_SEARCH_MODEL", default_model)
-            else:
-                # Final investment briefs use the same primary model as Hermes.
-                # FINANCE_LLM_MODEL remains a backwards-compatible explicit
-                # override, but normal configuration lives in config.yaml.
-                model = (
-                    e.get("FINANCE_LLM_MODEL")
-                    or hermes_primary_model(e)
-                    or default_model
-                )
+            model = e.get("FINANCE_LLM_SEARCH_MODEL", default_model)
             return LLMSettings(
                 base_url=e.get("FINANCE_LLM_BASE_URL", base).rstrip("/"),
                 model=model,
@@ -184,9 +249,8 @@ def http_complete(
     # provider extension separates reasoning into `reasoning_details`, leaving
     # `content` as the parseable answer. This is stateless, so no reasoning
     # history needs to be replayed. Do not send the extension to other vendors.
-    is_minimax = (
-        "minimaxi.com" in settings.base_url.lower()
-        or settings.model.lower().startswith("minimax-")
+    is_minimax = "minimaxi.com" in settings.base_url.lower() or settings.model.lower().startswith(
+        "minimax-"
     )
     if is_minimax:
         payload["reasoning_split"] = True
@@ -333,6 +397,9 @@ class LLMAnalyst:
             thesis=thesis,
             direction=direction,
             confidence=confidence,
-            features_json={"regime": regime, "n_headlines": len(headlines),
-                           "n_research": len(research or [])},
+            features_json={
+                "regime": regime,
+                "n_headlines": len(headlines),
+                "n_research": len(research or []),
+            },
         )

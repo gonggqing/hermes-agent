@@ -2172,6 +2172,7 @@ export interface Translations {
       staleTitle: string
       narrativeTitle: string
       narrativeUnavailable: string
+      narrativeFailure: (reason: string) => string
       narrativeWatchNext: string
       narrativeSincePrior: string
       narrativeActionMap: string

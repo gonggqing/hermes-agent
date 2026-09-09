@@ -453,7 +453,14 @@ function NarrativeBrief({ brief }: { brief: FinanceResearchBrief }) {
         </div>
       </div>
       {!narrative ? (
-        <p className="text-xs leading-5 text-muted-foreground">{copy.narrativeUnavailable}</p>
+        <div className="space-y-2">
+          <p className="text-xs leading-5 text-muted-foreground">{copy.narrativeUnavailable}</p>
+          {brief.publication?.status === 'narrative_failed' && (
+            <p className="text-[0.68rem] leading-5 text-destructive">
+              {copy.narrativeFailure(brief.publication.failure || brief.publication.edition_id)}
+            </p>
+          )}
+        </div>
       ) : (
         <>
           <div className="space-y-2">

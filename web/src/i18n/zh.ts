@@ -641,6 +641,7 @@ export const zh: Translations = {
         title: "简报",
         unavailable:
           "本次分析简报尚未生成。模型连接恢复后请重新运行研究；下方结构化数据仍可正常查看。",
+        failed: "本版主模型生成失败：{error}",
         watchNext: "接下来关注",
         sincePrior: "相较上一版的变化",
         actionMap: "趋势行动图",

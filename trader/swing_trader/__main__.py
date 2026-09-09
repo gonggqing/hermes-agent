@@ -297,6 +297,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
 
     _briefs_url = f"sqlite:///{_DbPath(args.db or settings.db_path).parent / 'briefs.db'}"
     runtime.brief_store = BriefStore(url=_briefs_url)
+    if runtime.brief_store.pruned_on_open:
+        logger.info(
+            "duplicate research brief editions pruned",
+            extra={"deleted": runtime.brief_store.pruned_on_open},
+        )
     from swing_trader.prediction_ledger import PredictionLedger, backfill_brief_history
 
     _predictions_url = (
@@ -355,6 +360,15 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     from swing_trader.fund_nav import CachedNavProvider, EastmoneyFundNav
 
     runtime.nav_provider = CachedNavProvider(EastmoneyFundNav())
+    from swing_trader.portfolio_marks import refresh_held_marks
+
+    runtime.refresh_portfolio_marks = lambda environment="live": refresh_held_marks(
+        runtime.portfolio,
+        feed,
+        runtime.nav_provider,
+        environment=environment,
+        clock=runtime.clock,
+    )
     # Real domestic gold (SGE Au99.99) so the chart's 国内金价 can use a real
     # spot instead of the derived GC=F×CNY value (#41).
     from swing_trader.sge_gold import CachedGoldProvider, SinaSgeGold
@@ -891,9 +905,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             )
             if rehydration.performed:
                 cn_loop.execution.seed_synced_fills(rehydration.fill_ids)
-                cn_loop.execution.seed_protective_stops(
-                    cn_broker.get_orders(active_only=True)
-                )
+                cn_loop.execution.seed_protective_stops(cn_broker.get_orders(active_only=True))
             cn_runner = DailyLoopRunner(
                 cn_loop.callbacks(), clock=runtime.clock, schedule=CN_TRADING_SCHEDULE
             )
@@ -903,7 +915,10 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             runtime.order_capable_markets.add("cn")
             logger.info(
                 "cn ORDER-CAPABLE session enabled (CNY paper only)",
-                extra={"n_symbols": len(cn_wl.symbols), "starting_cash_cny": args.starting_cash_cny},
+                extra={
+                    "n_symbols": len(cn_wl.symbols),
+                    "starting_cash_cny": args.starting_cash_cny,
+                },
             )
         else:
             cn_session = ResearchSession(
@@ -920,9 +935,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 mode=settings.mode,
                 runtime=runtime,
                 notify=notify,
-                llm_analyst=(
-                    LLMAnalyst(search_llm_settings) if search_llm_settings else None
-                ),
+                llm_analyst=(LLMAnalyst(search_llm_settings) if search_llm_settings else None),
                 knowledge=knowledge,
                 knowledge_index=knowledge_index,
                 focus_note="",
@@ -941,9 +954,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 schedule=CN_SCHEDULE,
             )
             runtime.run_research["cn"] = cn_session.run_now
-            logger.info(
-                "cn research session enabled", extra={"n_symbols": len(cn_wl.symbols)}
-            )
+            logger.info("cn research session enabled", extra={"n_symbols": len(cn_wl.symbols)})
 
     # HK is independent from mainland CN: own universe, indices, calendar,
     # freshness and persisted brief. It is order-capable only when the existing
@@ -964,8 +975,10 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             hk_broker = CurrencyBrokerView(broker, "HKD")
             # ORDER-CAPABLE HK session on the SHARED (HKD-funded) broker + ledger,
             # behind the SAME §3 boundaries as US: RiskEngine authoritative,
-            # human confirms, DAY-entry fill-chain lifecycle, SEHK tick/lot/fee
-            # rules. Its own 10:30-11:30 Asia/Hong_Kong window (HK_TRADING_SCHEDULE)
+            # human confirms, DAY-entry fill-chain lifecycle, and SEHK tick/fee
+            # rules. Connected IBKR board-lot qualification remains a separate
+            # acceptance gate; local PaperBroker uses explicit whole shares.
+            # Its own 10:30-11:30 Asia/Hong_Kong window (HK_TRADING_SCHEDULE)
             # sits ~12h from the US window, so the single Telegram poller and the
             # per-candidate service registry route each market's cards correctly;
             # the market discriminator keeps US and HK candidates from colliding.
@@ -1015,9 +1028,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             runtime.order_capable_markets.add("hk")  # UI drops research-only badge
             if rehydration.performed:
                 hk_loop.execution.seed_synced_fills(rehydration.fill_ids)
-                hk_loop.execution.seed_protective_stops(
-                    hk_broker.get_orders(active_only=True)
-                )
+                hk_loop.execution.seed_protective_stops(hk_broker.get_orders(active_only=True))
             logger.info(
                 "hk ORDER-CAPABLE session enabled (paper)",
                 extra={"n_symbols": len(hk_wl.symbols)},
@@ -1188,6 +1199,11 @@ def _cmd_serve(args: argparse.Namespace) -> None:
             # Candidate recovery runs before research catch-up so a restart in
             # the confirmation/execution window first restores the durable
             # human decisions.  It never replays post-close approvals.
+            try:
+                report = runtime.refresh_portfolio_marks("live")
+                logger.info("startup live portfolio marks refreshed", extra=report.model_dump())
+            except Exception:
+                logger.exception("startup live portfolio mark refresh failed")
             try:
                 loop.recover_confirmation_state()
             except Exception:

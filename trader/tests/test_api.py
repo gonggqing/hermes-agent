@@ -24,9 +24,17 @@ IN_WINDOW = datetime(2026, 7, 13, 14, 45, tzinfo=timezone.utc)  # 10:45 EDT
 
 def candidate(**kw) -> CandidateOrder:
     base = dict(
-        symbol="NVDA", side=Side.BUY, qty=2, order_type=OrderType.BRACKET,
-        limit=99.5, stop=91.5, tp=111.5, rationale="test", confidence=0.7,
-        ref_px=100.0, status=CandidateStatus.RISK_APPROVED,
+        symbol="NVDA",
+        side=Side.BUY,
+        qty=2,
+        order_type=OrderType.BRACKET,
+        limit=99.5,
+        stop=91.5,
+        tp=111.5,
+        rationale="test",
+        confidence=0.7,
+        ref_px=100.0,
+        status=CandidateStatus.RISK_APPROVED,
     )
     base.update(kw)
     return CandidateOrder(**base)
@@ -34,11 +42,13 @@ def candidate(**kw) -> CandidateOrder:
 
 @pytest.fixture()
 def env(tmp_path):
-    ledger = Ledger(url=f"sqlite:///{tmp_path/'api.db'}")
+    ledger = Ledger(url=f"sqlite:///{tmp_path / 'api.db'}")
     broker = PaperBroker(starting_cash=5_000.0)
     service = ConfirmationService(ledger, mode=Mode.PAPER)
     runtime = FinanceRuntime(
-        ledger=ledger, broker=broker, confirmation=service,
+        ledger=ledger,
+        broker=broker,
+        confirmation=service,
         clock=lambda: IN_WINDOW,
     )
     runtime.market = {"risk_on_off": "neutral", "vix": 18.5}
@@ -63,7 +73,7 @@ class TestReads:
         assert body["breaker"] == "NORMAL"
 
     def test_health_ledger_only(self, tmp_path):
-        ledger = Ledger(url=f"sqlite:///{tmp_path/'l.db'}")
+        ledger = Ledger(url=f"sqlite:///{tmp_path / 'l.db'}")
         ledger.record_snapshot(AccountSnapshot(mode=Mode.PAPER, equity=1000, cash=1000))
         client = TestClient(create_app(FinanceRuntime(ledger=ledger)))
         body = client.get("/v1/health").json()
@@ -74,7 +84,7 @@ class TestReads:
     def test_instruments_search(self, tmp_path):
         from swing_trader.instruments import CachedInstrumentSearch, StaticInstrumentProvider
 
-        ledger = Ledger(url=f"sqlite:///{tmp_path/'i.db'}")
+        ledger = Ledger(url=f"sqlite:///{tmp_path / 'i.db'}")
         runtime = FinanceRuntime(ledger=ledger)
         runtime.instrument_search = CachedInstrumentSearch(StaticInstrumentProvider())
         client = TestClient(create_app(runtime))
@@ -87,11 +97,13 @@ class TestReads:
         # market filter + unknown market
         hk = client.get("/v1/instruments/search", params={"q": "0", "market": "hk"}).json()
         assert all(m["market"] == "HK" for m in hk["matches"])
-        assert client.get("/v1/instruments/search",
-                          params={"q": "x", "market": "zz"}).status_code == 422
+        assert (
+            client.get("/v1/instruments/search", params={"q": "x", "market": "zz"}).status_code
+            == 422
+        )
 
     def test_instruments_search_unavailable_503(self, tmp_path):
-        ledger = Ledger(url=f"sqlite:///{tmp_path/'i2.db'}")
+        ledger = Ledger(url=f"sqlite:///{tmp_path / 'i2.db'}")
         client = TestClient(create_app(FinanceRuntime(ledger=ledger)))  # no provider
         assert client.get("/v1/instruments/search", params={"q": "nv"}).status_code == 503
 
@@ -107,8 +119,11 @@ class TestReads:
             level=HealthLevel.UNHEALTHY,
             as_of=datetime(2026, 7, 13, tzinfo=timezone.utc),
             entries_allowed=False,
-            checks=[HealthCheck(name="market", level=HealthLevel.UNHEALTHY,
-                                detail="market data is 200 min old")],
+            checks=[
+                HealthCheck(
+                    name="market", level=HealthLevel.UNHEALTHY, detail="market data is 200 min old"
+                )
+            ],
             warnings=["market data stale (200 min)"],
         )
         body = client.get("/v1/health").json()
@@ -124,9 +139,7 @@ class TestReads:
 
     def test_portfolio_controls_are_durable_and_apply_live(self, env, tmp_path):
         _, _, runtime, client = env
-        runtime.portfolio_controls = PortfolioControlStore(
-            f"sqlite:///{tmp_path / 'controls.db'}"
-        )
+        runtime.portfolio_controls = PortfolioControlStore(f"sqlite:///{tmp_path / 'controls.db'}")
         applied = []
         runtime.apply_portfolio_controls = applied.append
 
@@ -206,12 +219,15 @@ class TestReads:
         _, _, runtime, client = env
         runtime.market = {}
         runtime.latest_brief = {"as_of": "2026-07-14T15:00:00Z"}
-        runtime.brief_store = BriefStore(url=f"sqlite:///{tmp_path/'market.db'}")
-        runtime.brief_store.save("us", {
-            "as_of": "2026-07-13T15:00:00Z",
-            "trading_date": "2026-07-13",
-            "regime": {"risk_on_off": "neutral", "vix": 17.2},
-        })
+        runtime.brief_store = BriefStore(url=f"sqlite:///{tmp_path / 'market.db'}")
+        runtime.brief_store.save(
+            "us",
+            {
+                "as_of": "2026-07-13T15:00:00Z",
+                "trading_date": "2026-07-13",
+                "regime": {"risk_on_off": "neutral", "vix": 17.2},
+            },
+        )
 
         body = client.get("/v1/market").json()
         assert body == {
@@ -235,7 +251,7 @@ class TestReads:
         assert client.get("/v1/stats").json()["n_closed"] == 0
 
     def test_pending_empty_without_service(self, tmp_path):
-        ledger = Ledger(url=f"sqlite:///{tmp_path/'p.db'}")
+        ledger = Ledger(url=f"sqlite:///{tmp_path / 'p.db'}")
         client = TestClient(create_app(FinanceRuntime(ledger=ledger)))
         assert client.get("/v1/candidates/pending").json() == []
 
@@ -256,9 +272,7 @@ class TestReads:
 
         _, _, runtime, client = env
         assert client.get("/v1/predictions/summary").status_code == 503
-        runtime.prediction_ledger = PredictionLedger(
-            f"sqlite:///{tmp_path / 'predictions.db'}"
-        )
+        runtime.prediction_ledger = PredictionLedger(f"sqlite:///{tmp_path / 'predictions.db'}")
         body = client.get(
             "/v1/predictions/summary",
             params={"market": "us", "due_as_of": "2026-07-17"},
@@ -266,15 +280,14 @@ class TestReads:
         assert body["filters"]["market"] == "US"
         assert body["overview"]["series"] == 0
         assert body["overview"]["directional_accuracy"] is None
-        assert client.get(
-            "/v1/predictions/summary", params={"market": "mars"}
-        ).status_code == 422
+        assert client.get("/v1/predictions/summary", params={"market": "mars"}).status_code == 422
 
     def test_research_brief_kr_routes_to_per_market_slot(self, env):
         _, _, runtime, client = env
         runtime.latest_briefs["kr"] = {"mode": "paper", "marker": "kr-brief"}
-        assert client.get("/v1/research/brief",
-                          params={"market": "kr"}).json()["marker"] == "kr-brief"
+        assert (
+            client.get("/v1/research/brief", params={"market": "kr"}).json()["marker"] == "kr-brief"
+        )
         # US brief unaffected by the KR slot
         runtime.latest_brief = {"mode": "paper", "marker": "us"}
         assert client.get("/v1/research/brief").json()["marker"] == "us"
@@ -287,19 +300,25 @@ class TestReads:
     def test_research_brief_cn_backcompat_slot(self, env):
         _, _, runtime, client = env
         runtime.latest_brief_cn = {"mode": "paper", "marker": "cn-legacy"}
-        assert client.get("/v1/research/brief",
-                          params={"market": "cn"}).json()["marker"] == "cn-legacy"
+        assert (
+            client.get("/v1/research/brief", params={"market": "cn"}).json()["marker"]
+            == "cn-legacy"
+        )
 
     def test_cn_and_hk_briefs_stay_independent_and_include_synthesis(self, env):
         _, _, runtime, client = env
         runtime.latest_briefs["cn"] = {
-            "marker": "cn", "as_of": "2026-07-15T03:00:00Z",
-            "trading_date": "2026-07-15", "freshness": {"status": "fresh"},
+            "marker": "cn",
+            "as_of": "2026-07-15T03:00:00Z",
+            "trading_date": "2026-07-15",
+            "freshness": {"status": "fresh"},
             "regime": {"risk_on_off": "risk_off"},
         }
         runtime.latest_briefs["hk"] = {
-            "marker": "hk", "as_of": "2026-07-15T03:00:00Z",
-            "trading_date": "2026-07-15", "freshness": {"status": "stale"},
+            "marker": "hk",
+            "as_of": "2026-07-15T03:00:00Z",
+            "trading_date": "2026-07-15",
+            "freshness": {"status": "stale"},
             "regime": {"risk_on_off": "risk_on"},
         }
         cn = client.get("/v1/research/brief", params={"market": "cn"}).json()
@@ -321,13 +340,16 @@ class TestReads:
         from swing_trader.brief_store import BriefStore
 
         _, _, runtime, client = env
-        runtime.brief_store = BriefStore(url=f"sqlite:///{tmp_path/'briefs.db'}")
-        runtime.brief_store.save("kr", {
-            "as_of": "2026-07-14T06:00:00Z",
-            "trading_date": "2026-07-14",
-            "mode": "paper",
-            "marker": "kr-archive",
-        })
+        runtime.brief_store = BriefStore(url=f"sqlite:///{tmp_path / 'briefs.db'}")
+        runtime.brief_store.save(
+            "kr",
+            {
+                "as_of": "2026-07-14T06:00:00Z",
+                "trading_date": "2026-07-14",
+                "mode": "paper",
+                "marker": "kr-archive",
+            },
+        )
 
         body = client.get("/v1/research/brief", params={"market": "kr"}).json()
         assert body["marker"] == "kr-archive"
@@ -337,17 +359,49 @@ class TestReads:
         from swing_trader.brief_store import BriefStore
 
         _, _, runtime, client = env
-        runtime.brief_store = BriefStore(url=f"sqlite:///{tmp_path/'us-briefs.db'}")
-        runtime.brief_store.save("us", {
-            "as_of": "2026-07-14T15:00:00Z",
-            "trading_date": "2026-07-14",
-            "mode": "paper",
-            "marker": "us-archive",
-        })
+        runtime.brief_store = BriefStore(url=f"sqlite:///{tmp_path / 'us-briefs.db'}")
+        runtime.brief_store.save(
+            "us",
+            {
+                "as_of": "2026-07-14T15:00:00Z",
+                "trading_date": "2026-07-14",
+                "mode": "paper",
+                "marker": "us-archive",
+            },
+        )
 
         body = client.get("/v1/research/brief").json()
         assert body["marker"] == "us-archive"
         assert runtime.latest_brief["marker"] == "us-archive"
+
+    def test_research_brief_quarantines_legacy_stale_narrative(self, env):
+        _, _, runtime, client = env
+        runtime.latest_brief = {
+            "as_of": "2026-09-09T07:00:00Z",
+            "trading_date": "2026-09-09",
+            "mode": "paper",
+            "freshness": {"warnings": []},
+            "movers": {"top": [], "bottom": []},
+            "themes": [],
+            "events": {"earnings": [], "notes": []},
+            "news": {"items": [], "per_symbol_sentiment": {}},
+            "signals_today": [],
+            "candidates_today": {"counts": {}, "pending": []},
+            "uncertainty": [],
+            "provenance": [],
+            "narrative": {
+                "generated_at": "2026-08-12T07:00:00Z",
+                "market": "US",
+                "edition": "morning",
+                "headline": "old prose",
+            },
+        }
+
+        body = client.get("/v1/research/brief").json()
+
+        assert body["narrative"] is None
+        assert body["publication"]["status"] == "narrative_failed"
+        assert any("旧文字已隔离" in row for row in body["uncertainty"])
 
     def test_research_run_triggers_hook(self, env):
         _, _, runtime, client = env
@@ -386,8 +440,9 @@ class TestReads:
         # research is read-only → no human-surface gate (unlike /session/run)
         _, _, runtime, client = env
         runtime.run_research["cn"] = lambda: {"ok": True}
-        r = client.post("/v1/research/run", params={"market": "cn"},
-                        headers={"X-Finance-Surface": "system"})
+        r = client.post(
+            "/v1/research/run", params={"market": "cn"}, headers={"X-Finance-Surface": "system"}
+        )
         assert r.status_code == 200  # system surface allowed for research
 
     def test_knowledge_search_503_when_unconfigured(self, env):
@@ -405,19 +460,23 @@ class TestReads:
         from swing_trader.monitors import NewsSnapshot
 
         _, _, runtime, client = env
-        knowledge, index = build_knowledge(
-            KnowledgeConfig(root_dir=tmp_path / "kb")
-        )
+        knowledge, index = build_knowledge(KnowledgeConfig(root_dir=tmp_path / "kb"))
         assert index is not None
-        news = NewsSnapshot(items=[{
-            "ts": IN_WINDOW.isoformat(), "symbol": "NVDA",
-            "headline": "NVDA announces quantum accelerator breakthrough",
-            "source": "sim", "url": "https://example.invalid/a", "sentiment": 0.5,
-        }])
+        news = NewsSnapshot(
+            items=[
+                {
+                    "ts": IN_WINDOW.isoformat(),
+                    "symbol": "NVDA",
+                    "headline": "NVDA announces quantum accelerator breakthrough",
+                    "source": "sim",
+                    "url": "https://example.invalid/a",
+                    "sentiment": 0.5,
+                }
+            ]
+        )
         ingest_news_snapshot(knowledge, index, news, date(2026, 7, 13))
         runtime.knowledge, runtime.knowledge_index = knowledge, index
-        rows = client.get("/v1/knowledge/search",
-                          params={"q": "quantum accelerator"}).json()
+        rows = client.get("/v1/knowledge/search", params={"q": "quantum accelerator"}).json()
         assert rows and rows[0]["source_url"] == "https://example.invalid/a"
 
 
@@ -436,8 +495,7 @@ class TestPendingAndActions:
         c = publish_one(ledger, service)
         resp = client.post(
             f"/v1/candidates/{c.id}/action",
-            json={"action": "approve", "actor": "gongqing",
-                  "idempotency_key": "web-1"},
+            json={"action": "approve", "actor": "gongqing", "idempotency_key": "web-1"},
             headers={"X-Finance-Surface": "web"},
         )
         assert resp.status_code == 200
@@ -451,7 +509,9 @@ class TestPendingAndActions:
         ledger, service, _, client = env
         c = publish_one(ledger, service)
         payload = {"action": "approve", "actor": "u", "idempotency_key": "k1"}
-        assert client.post(f"/v1/candidates/{c.id}/action", json=payload).json()["code"] == "applied"
+        assert (
+            client.post(f"/v1/candidates/{c.id}/action", json=payload).json()["code"] == "applied"
+        )
         second = client.post(f"/v1/candidates/{c.id}/action", json=payload)
         assert second.status_code == 200
         assert second.json()["code"] == "replayed"
@@ -461,8 +521,13 @@ class TestPendingAndActions:
         c = publish_one(ledger, service)
         resp = client.post(
             f"/v1/candidates/{c.id}/action",
-            json={"action": "edit", "actor": "u", "idempotency_key": "k1",
-                  "expected_version": 1, "edits": {"qty": 1}},
+            json={
+                "action": "edit",
+                "actor": "u",
+                "idempotency_key": "k1",
+                "expected_version": 1,
+                "edits": {"qty": 1},
+            },
             headers={"X-Finance-Surface": "desktop"},
         )
         assert resp.status_code == 200
@@ -474,36 +539,44 @@ class TestPendingAndActions:
         c = publish_one(ledger, service)
         resp = client.post(
             f"/v1/candidates/{c.id}/action",
-            json={"action": "edit", "actor": "u", "idempotency_key": "k1",
-                  "edits": {"symbol": "TSLA"}},
+            json={
+                "action": "edit",
+                "actor": "u",
+                "idempotency_key": "k1",
+                "edits": {"symbol": "TSLA"},
+            },
         )
         assert resp.status_code == 422
 
     def test_double_approve_conflict_409(self, env):
         ledger, service, _, client = env
         c = publish_one(ledger, service)
-        client.post(f"/v1/candidates/{c.id}/action",
-                    json={"action": "approve", "actor": "u",
-                          "idempotency_key": "k1"})
-        resp = client.post(f"/v1/candidates/{c.id}/action",
-                           json={"action": "reject", "actor": "u",
-                                 "idempotency_key": "k2"})
+        client.post(
+            f"/v1/candidates/{c.id}/action",
+            json={"action": "approve", "actor": "u", "idempotency_key": "k1"},
+        )
+        resp = client.post(
+            f"/v1/candidates/{c.id}/action",
+            json={"action": "reject", "actor": "u", "idempotency_key": "k2"},
+        )
         assert resp.status_code == 409
 
     def test_unknown_candidate_404(self, env):
         _, _, _, client = env
-        resp = client.post("/v1/candidates/nope/action",
-                           json={"action": "approve", "actor": "u",
-                                 "idempotency_key": "k"})
+        resp = client.post(
+            "/v1/candidates/nope/action",
+            json={"action": "approve", "actor": "u", "idempotency_key": "k"},
+        )
         assert resp.status_code == 404
 
     def test_window_closed_403(self, env, tmp_path):
         ledger, service, runtime, client = env
         c = publish_one(ledger, service)
         runtime.clock = lambda: datetime(2026, 7, 13, 16, 31, tzinfo=timezone.utc)
-        resp = client.post(f"/v1/candidates/{c.id}/action",
-                           json={"action": "approve", "actor": "u",
-                                 "idempotency_key": "k"})
+        resp = client.post(
+            f"/v1/candidates/{c.id}/action",
+            json={"action": "approve", "actor": "u", "idempotency_key": "k"},
+        )
         assert resp.status_code == 403
 
     def test_system_surface_forbidden(self, env):
@@ -528,11 +601,12 @@ class TestPendingAndActions:
         assert resp.status_code == 422
 
     def test_no_service_503(self, tmp_path):
-        ledger = Ledger(url=f"sqlite:///{tmp_path/'n.db'}")
+        ledger = Ledger(url=f"sqlite:///{tmp_path / 'n.db'}")
         client = TestClient(create_app(FinanceRuntime(ledger=ledger)))
-        resp = client.post("/v1/candidates/x/action",
-                           json={"action": "approve", "actor": "u",
-                                 "idempotency_key": "k"})
+        resp = client.post(
+            "/v1/candidates/x/action",
+            json={"action": "approve", "actor": "u", "idempotency_key": "k"},
+        )
         assert resp.status_code == 503
 
     def test_body_surface_fallback_for_desktop(self, env):
@@ -542,8 +616,7 @@ class TestPendingAndActions:
         c = publish_one(ledger, service)
         resp = client.post(
             f"/v1/candidates/{c.id}/action",
-            json={"action": "approve", "actor": "u", "idempotency_key": "k1",
-                  "surface": "desktop"},
+            json={"action": "approve", "actor": "u", "idempotency_key": "k1", "surface": "desktop"},
         )
         assert resp.status_code == 200
         audit = ledger.get_audit(candidate_id=c.id, idempotency_key="k1")
@@ -554,8 +627,7 @@ class TestPendingAndActions:
         c = publish_one(ledger, service)
         client.post(
             f"/v1/candidates/{c.id}/action",
-            json={"action": "reject", "actor": "u", "idempotency_key": "k2",
-                  "surface": "desktop"},
+            json={"action": "reject", "actor": "u", "idempotency_key": "k2", "surface": "desktop"},
             headers={"X-Finance-Surface": "telegram"},
         )
         audit = ledger.get_audit(candidate_id=c.id, idempotency_key="k2")
@@ -567,13 +639,11 @@ class TestPendingAndActions:
 
         ledger, _, _, client = env
         ledger.record_fill(
-            Fill(order_id="o1", symbol="NVDA", side=Side.BUY, qty=2, px=99.0,
-                 commission=1.0),
+            Fill(order_id="o1", symbol="NVDA", side=Side.BUY, qty=2, px=99.0, commission=1.0),
             stop_px=91.5,
         )
         ledger.record_fill(
-            Fill(order_id="o2", symbol="NVDA", side=Side.SELL, qty=2, px=105.0,
-                 commission=1.0),
+            Fill(order_id="o2", symbol="NVDA", side=Side.SELL, qty=2, px=105.0, commission=1.0),
         )
         rows = client.get("/v1/trades").json()
         assert len(rows) == 1
@@ -603,7 +673,7 @@ class TestMultiMarketConfirmation:
     """
 
     def _two_market_client(self, tmp_path):
-        ledger = Ledger(url=f"sqlite:///{tmp_path/'mm.db'}")
+        ledger = Ledger(url=f"sqlite:///{tmp_path / 'mm.db'}")
         us = ConfirmationService(ledger, mode=Mode.PAPER, market_tz="America/New_York")
         hk = ConfirmationService(ledger, mode=Mode.PAPER, market_tz="Asia/Hong_Kong")
         # 10:45 in each market's own local time → a valid publish window there.
@@ -629,8 +699,10 @@ class TestMultiMarketConfirmation:
         # each row carries ITS market's real window, not a hard-coded US clock
         assert by_id[us_c.id]["window"]["tz"] == "America/New_York"
         assert by_id[us_c.id]["window"] == {
-            "push": "10:30", "cutoff": "11:30",
-            "tz": "America/New_York", "market": "US",
+            "push": "10:30",
+            "cutoff": "11:30",
+            "tz": "America/New_York",
+            "market": "US",
         }
         assert by_id[hk_c.id]["window"]["tz"] == "Asia/Hong_Kong"
         # clock sits in the US window → US open, HK closed, both still listed
@@ -661,21 +733,41 @@ class TestByMarketStats:
         from datetime import timedelta
 
         from swing_trader.schemas import Fill, Mode, Side
+
         ledger, _, _, client = env
         t0 = IN_WINDOW
 
         def close(symbol, currency, entry, exit_px, day):
             t = t0 + timedelta(days=day)
-            ledger.record_fill(Fill(order_id=f"e{symbol}{day}", symbol=symbol,
-                                    currency=currency, side=Side.BUY, qty=10,
-                                    px=entry, commission=1.0, mode=Mode.PAPER, ts=t))
-            ledger.record_fill(Fill(order_id=f"x{symbol}{day}", symbol=symbol,
-                                    currency=currency, side=Side.SELL, qty=10,
-                                    px=exit_px, commission=1.0, mode=Mode.PAPER,
-                                    ts=t + timedelta(days=1)))
+            ledger.record_fill(
+                Fill(
+                    order_id=f"e{symbol}{day}",
+                    symbol=symbol,
+                    currency=currency,
+                    side=Side.BUY,
+                    qty=10,
+                    px=entry,
+                    commission=1.0,
+                    mode=Mode.PAPER,
+                    ts=t,
+                )
+            )
+            ledger.record_fill(
+                Fill(
+                    order_id=f"x{symbol}{day}",
+                    symbol=symbol,
+                    currency=currency,
+                    side=Side.SELL,
+                    qty=10,
+                    px=exit_px,
+                    commission=1.0,
+                    mode=Mode.PAPER,
+                    ts=t + timedelta(days=1),
+                )
+            )
 
-        close("NVDA", "USD", 100.0, 120.0, 0)     # US win
-        close("0700.HK", "HKD", 100.0, 80.0, 2)   # HK loss
+        close("NVDA", "USD", 100.0, 120.0, 0)  # US win
+        close("0700.HK", "HKD", 100.0, 80.0, 2)  # HK loss
 
         rows = client.get("/v1/stats/by-market").json()
         by = {r["market"]: r for r in rows}

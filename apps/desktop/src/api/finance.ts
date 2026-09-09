@@ -507,6 +507,15 @@ export interface FinanceResearchBrief {
   candidates_today: { counts: Record<string, number>; pending: FinanceBriefPendingCandidate[] }
   /** Optional for briefs archived before Phase 0.95 introduced discovery. */
   discovery?: FinanceDiscoveryPool | null
+  /** Stable identity and primary-model outcome for a scheduled edition. */
+  publication?: {
+    edition_id: string
+    edition: 'morning' | 'evening'
+    scheduled_for: string
+    evidence_as_of: string
+    status: 'pending' | 'complete' | 'narrative_failed'
+    failure: string
+  } | null
   /** Model-written synthesis; absent on old archives or failed model runs. */
   narrative?: FinanceResearchNarrative | null
   cross_market_synthesis?: FinanceResearchSynthesis

@@ -2695,6 +2695,7 @@ export const zh: Translations = {
       staleTitle: '数据新鲜度警告',
       narrativeTitle: '简报',
       narrativeUnavailable: '本次分析简报尚未生成。模型连接恢复后请重新运行研究；下方结构化数据仍可正常查看。',
+      narrativeFailure: reason => `本版主模型生成失败：${reason}`,
       narrativeWatchNext: '接下来关注',
       narrativeSincePrior: '相较上一版的变化',
       narrativeActionMap: '趋势行动图',

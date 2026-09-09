@@ -38,6 +38,7 @@ export const financeEn: FinanceTranslations = {
       title: "Brief",
       unavailable:
         "The analytical brief was not generated. Refresh research after the model connection is available; the measurements below remain usable.",
+      failed: "Primary-model synthesis failed for this edition: {error}",
       watchNext: "What to watch next",
       sincePrior: "What changed since the prior brief",
       actionMap: "Trend action map",

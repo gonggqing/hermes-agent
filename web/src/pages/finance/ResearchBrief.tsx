@@ -155,9 +155,18 @@ function NarrativeBrief({
       </CardHeader>
       <CardContent className="space-y-5">
         {!narrative ? (
-          <p className="font-mondwest normal-case text-sm leading-6 text-muted-foreground">
-            {copy.unavailable}
-          </p>
+          <div className="space-y-2">
+            <p className="font-mondwest normal-case text-sm leading-6 text-muted-foreground">
+              {copy.unavailable}
+            </p>
+            {brief.publication?.status === "narrative_failed" && (
+              <p className="font-mondwest normal-case text-xs leading-5 text-destructive">
+                {interpolate(copy.failed, {
+                  error: brief.publication.failure || brief.publication.edition_id,
+                })}
+              </p>
+            )}
+          </div>
         ) : (
           <>
             <div className="space-y-2">

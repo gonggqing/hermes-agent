@@ -19,10 +19,17 @@ The Finance-owned scheduler, not Hermes conversational cron, runs the persisted
 US/CN/HK/KR briefs at 09:00 and 21:00 Asia/Shanghai.
 
 The Compose Finance command explicitly enables `--cn-paper` with a CNY 100,000
-opening sleeve. This is behavioral configuration, not a credential: mainland
-orders remain `Mode.PAPER`, share no USD/HKD cash, and cannot activate an IBKR
-live path. Change the amount only before the first fill in a new ledger; the
-rehydration contract assumes opening balances remain stable thereafter.
+opening sleeve and enables the existing HK Paper gate with an HKD 16,000
+sleeve. Both regional loops use `Mode.PAPER`, isolated currency reservations,
+their own market schedules and human-confirmation windows; neither setting can
+activate an IBKR live path. Connected IBKR Paper contract/board-lot acceptance
+remains a separate rollout gate. Change an opening amount only before the first
+fill in a new ledger; rehydration assumes opening balances remain stable.
+
+Final 09:00/21:00 research synthesis resolves the exact Hermes primary model
+and provider from `~/.hermes/config.yaml`. Finance search/collection may use
+the cheaper search model, but a missing primary credential fails the narrative
+visibly rather than silently downgrading or reusing an older brief.
 
 Finance connects to Qdrant only over `finance-internal`. The Finance API is
 published only on host loopback; the vector service has no published port.

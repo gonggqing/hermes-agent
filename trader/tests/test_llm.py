@@ -16,17 +16,21 @@ SETTINGS = LLMSettings(base_url="https://x", model="test-model", api_key="k")
 
 def analyst(reply):
     if isinstance(reply, Exception):
+
         def complete(_s, _sys, _p):
             raise reply
     else:
+
         def complete(_s, _sys, _p):
             return reply
+
     return LLMAnalyst(SETTINGS, complete=complete)
 
 
 def test_valid_json_becomes_signal():
-    sig = analyst('{"direction": "long", "confidence": 0.66, "thesis": "trend up"}') \
-        .analyze("NVDA", {"rsi": 60}, ["NVDA beats"], regime="risk_on")
+    sig = analyst('{"direction": "long", "confidence": 0.66, "thesis": "trend up"}').analyze(
+        "NVDA", {"rsi": 60}, ["NVDA beats"], regime="risk_on"
+    )
     assert sig is not None
     assert sig.direction is Direction.LONG
     assert sig.confidence == pytest.approx(0.66)
@@ -34,23 +38,28 @@ def test_valid_json_becomes_signal():
 
 
 def test_json_wrapped_in_prose_is_extracted():
-    sig = analyst('Sure! {"direction": "neutral", "confidence": 0.5, "thesis": "mixed"} hope this helps') \
-        .analyze("MU", {}, [])
+    sig = analyst(
+        'Sure! {"direction": "neutral", "confidence": 0.5, "thesis": "mixed"} hope this helps'
+    ).analyze("MU", {}, [])
     assert sig is not None and sig.direction is Direction.NEUTRAL
 
 
 def test_confidence_capped_at_0_8():
-    sig = analyst('{"direction": "long", "confidence": 0.99, "thesis": "moon"}') \
-        .analyze("NVDA", {}, [])
+    sig = analyst('{"direction": "long", "confidence": 0.99, "thesis": "moon"}').analyze(
+        "NVDA", {}, []
+    )
     assert sig.confidence == pytest.approx(0.8)
 
 
-@pytest.mark.parametrize("bad", [
-    "not json at all",
-    '{"direction": "yolo", "confidence": 0.5}',
-    '{"confidence": 0.5}',
-    RuntimeError("timeout"),
-])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "not json at all",
+        '{"direction": "yolo", "confidence": 0.5}',
+        '{"confidence": 0.5}',
+        RuntimeError("timeout"),
+    ],
+)
 def test_any_failure_returns_none(bad):
     assert analyst(bad).analyze("NVDA", {}, []) is None
 
@@ -61,10 +70,13 @@ def test_settings_from_env_provider_chain():
     assert s.model == "deepseek-v4-flash" and "deepseek" in s.base_url
     s = llm_settings_from_env({"GLM_API_KEY": "g"})
     assert s.model == "glm5-turbo"
-    s = llm_settings_from_env({
-        "FINANCE_LLM_PROVIDER": "glm", "GLM_API_KEY": "g",
-        "DEEPSEEK_API_KEY": "d",
-    })
+    s = llm_settings_from_env(
+        {
+            "FINANCE_LLM_PROVIDER": "glm",
+            "GLM_API_KEY": "g",
+            "DEEPSEEK_API_KEY": "d",
+        }
+    )
     assert s.model == "glm5-turbo"  # explicit provider wins
 
 
@@ -72,14 +84,20 @@ def test_search_role_pins_cheap_model():
     # Default role="search" (the search/summary subagent) stays on the CHEAP
     # flash model to save token cost — it IGNORES FINANCE_LLM_MODEL so a pricier
     # decision model configured for another role does not raise its bill.
-    s = llm_settings_from_env({
-        "DEEPSEEK_API_KEY": "d", "FINANCE_LLM_MODEL": "deepseek-v4",
-    })
+    s = llm_settings_from_env(
+        {
+            "DEEPSEEK_API_KEY": "d",
+            "FINANCE_LLM_MODEL": "deepseek-v4",
+        }
+    )
     assert s.model == "deepseek-v4-flash"  # search role: FINANCE_LLM_MODEL ignored
     # FINANCE_LLM_SEARCH_MODEL overrides the search-tier model explicitly.
-    s = llm_settings_from_env({
-        "DEEPSEEK_API_KEY": "d", "FINANCE_LLM_SEARCH_MODEL": "deepseek-lite",
-    })
+    s = llm_settings_from_env(
+        {
+            "DEEPSEEK_API_KEY": "d",
+            "FINANCE_LLM_SEARCH_MODEL": "deepseek-lite",
+        }
+    )
     assert s.model == "deepseek-lite"
     # A non-search role uses FINANCE_LLM_MODEL (the decision/general tier).
     s = llm_settings_from_env(
@@ -104,6 +122,53 @@ def test_decision_role_uses_hermes_primary_model(tmp_path):
     assert settings is not None and settings.model == "MiniMax-M3"
 
 
+def test_decision_role_follows_primary_provider_not_first_available_key(tmp_path):
+    (tmp_path / "config.yaml").write_text(
+        "model:\n  default: glm-5.2\n  provider: zai\n",
+        encoding="utf-8",
+    )
+    settings = llm_settings_from_env(
+        {
+            "HERMES_HOME": str(tmp_path),
+            "DEEPSEEK_API_KEY": "cheap",
+            "GLM_API_KEY": "primary",
+        },
+        role="decision",
+    )
+    assert settings is not None
+    assert settings.model == "glm-5.2"
+    assert "bigmodel.cn" in settings.base_url
+
+
+def test_primary_provider_ignores_stale_search_provider_override(tmp_path):
+    (tmp_path / "config.yaml").write_text(
+        "model:\n  default: MiniMax-M3\n  provider: minimax-cn\n",
+        encoding="utf-8",
+    )
+    settings = llm_settings_from_env(
+        {
+            "HERMES_HOME": str(tmp_path),
+            "FINANCE_LLM_PROVIDER": "deepseek",
+            "DEEPSEEK_API_KEY": "cheap",
+            "MINIMAX_CN_API_KEY": "primary",
+        },
+        role="decision",
+    )
+    assert settings is not None
+    assert settings.model == "MiniMax-M3"
+    assert "minimaxi.com" in settings.base_url
+
+
+def test_decision_role_fails_closed_without_primary_model(tmp_path):
+    assert (
+        llm_settings_from_env(
+            {"HERMES_HOME": str(tmp_path), "DEEPSEEK_API_KEY": "cheap"},
+            role="decision",
+        )
+        is None
+    )
+
+
 def test_explicit_finance_decision_model_overrides_hermes_config(tmp_path):
     (tmp_path / "config.yaml").write_text("model: primary-model\n", encoding="utf-8")
     settings = llm_settings_from_env(
@@ -118,8 +183,7 @@ def test_explicit_finance_decision_model_overrides_hermes_config(tmp_path):
 
 
 def test_key_never_in_signal():
-    sig = analyst('{"direction": "long", "confidence": 0.6, "thesis": "t"}') \
-        .analyze("NVDA", {}, [])
+    sig = analyst('{"direction": "long", "confidence": 0.6, "thesis": "t"}').analyze("NVDA", {}, [])
     assert "k" != sig.thesis and SETTINGS.api_key not in repr(sig)
 
 
@@ -132,11 +196,13 @@ def test_http_complete_splits_minimax_reasoning_only(monkeypatch):
 
         def iter_lines(self, *, decode_unicode):
             assert decode_unicode is True
-            return iter([
-                'data: {"choices":[{"delta":{"content":"{\\"ok\\":"}}]}',
-                'data: {"choices":[{"delta":{"content":"true}"}}]}',
-                "data: [DONE]",
-            ])
+            return iter(
+                [
+                    'data: {"choices":[{"delta":{"content":"{\\"ok\\":"}}]}',
+                    'data: {"choices":[{"delta":{"content":"true}"}}]}',
+                    "data: [DONE]",
+                ]
+            )
 
         def json(self):
             return {"choices": [{"message": {"content": '{"ok":true}'}}]}
@@ -169,15 +235,17 @@ def test_http_complete_splits_minimax_reasoning_only(monkeypatch):
 
 
 def test_http_complete_recovers_provider_reasoning_fields(monkeypatch):
-    streams = iter([
+    streams = iter(
         [
-            'data: {"choices":[{"delta":{"reasoning_content":"{\\"action\\":\\""}}]}',
-            'data: {"choices":[{"delta":{"reasoning_content":"keep\\"}"}}]}',
-        ],
-        [
-            'data: {"choices":[{"delta":{"reasoning_details":[{"type":"text","text":"{\\"action\\":\\"keep\\"}"}]}}]}',
-        ],
-    ])
+            [
+                'data: {"choices":[{"delta":{"reasoning_content":"{\\"action\\":\\""}}]}',
+                'data: {"choices":[{"delta":{"reasoning_content":"keep\\"}"}}]}',
+            ],
+            [
+                'data: {"choices":[{"delta":{"reasoning_details":[{"type":"text","text":"{\\"action\\":\\"keep\\"}"}]}}]}',
+            ],
+        ]
+    )
 
     class _Response:
         def raise_for_status(self):

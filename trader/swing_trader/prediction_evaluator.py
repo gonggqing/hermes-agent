@@ -54,10 +54,13 @@ MARKET_CLOSE_READY = {
 
 _INDEX_ALIASES = {
     ("US", "SOX"): "^SOX",
+    ("US", "VIX"): "^VIX",
+    ("US", "$VIX"): "^VIX",
     ("HK", "HSI"): "^HSI",
     ("HK", "HSTECH"): "^HSTECH",
     ("KR", "KOSPI"): "^KS11",
 }
+_PRICE_BACKED_INDICATORS = {"^VIX"}
 _EVENT_WORDS = {
     "ANNOUNCEMENT",
     "CALL",
@@ -78,6 +81,21 @@ _SYMBOL_TOKEN_RE = re.compile(
 
 class PermanentUnscorable(ValueError):
     """The claim has no deterministic price representation."""
+
+
+def _normalize_symbol(symbol: object, market: str) -> str:
+    value = str(symbol or "").strip().upper()
+    value = _INDEX_ALIASES.get((market, value), value)
+    if market == "CN" and value.endswith(".SH"):
+        value = f"{value[:-3]}.SS"
+    return value
+
+
+def _permanent_feed_error(exc: DataFeedError) -> bool:
+    text = str(exc).lower()
+    return any(
+        marker in text for marker in ("http error 404", "quote not found", "possibly delisted")
+    )
 
 
 def _is_price_symbol(symbol: str, market: str) -> bool:
@@ -120,11 +138,7 @@ def _event_symbols(entity_key: str, market: str) -> tuple[str, ...]:
     auditable ``unscorable`` observations.
     """
     cleaned = _DATE_FRAGMENT_RE.sub(" ", entity_key.upper())
-    tokens = [
-        token
-        for token in _SYMBOL_TOKEN_RE.findall(cleaned)
-        if token not in _EVENT_WORDS
-    ]
+    tokens = [token for token in _SYMBOL_TOKEN_RE.findall(cleaned) if token not in _EVENT_WORDS]
     if "IPO" in entity_key.upper():
         # A company name around an IPO is not evidence that a listed ticker
         # exists.  Require the exchange suffix outside the US market; US IPO
@@ -133,7 +147,7 @@ def _event_symbols(entity_key: str, market: str) -> tuple[str, ...]:
         return ()
     symbols: list[str] = []
     for token in tokens:
-        symbol = _INDEX_ALIASES.get((market, token), token)
+        symbol = _normalize_symbol(token, market)
         if _is_price_symbol(symbol, market) and symbol not in symbols:
             symbols.append(symbol)
     return tuple(symbols)
@@ -168,10 +182,7 @@ def latest_closed_trading_date(market: str, now: datetime) -> date:
     schedule = MARKET_SCHEDULES[key]
     local = now.astimezone(schedule.tz)
     candidate = local.date()
-    if not (
-        is_trading_day(candidate, schedule)
-        and local.time() >= MARKET_CLOSE_READY[key]
-    ):
+    if not (is_trading_day(candidate, schedule) and local.time() >= MARKET_CLOSE_READY[key]):
         candidate -= timedelta(days=1)
     while not is_trading_day(candidate, schedule):
         candidate -= timedelta(days=1)
@@ -275,7 +286,33 @@ class PredictionCloseEvaluator:
                     payload={"reason": str(exc)},
                 )
                 unscorable += 1
-            except (DataFeedError, OSError, TimeoutError) as exc:
+            except DataFeedError as exc:
+                if _permanent_feed_error(exc):
+                    observed_at = self._close_instant(
+                        key, date.fromisoformat(checkpoint["due_trading_date"])
+                    )
+                    report = self.ledger.evaluate_checkpoint(
+                        checkpoint["id"],
+                        observed_at=observed_at,
+                        source="unscorable:prediction-close-v1",
+                        evaluator_version=EVALUATOR_VERSION,
+                        payload={"reason": str(exc)},
+                    )
+                    unscorable += 1
+                    if report.replayed:
+                        replayed += 1
+                    continue
+                deferred += 1
+                logger.warning(
+                    "prediction checkpoint deferred",
+                    extra={
+                        "checkpoint_id": checkpoint["id"],
+                        "market": key,
+                        "reason": str(exc)[:240],
+                    },
+                )
+                continue
+            except (OSError, TimeoutError) as exc:
                 # Transient data failures stay pending and retry on a later
                 # pass; absence of data is never scored as a bad forecast.
                 deferred += 1
@@ -317,15 +354,13 @@ class PredictionCloseEvaluator:
             due=due,
             market=market,
             cache=cache,
-            fixed_baseline=(
-                revision.get("baseline_value") if len(symbols) == 1 else None
-            ),
+            fixed_baseline=(revision.get("baseline_value") if len(symbols) == 1 else None),
         )
 
-        raw_benchmark = str(
-            revision.get("benchmark") or MARKET_PROXIES[market]
-        ).strip().upper()
-        benchmark_symbol = _INDEX_ALIASES.get((market, raw_benchmark), raw_benchmark)
+        raw_benchmark = str(revision.get("benchmark") or MARKET_PROXIES[market]).strip().upper()
+        benchmark_symbol = _normalize_symbol(raw_benchmark, market)
+        if not _is_price_symbol(benchmark_symbol, market):
+            benchmark_symbol = _normalize_symbol(MARKET_PROXIES[market], market)
         benchmark_return = None
         if benchmark_symbol and benchmark_symbol not in symbols:
             benchmark_return = self._basket_path(
@@ -359,13 +394,20 @@ class PredictionCloseEvaluator:
         entity_type = str(series["entity_type"]).lower()
         entity_key = str(series["entity_key"]).strip().upper()
         market = str(series["market"]).upper()
-        if entity_type == "instrument" and entity_key:
-            symbol = _INDEX_ALIASES.get((market, entity_key), entity_key)
+        if entity_type in {"instrument", "index"} and entity_key:
+            symbol = _normalize_symbol(entity_key, market)
             if not _is_price_symbol(symbol, market):
                 raise PermanentUnscorable(
-                    f"instrument claim {entity_key!r} is not an exact {market} ticker"
+                    f"{entity_type} claim {entity_key!r} is not an exact {market} ticker"
                 )
             return (symbol,)
+        if entity_type == "indicator" and entity_key:
+            symbol = _normalize_symbol(entity_key, market)
+            if symbol in _PRICE_BACKED_INDICATORS and _is_price_symbol(symbol, market):
+                return (symbol,)
+            raise PermanentUnscorable(
+                f"indicator claim {entity_key!r} has no supported price series"
+            )
         if entity_type == "event" and entity_key:
             symbols = _event_symbols(entity_key, market)
             if symbols:
@@ -375,8 +417,11 @@ class PredictionCloseEvaluator:
             )
         if entity_type == "market":
             proxy = revision.get("benchmark") or MARKET_PROXIES.get(series["market"].upper())
-            if proxy:
-                return (str(proxy).upper(),)
+            symbol = _normalize_symbol(proxy, market)
+            if not _is_price_symbol(symbol, market):
+                symbol = _normalize_symbol(MARKET_PROXIES.get(market), market)
+            if _is_price_symbol(symbol, market):
+                return (symbol,)
         if entity_type == "theme":
             try:
                 payload = json.loads(revision.get("payload_json") or "{}")
@@ -386,10 +431,7 @@ class PredictionCloseEvaluator:
             symbols = tuple(
                 normalized
                 for raw in (leaders or [])
-                if (normalized := _INDEX_ALIASES.get(
-                    (market, str(raw).strip().upper()),
-                    str(raw).strip().upper(),
-                ))
+                if (normalized := _normalize_symbol(raw, market))
                 and _is_price_symbol(normalized, market)
             )
             if symbols:
