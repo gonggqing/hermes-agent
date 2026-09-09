@@ -15,11 +15,16 @@ from swing_trader.scheduler import (
 
 
 def test_cn_and_hk_universes_are_disjoint():
-    cn = set(build_mainland_watchlist().symbols)
-    hk = set(build_hk_watchlist().symbols)
+    cn_watchlist = build_mainland_watchlist()
+    hk_watchlist = build_hk_watchlist()
+    cn = set(cn_watchlist.symbols)
+    hk = set(hk_watchlist.symbols)
     assert cn and hk and cn.isdisjoint(hk)
     assert all(symbol.endswith((".SS", ".SZ")) for symbol in cn)
     assert all(symbol.endswith(".HK") for symbol in hk)
+    assert all(item.security_type == "etf" for item in cn_watchlist.items)
+    assert hk_watchlist.lookup("2800.HK").security_type == "etf"
+    assert hk_watchlist.lookup("0700.HK").security_type == "stock"
 
 
 def test_overrides_cannot_cross_contaminate_markets():

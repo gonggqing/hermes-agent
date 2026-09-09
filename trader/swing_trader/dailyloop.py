@@ -1961,7 +1961,10 @@ class DailyLoop:
         try:
             self._earnings = upcoming_earnings(
                 self.earnings_provider,
-                watchlist_mod.earnings_symbols(self.symbols),
+                watchlist_mod.earnings_symbols(
+                    self.symbols,
+                    lookup=self.watchlist_lookup,
+                ),
                 now=self.clock(),
                 within_days=14,
             )

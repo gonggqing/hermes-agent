@@ -11,7 +11,7 @@ data-only and must not change the schema.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Callable, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -118,7 +118,11 @@ def enabled_symbols() -> list[str]:
     return [i.symbol for i in UNIVERSE if i.enabled]
 
 
-def earnings_symbols(symbols: list[str] | None = None) -> list[str]:
+def earnings_symbols(
+    symbols: list[str] | None = None,
+    *,
+    lookup: Callable[[str], WatchlistItem | None] | None = None,
+) -> list[str]:
     """Return company securities for which an earnings date is meaningful.
 
     Yahoo's earnings endpoints return slow 404s for ETFs and funds. Unknown
@@ -127,9 +131,10 @@ def earnings_symbols(symbols: list[str] | None = None) -> list[str]:
     """
 
     result: list[str] = []
+    resolve = lookup or get
     for raw in symbols if symbols is not None else enabled_symbols():
         symbol = raw.strip().upper()
-        item = get(symbol)
+        item = resolve(symbol)
         if item is None or item.security_type == "stock":
             result.append(symbol)
     return result

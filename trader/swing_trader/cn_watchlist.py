@@ -19,7 +19,7 @@ mover/theme tagging works uniformly across the US and CN universes.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Literal, Optional
 
 from swing_trader.schemas import AiPhase, Role
 from swing_trader.watchlist import WatchlistItem
@@ -33,9 +33,23 @@ __all__ = [
 ]
 
 
-def _mk(symbols: str, theme: str, phase: AiPhase, role: Role) -> list[WatchlistItem]:
+def _mk(
+    symbols: str,
+    theme: str,
+    phase: AiPhase,
+    role: Role,
+    *,
+    security_type: Literal["stock", "etf", "crypto"] = "stock",
+) -> list[WatchlistItem]:
     return [
-        WatchlistItem(symbol=s, theme=theme, ai_phase=phase, role=role) for s in symbols.split()
+        WatchlistItem(
+            symbol=s,
+            theme=theme,
+            ai_phase=phase,
+            role=role,
+            security_type=security_type,
+        )
+        for s in symbols.split()
     ]
 
 
@@ -60,7 +74,13 @@ CN_UNIVERSE: list[WatchlistItem] = [
     *_mk("1211.HK 2015.HK", "cn-ev-battery", AiPhase.POWER, Role.ROTATION),
     *_mk("300750.SZ 002594.SZ", "cn-ev-battery", AiPhase.POWER, Role.ROTATION),
     # --- Index proxies (regime context) ---
-    *_mk("3033.HK 2800.HK", "cn-index", AiPhase.NONE, Role.CORE),
+    *_mk(
+        "3033.HK 2800.HK",
+        "cn-index",
+        AiPhase.NONE,
+        Role.CORE,
+        security_type="etf",
+    ),
     # --- Non-tech consumer anchor (context only) ---
     *_mk("600519.SS", "cn-consumer-anchor", AiPhase.NONE, Role.HEDGE),
 ]
@@ -74,15 +94,39 @@ CN_INDEX_SYMBOLS: tuple[str, ...] = ("^HSI", "^HSCE")
 # than a frozen stock-picking list.  Individual companies enter the daily
 # evidence packet through ``EastmoneyMarketUniverse`` and can rotate every run.
 CN_MAINLAND_UNIVERSE: list[WatchlistItem] = [
-    *_mk("510300.SS 510500.SS 588000.SS", "cn-broad-market", AiPhase.NONE, Role.CORE),
-    *_mk("512800.SS", "cn-banks", AiPhase.NONE, Role.HEDGE),
-    *_mk("512880.SS", "cn-brokerage", AiPhase.NONE, Role.ROTATION),
-    *_mk("512010.SS", "cn-healthcare", AiPhase.NONE, Role.ROTATION),
-    *_mk("159928.SZ", "cn-consumer", AiPhase.NONE, Role.HEDGE),
-    *_mk("512660.SS", "cn-defense", AiPhase.NONE, Role.ROTATION),
-    *_mk("516160.SS 515790.SS", "cn-new-energy", AiPhase.POWER, Role.ROTATION),
-    *_mk("159869.SZ", "cn-digital-content", AiPhase.APPLICATION, Role.ROTATION),
-    *_mk("159995.SZ", "cn-semiconductor", AiPhase.INFRA, Role.CONVICTION),
+    *_mk(
+        "510300.SS 510500.SS 588000.SS",
+        "cn-broad-market",
+        AiPhase.NONE,
+        Role.CORE,
+        security_type="etf",
+    ),
+    *_mk("512800.SS", "cn-banks", AiPhase.NONE, Role.HEDGE, security_type="etf"),
+    *_mk("512880.SS", "cn-brokerage", AiPhase.NONE, Role.ROTATION, security_type="etf"),
+    *_mk("512010.SS", "cn-healthcare", AiPhase.NONE, Role.ROTATION, security_type="etf"),
+    *_mk("159928.SZ", "cn-consumer", AiPhase.NONE, Role.HEDGE, security_type="etf"),
+    *_mk("512660.SS", "cn-defense", AiPhase.NONE, Role.ROTATION, security_type="etf"),
+    *_mk(
+        "516160.SS 515790.SS",
+        "cn-new-energy",
+        AiPhase.POWER,
+        Role.ROTATION,
+        security_type="etf",
+    ),
+    *_mk(
+        "159869.SZ",
+        "cn-digital-content",
+        AiPhase.APPLICATION,
+        Role.ROTATION,
+        security_type="etf",
+    ),
+    *_mk(
+        "159995.SZ",
+        "cn-semiconductor",
+        AiPhase.INFRA,
+        Role.CONVICTION,
+        security_type="etf",
+    ),
 ]
 CN_MAINLAND_INDEX_SYMBOLS: tuple[str, ...] = ("000001.SS", "399001.SZ")
 

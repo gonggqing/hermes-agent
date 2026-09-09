@@ -3,6 +3,7 @@
 from swing_trader.schemas import AiPhase, Role
 from swing_trader.watchlist import (
     UNIVERSE,
+    WatchlistItem,
     by_phase,
     by_role,
     earnings_symbols,
@@ -75,6 +76,31 @@ def test_earnings_universe_skips_etfs_and_crypto_but_keeps_companies():
     assert selected == ["NVDA", "XOM", "CUSTOM"]
     assert get("SPY").security_type == "etf"
     assert get("BTC-USD").security_type == "crypto"
+
+
+def test_earnings_universe_uses_market_specific_lookup():
+    items = {
+        "510300.SS": WatchlistItem(
+            symbol="510300.SS",
+            theme="cn-broad-market",
+            ai_phase=AiPhase.NONE,
+            role=Role.CORE,
+            security_type="etf",
+        ),
+        "600030.SS": WatchlistItem(
+            symbol="600030.SS",
+            theme="cn-brokerage",
+            ai_phase=AiPhase.NONE,
+            role=Role.ROTATION,
+        ),
+    }
+
+    selected = earnings_symbols(
+        ["510300.SS", "600030.SS"],
+        lookup=items.get,
+    )
+
+    assert selected == ["600030.SS"]
 
 
 def test_items_frozen():
