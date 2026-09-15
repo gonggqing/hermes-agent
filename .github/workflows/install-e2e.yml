@@ -84,6 +84,11 @@ jobs:
   # OS's matrix so all combos cover the same set.
   pick-releases:
     name: Pick release tags
+    # Scheduled release-upgrade coverage belongs to the publishing repository.
+    # Forks do not inherit upstream release tags and otherwise fail twice daily
+    # before any E2E leg can start. Manual runs and fork-owned tag pushes remain
+    # available when an operator deliberately supplies the release context.
+    if: github.event_name != 'schedule' || github.repository == 'NousResearch/hermes-agent'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

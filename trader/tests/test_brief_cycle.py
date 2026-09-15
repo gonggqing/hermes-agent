@@ -176,6 +176,21 @@ def test_archived_publication_stays_fresh_after_intraday_runtime_overwrite(tmp_p
     assert writer.calls == []
 
 
+def test_late_prior_edition_does_not_satisfy_restart_catch_up(tmp_path):
+    runtime = _runtime(tmp_path)
+    coordinator = BriefCycleCoordinator(runtime, _Writer(), markets=("us",))
+    coordinator.run_cycle("morning")
+    # The prior morning cycle finishes after the following morning is due.
+    # Its generated timestamp is recent, but its stable edition ID is stale.
+    runtime.clock = lambda: datetime(2026, 7, 17, 2, 0, tzinfo=timezone.utc)
+    runtime.latest_brief["narrative"]["generated_at"] = "2026-07-17T01:30:00Z"
+    triggered: list[str] = []
+    coordinator.trigger = lambda edition: not triggered.append(edition)
+
+    assert coordinator.catch_up_if_due() is True
+    assert triggered == ["morning"]
+
+
 def test_force_bypasses_freshness_guard(tmp_path):
     runtime = _runtime(tmp_path)
     BriefCycleCoordinator(runtime, _Writer(), notify=[].append).run_cycle("evening")

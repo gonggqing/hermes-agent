@@ -198,12 +198,20 @@ class BriefCycleCoordinator:
             if not self._is_fresh(payload, market, edition, self.runtime.clock()):
                 payload = self._archived_payload(market) or payload
             publication = payload.get("publication") if isinstance(payload, dict) else None
-            if (
-                isinstance(publication, dict)
-                and publication.get("status") == "complete"
-                and publication.get("edition_id") == _edition_id(market, edition, due)
-            ):
-                continue
+            if isinstance(publication, dict):
+                if publication.get("status") == "complete" and publication.get(
+                    "edition_id"
+                ) == _edition_id(market, edition, due):
+                    continue
+                # An explicit publication envelope is authoritative. A prior
+                # cycle may finish after the next slot is due; its late
+                # generated_at must not make yesterday's edition satisfy
+                # today's catch-up check.
+                logger.info(
+                    "missed brief cycle detected",
+                    extra={"edition": edition, "due": due.isoformat(), "market": market},
+                )
+                return self.trigger(edition)
             narrative = payload.get("narrative") if isinstance(payload, dict) else None
             generated = (
                 _parse_ts(narrative.get("generated_at")) if isinstance(narrative, dict) else None
