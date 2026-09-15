@@ -268,6 +268,8 @@ class PredictionCloseEvaluator:
         )
         cache: dict[str, list[Bar]] = {}
         evaluated = unscorable = deferred = replayed = 0
+        deferred_reasons: dict[str, int] = {}
+        deferred_samples: list[str] = []
         for item in due:
             checkpoint = item["checkpoint"]
             try:
@@ -303,32 +305,34 @@ class PredictionCloseEvaluator:
                         replayed += 1
                     continue
                 deferred += 1
-                logger.warning(
-                    "prediction checkpoint deferred",
-                    extra={
-                        "checkpoint_id": checkpoint["id"],
-                        "market": key,
-                        "reason": str(exc)[:240],
-                    },
-                )
+                kind = type(exc).__name__
+                deferred_reasons[kind] = deferred_reasons.get(kind, 0) + 1
+                if len(deferred_samples) < 5:
+                    deferred_samples.append(str(exc)[:240])
                 continue
             except (OSError, TimeoutError) as exc:
                 # Transient data failures stay pending and retry on a later
                 # pass; absence of data is never scored as a bad forecast.
                 deferred += 1
-                logger.warning(
-                    "prediction checkpoint deferred",
-                    extra={
-                        "checkpoint_id": checkpoint["id"],
-                        "market": key,
-                        "reason": str(exc)[:240],
-                    },
-                )
+                kind = type(exc).__name__
+                deferred_reasons[kind] = deferred_reasons.get(kind, 0) + 1
+                if len(deferred_samples) < 5:
+                    deferred_samples.append(str(exc)[:240])
                 continue
             if report.replayed:
                 replayed += 1
             elif report.state != "observed":
                 evaluated += 1
+        if deferred_reasons:
+            logger.warning(
+                "prediction checkpoints deferred",
+                extra={
+                    "market": key,
+                    "count": deferred,
+                    "reasons": deferred_reasons,
+                    "samples": deferred_samples,
+                },
+            )
         return EvaluationBatchReport(
             market=key,
             through_trading_date=through.isoformat(),

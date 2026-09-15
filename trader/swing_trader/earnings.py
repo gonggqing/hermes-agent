@@ -15,6 +15,7 @@ injectable ``next_earnings_fn`` so the provider is decoupled from yfinance's
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from typing import Callable, Optional
 
@@ -127,21 +128,28 @@ def upcoming_earnings(
     now = now or utcnow()
     today = now.astimezone(ET_ZONE).date()
     events: list[EarningsEvent] = []
-    for symbol in symbols:
+
+    def lookup(symbol: str) -> Optional[date]:
         try:
-            d = provider.get_next_earnings(symbol)
+            return provider.get_next_earnings(symbol)
         except Exception:  # noqa: BLE001
-            d = None
-        if not isinstance(d, date) or d < today:
-            continue
-        days = (d - today).days
-        if within_days is not None and days > within_days:
-            continue
-        events.append(EarningsEvent(
-            symbol=symbol.strip().upper(),
-            date=d.isoformat(),
-            days_until=days,
-            imminent=days <= IMMINENT_DAYS,
-        ))
+            return None
+
+    unique = list(dict.fromkeys(symbols))
+    workers = min(8, len(unique)) if unique else 1
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="finance-earnings") as pool:
+        results = zip(unique, pool.map(lookup, unique))
+        for symbol, d in results:
+            if not isinstance(d, date) or d < today:
+                continue
+            days = (d - today).days
+            if within_days is not None and days > within_days:
+                continue
+            events.append(EarningsEvent(
+                symbol=symbol.strip().upper(),
+                date=d.isoformat(),
+                days_until=days,
+                imminent=days <= IMMINENT_DAYS,
+            ))
     events.sort(key=lambda e: (e.days_until, e.symbol))
     return events

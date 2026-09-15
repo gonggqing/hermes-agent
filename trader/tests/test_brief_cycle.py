@@ -1,5 +1,6 @@
 """Unified Beijing-time US/HK/CN/KR brief delivery (no network)."""
 
+import threading
 from datetime import datetime, timezone
 
 from swing_trader.api import FinanceRuntime
@@ -149,6 +150,9 @@ def test_fresh_same_edition_market_is_skipped_on_restart(tmp_path):
     # Simulate a restart 1h later: CN went missing, the rest are still fresh.
     runtime.clock = lambda: datetime(2026, 7, 16, 14, 0, tzinfo=timezone.utc)
     runtime.latest_briefs["cn"] = _brief("cn")  # narrative-less again
+    # This scenario represents an actually missing publication, not merely an
+    # intraday runtime overwrite of a still-durable edition.
+    runtime.brief_store = BriefStore(url=f"sqlite:///{tmp_path / 'empty-brief.db'}")
     writer2 = _Writer()
     sent: list[str] = []
     result = BriefCycleCoordinator(runtime, writer2, notify=sent.append).run_cycle("evening")
@@ -158,6 +162,18 @@ def test_fresh_same_edition_market_is_skipped_on_restart(tmp_path):
     assert set(result["skipped"]) == {"us", "hk", "kr"}
     assert result["completed"] == ["cn"]
     assert len(sent) == 1
+
+
+def test_archived_publication_stays_fresh_after_intraday_runtime_overwrite(tmp_path):
+    runtime = _runtime(tmp_path)
+    BriefCycleCoordinator(runtime, _Writer(), markets=("us",)).run_cycle("evening")
+    runtime.latest_brief = _brief("us")  # volatile monitor evidence has no publication
+    writer = _Writer()
+
+    result = BriefCycleCoordinator(runtime, writer, markets=("us",)).run_cycle("evening")
+
+    assert result["skipped"] == ["us"]
+    assert writer.calls == []
 
 
 def test_force_bypasses_freshness_guard(tmp_path):
@@ -170,6 +186,32 @@ def test_force_bypasses_freshness_guard(tmp_path):
     )
     assert writer2.calls == ["us"]
     assert result["completed"] == ["us"]
+
+
+def test_stuck_market_times_out_and_does_not_block_following_market(tmp_path):
+    runtime = _runtime(tmp_path)
+    release = threading.Event()
+
+    def stuck_refresh():
+        release.wait()
+
+    runtime.run_research["us"] = stuck_refresh
+    sent: list[str] = []
+    coordinator = BriefCycleCoordinator(
+        runtime,
+        _Writer(),
+        notify=sent.append,
+        markets=("us", "hk"),
+        refresh_timeout_s=0.02,
+    )
+    try:
+        result = coordinator.run_cycle("evening")
+    finally:
+        release.set()
+
+    assert result["failed"] == ["us"]
+    assert result["completed"] == ["hk"]
+    assert any("已继续处理下一个市场" in message for message in sent)
 
 
 def test_latest_due_slot_uses_beijing_wall_clock():

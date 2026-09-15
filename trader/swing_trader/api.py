@@ -590,6 +590,29 @@ def create_app(runtime: FinanceRuntime):
             }
         return payload
 
+    def _published_brief(market_key: str, cached: dict) -> dict:
+        """Keep volatile intraday evidence from hiding the latest publication."""
+
+        coherent = _coherent_brief(market_key, cached)
+        publication = coherent.get("publication")
+        if isinstance(publication, dict) and publication.get("status") in {
+            "complete",
+            "narrative_failed",
+        }:
+            return coherent
+        archived = _archived_brief(market_key)
+        if archived is None:
+            return coherent
+        archived_publication = archived.get("publication")
+        if isinstance(archived_publication, dict) and archived_publication.get("status") in {
+            "complete",
+            "narrative_failed",
+        }:
+            return archived
+        # Backward-compatible fallback for publications archived before the
+        # explicit publication envelope was introduced.
+        return archived if isinstance(archived.get("narrative"), dict) else coherent
+
     def _market_from_brief(brief: object) -> Optional[dict]:
         """Map a persisted US research brief back to the market-card shape.
 
@@ -870,8 +893,8 @@ def create_app(runtime: FinanceRuntime):
                 runtime.latest_brief_cn if key == "cn" else None
             )
             if cached:
-                coherent = _coherent_brief(key, cached)
-                return _overlay_live_risk(key, _with_cn_hk_synthesis(key, coherent))
+                published = _published_brief(key, cached)
+                return _overlay_live_risk(key, _with_cn_hk_synthesis(key, published))
             archived = _archived_brief(key)
             if archived:
                 runtime.latest_briefs[key] = archived
@@ -897,7 +920,9 @@ def create_app(runtime: FinanceRuntime):
             return _with_cn_hk_synthesis(key, brief.model_dump(mode="json"))
 
         if runtime.latest_brief:
-            return _overlay_live_risk("us", _coherent_brief("us", runtime.latest_brief))
+            return _overlay_live_risk(
+                "us", _published_brief("us", runtime.latest_brief)
+            )
         archived = _archived_brief("us")
         if archived:
             runtime.latest_brief = archived

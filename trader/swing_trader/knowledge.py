@@ -357,7 +357,7 @@ class DocumentStore:
                 )
             ).first()
             if existing is not None:
-                logger.info(
+                logger.debug(
                     "duplicate document (same content_hash) — returning existing id",
                     extra={"document_id": existing.id, "content_hash": digest},
                 )

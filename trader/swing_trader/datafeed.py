@@ -13,6 +13,7 @@ the network (Loop.md §3).
 from __future__ import annotations
 
 import json
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
@@ -26,7 +27,7 @@ from swing_trader.schemas import utcnow
 
 logger = get_logger(__name__)
 
-__all__ = ["DataFeedError", "RetryingFeed", "StubPaidFeed", "YFinanceFeed"]
+__all__ = ["CachedFeed", "DataFeedError", "RetryingFeed", "StubPaidFeed", "YFinanceFeed"]
 
 #: Ticker used for market-wide news when no symbol is given (Loop.md §11.A).
 MARKET_PROXY_SYMBOL = "SPY"
@@ -571,3 +572,68 @@ class RetryingFeed(DataFeed):
 
     def get_news(self, symbol: Optional[str] = None, limit: int = 20) -> list[NewsItem]:
         return self._retry("get_news", self._inner.get_news, symbol, limit)
+
+
+class CachedFeed(DataFeed):
+    """Short-lived request cache for one scheduled research process.
+
+    A daily research pass asks for the same daily path in breadth, portfolio,
+    signal, and evaluation stages.  Reusing that bounded snapshot avoids both
+    needless provider spend and multiplying one Yahoo outage across every
+    stage.  Transient failures are cached briefly as well, so a failed symbol
+    is retried on the next monitor cycle rather than immediately three more
+    times in the same cycle.
+    """
+
+    def __init__(
+        self,
+        inner: DataFeed,
+        *,
+        ttl_s: float = 600.0,
+        failure_ttl_s: float = 30.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._inner = inner
+        self._ttl = max(0.0, ttl_s)
+        self._failure_ttl = max(0.0, failure_ttl_s)
+        self._clock = clock
+        self._cache: dict[tuple, tuple[float, object, str]] = {}
+        self._lock = threading.Lock()
+
+    def _get(self, key: tuple, loader: Callable[[], object]):
+        now = self._clock()
+        with self._lock:
+            cached = self._cache.get(key)
+        if cached is not None and cached[0] > now:
+            _, value, error = cached
+            if error:
+                raise DataFeedError(error)
+            return list(value) if isinstance(value, list) else value
+        try:
+            value = loader()
+        except DataFeedError as exc:
+            with self._lock:
+                self._cache[key] = (now + self._failure_ttl, None, str(exc))
+            raise
+        stored = list(value) if isinstance(value, list) else value
+        with self._lock:
+            self._cache[key] = (now + self._ttl, stored, "")
+        return list(stored) if isinstance(stored, list) else stored
+
+    def get_quote(self, symbol: str) -> Quote:
+        canonical = symbol.strip().upper()
+        return self._get(("quote", canonical), lambda: self._inner.get_quote(canonical))
+
+    def get_bars(self, symbol: str, timeframe: str = "1d", limit: int = 100) -> list[Bar]:
+        canonical = symbol.strip().upper()
+        return self._get(
+            ("bars", canonical, timeframe, limit),
+            lambda: self._inner.get_bars(canonical, timeframe, limit),
+        )
+
+    def get_news(self, symbol: Optional[str] = None, limit: int = 20) -> list[NewsItem]:
+        canonical = symbol.strip().upper() if symbol else None
+        return self._get(
+            ("news", canonical, limit),
+            lambda: self._inner.get_news(canonical, limit),
+        )

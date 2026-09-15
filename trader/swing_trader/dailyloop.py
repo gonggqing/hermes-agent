@@ -21,6 +21,7 @@ import json
 import re
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -54,6 +55,7 @@ from swing_trader.news_quality import curate_news
 from swing_trader.reconcile import reconcile_broker_ledger
 from swing_trader.reporter import morning_summary, push_window_preamble
 from swing_trader.risk import RiskEngine, RiskParams
+from swing_trader.research_focus import select_analysis_symbols
 from swing_trader.scheduler import US_SCHEDULE, Event, SessionSchedule
 from swing_trader.schemas import (
     CandidateOrder,
@@ -96,6 +98,9 @@ _REVIEW_RETRY_DELAYS = (
     timedelta(minutes=5),
 )
 _REVIEW_MAX_ATTEMPTS = 3
+_ANALYSIS_SYMBOL_LIMIT = 16
+_NEWS_SYMBOL_LIMIT = 12
+_RESEARCH_FETCH_WORKERS = 8
 
 __all__ = ["DailyLoop", "TelegramSurfaceAdapter"]
 
@@ -785,6 +790,7 @@ class DailyLoop:
         self._review_inflight: set[str] = set()
         self._review_lock = threading.Lock()
         self._review_alerted: set[str] = set()
+        self._analysis_symbols = list(dict.fromkeys(self.symbols))[:_ANALYSIS_SYMBOL_LIMIT]
 
     def apply_portfolio_controls(self, controls) -> None:
         """Refresh deterministic allocation gates after an operator save."""
@@ -832,8 +838,29 @@ class DailyLoop:
                 self._discovery = None
         discovered = [row.symbol for row in (self._discovery.candidates if self._discovery else [])]
         research_symbols = list(dict.fromkeys([*self.symbols, *discovered]))
+        self.market_monitor.set_breadth_symbols(research_symbols)
         self._portfolio = self.portfolio_monitor.poll(research_symbols)
-        self._news = self.news_monitor.poll(research_symbols)
+        holdings = []
+        if self.holdings_provider is not None:
+            try:
+                holdings = self.holdings_provider(self.market_id)
+            except Exception:
+                logger.exception(
+                    "research holdings projection failed",
+                    extra={"market": self.market_id},
+                )
+        self._analysis_symbols = select_analysis_symbols(
+            research_symbols,
+            watch=self._portfolio.watch,
+            discovered=discovered,
+            positions=self._portfolio.positions,
+            holdings=holdings,
+            limit=_ANALYSIS_SYMBOL_LIMIT,
+        )
+        self._news = self.news_monitor.poll(
+            self._analysis_symbols[:_NEWS_SYMBOL_LIMIT],
+            include_market=True,
+        )
         self._risk_status = self.account_monitor.poll()
         if self.runtime is not None:
             market_dump = self._market.model_dump(mode="json")
@@ -1723,8 +1750,7 @@ class DailyLoop:
         views: dict[str, SymbolView] = {}
         watch = self._portfolio.watch if self._portfolio else {}
         news_items = self._rebuild_news_items()
-        discovered = [row.symbol for row in (self._discovery.candidates if self._discovery else [])]
-        for symbol in dict.fromkeys([*self.symbols, *discovered]):
+        for symbol in self._analysis_symbols:
             state = watch.get(symbol)
             if state is None:
                 continue
@@ -1962,7 +1988,7 @@ class DailyLoop:
             self._earnings = upcoming_earnings(
                 self.earnings_provider,
                 watchlist_mod.earnings_symbols(
-                    self.symbols,
+                    self._analysis_symbols,
                     lookup=self.watchlist_lookup,
                 ),
                 now=self.clock(),
@@ -1988,13 +2014,26 @@ class DailyLoop:
             trading_date = self.clock().astimezone(ZoneInfo("America/New_York")).date()
             docs = []
             if self.fundamentals_provider is not None:
-                for symbol in self.symbols:
+                symbols = self._analysis_symbols
+                workers = min(_RESEARCH_FETCH_WORKERS, len(symbols)) if symbols else 1
+
+                def load_metrics(symbol: str):
                     try:
-                        metrics = self.fundamentals_provider.get_metrics(symbol)
+                        return self.fundamentals_provider.get_metrics(symbol)
                     except Exception:  # one bad symbol never blocks the rest
-                        metrics = None
-                    if metrics:
-                        doc = build_fundamentals_doc(symbol, metrics, trading_date, self.clock())
+                        return None
+
+                with ThreadPoolExecutor(
+                    max_workers=workers,
+                    thread_name_prefix="finance-fundamentals",
+                ) as pool:
+                    metrics_by_symbol = zip(symbols, pool.map(load_metrics, symbols))
+                    for symbol, metrics in metrics_by_symbol:
+                        if not metrics:
+                            continue
+                        doc = build_fundamentals_doc(
+                            symbol, metrics, trading_date, self.clock()
+                        )
                         if doc is not None:
                             docs.append(doc)
             for e in self._earnings:

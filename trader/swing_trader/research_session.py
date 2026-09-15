@@ -38,6 +38,7 @@ from swing_trader.log import get_logger
 from swing_trader.monitors import MarketMonitor, NewsMonitor, PortfolioMonitor
 from swing_trader.news_quality import curate_news
 from swing_trader.paper_broker import PaperBroker
+from swing_trader.research_focus import select_analysis_symbols
 from swing_trader.scheduler import Event
 from swing_trader.schemas import Mode, Signal
 from swing_trader.watchlist import WatchlistItem
@@ -53,6 +54,8 @@ _STUB_CASH = 1.0
 #: Bars pulled per symbol for the analysis sub-agents (TechnicalAgent needs
 #: enough history for SMA50/ATR).
 _ANALYSIS_BARS = 120
+_ANALYSIS_SYMBOL_LIMIT = 16
+_NEWS_SYMBOL_LIMIT = 12
 
 
 class ResearchSession:
@@ -122,8 +125,10 @@ class ResearchSession:
             require_vix_for_risk_on=bool(vix_symbol),
             clock=clock,
         )
-        self.portfolio_monitor = PortfolioMonitor(feed, self._broker, symbols=symbols)
-        self.news_monitor = NewsMonitor(feed)
+        self.portfolio_monitor = PortfolioMonitor(
+            feed, self._broker, symbols=symbols, clock=clock
+        )
+        self.news_monitor = NewsMonitor(feed, clock=clock)
         self.tech = TechnicalAgent()
         self.senti = SentimentAgent()
         self.debate = DebateAgent()
@@ -133,6 +138,7 @@ class ResearchSession:
         self._news = None
         self._signals: list[Signal] = []
         self._discovery: Optional[DiscoveryPool] = None
+        self._analysis_symbols = list(dict.fromkeys(symbols))[:_ANALYSIS_SYMBOL_LIMIT]
 
     # ---------------------------------------------------------------- events
 
@@ -157,8 +163,27 @@ class ResearchSession:
         except Exception:
             logger.exception("research portfolio monitor failed", extra={"market": self.market_id})
             self._portfolio = None
+        holdings = []
+        if self.holdings_provider is not None:
+            try:
+                holdings = self.holdings_provider(self.market_id)
+            except Exception:
+                logger.exception(
+                    "research holdings projection failed",
+                    extra={"market": self.market_id},
+                )
+        self._analysis_symbols = select_analysis_symbols(
+            research_symbols,
+            watch=self._portfolio.watch if self._portfolio is not None else {},
+            discovered=discovered,
+            holdings=holdings,
+            limit=_ANALYSIS_SYMBOL_LIMIT,
+        )
         try:
-            self._news = self.news_monitor.poll(research_symbols)
+            self._news = self.news_monitor.poll(
+                self._analysis_symbols[:_NEWS_SYMBOL_LIMIT],
+                include_market=True,
+            )
         except Exception:
             logger.exception("research news monitor failed", extra={"market": self.market_id})
             self._news = None
@@ -248,8 +273,7 @@ class ResearchSession:
         news_items = self._news_items()
         regime = self._market.risk_on_off if self._market else "neutral"
         discovered = {row.symbol for row in (self._discovery.candidates if self._discovery else [])}
-        analysis_symbols = list(dict.fromkeys([*self.symbols, *sorted(discovered)]))
-        for symbol in analysis_symbols:
+        for symbol in self._analysis_symbols:
             if symbol not in discovered and watch.get(symbol) is None:
                 continue
             try:

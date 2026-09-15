@@ -15,8 +15,9 @@ approval polling or the US order state machine.
 from __future__ import annotations
 
 import threading
+from queue import Empty, Queue
 from datetime import datetime, timedelta
-from typing import Callable, Optional
+from typing import Callable, Optional, TypeVar
 from zoneinfo import ZoneInfo
 
 from swing_trader.brief import ResearchBrief, ResearchPublication
@@ -26,6 +27,8 @@ from swing_trader.log import get_logger
 logger = get_logger(__name__)
 
 __all__ = ["BriefCycleCoordinator", "latest_due_brief_slot"]
+
+_T = TypeVar("_T")
 
 BEIJING = ZoneInfo("Asia/Shanghai")
 _MARKETS = ("us", "hk", "cn", "kr")
@@ -91,13 +94,68 @@ class BriefCycleCoordinator:
         *,
         notify: Optional[Callable[[str], None]] = None,
         markets: tuple[str, ...] = _MARKETS,
+        refresh_timeout_s: float = 180.0,
+        writer_timeout_s: float = 240.0,
     ) -> None:
         self.runtime = runtime
         self.writer = writer
         self.notify = notify
         self.markets = markets
+        self.refresh_timeout_s = max(0.01, refresh_timeout_s)
+        self.writer_timeout_s = max(0.01, writer_timeout_s)
         self._state_lock = threading.Lock()
         self._running = False
+        self._stage_threads: dict[tuple[str, str], threading.Thread] = {}
+
+    def _bounded_call(
+        self,
+        key: tuple[str, str],
+        fn: Callable[[], _T],
+        timeout_s: float,
+    ) -> _T:
+        """Run one external stage without letting it monopolize all markets.
+
+        Python cannot safely kill a blocked provider thread.  A timed-out
+        daemon may finish later, but its key stays registered so a later cycle
+        will not pile another request onto the same stuck stage.
+        """
+
+        with self._state_lock:
+            previous = self._stage_threads.get(key)
+            if previous is not None and previous.is_alive():
+                raise TimeoutError(f"{key[0]} {key[1]} still running from a prior cycle")
+
+        result: Queue[tuple[bool, object]] = Queue(maxsize=1)
+
+        def run() -> None:
+            try:
+                result.put((True, fn()))
+            except Exception as exc:  # forward provider failure to coordinator thread
+                result.put((False, exc))
+            finally:
+                with self._state_lock:
+                    if self._stage_threads.get(key) is threading.current_thread():
+                        self._stage_threads.pop(key, None)
+
+        worker = threading.Thread(
+            target=run,
+            daemon=True,
+            name=f"finance-brief-{key[0]}-{key[1]}",
+        )
+        with self._state_lock:
+            self._stage_threads[key] = worker
+        worker.start()
+        try:
+            ok, value = result.get(timeout=timeout_s)
+        except Empty as exc:
+            raise TimeoutError(
+                f"{key[0]} {key[1]} exceeded {timeout_s:g}s"
+            ) from exc
+        if ok:
+            return value  # type: ignore[return-value]
+        if isinstance(value, Exception):
+            raise value
+        raise RuntimeError(f"{key[0]} {key[1]} failed without an exception")
 
     def trigger(
         self,
@@ -137,6 +195,8 @@ class BriefCycleCoordinator:
         edition, due = latest_due_brief_slot(self.runtime.clock())
         for market in self.markets:
             payload = self._payload(market)
+            if not self._is_fresh(payload, market, edition, self.runtime.clock()):
+                payload = self._archived_payload(market) or payload
             publication = payload.get("publication") if isinstance(payload, dict) else None
             if (
                 isinstance(publication, dict)
@@ -232,7 +292,11 @@ class BriefCycleCoordinator:
             if refresh is None:
                 result["skipped"].append(market)
                 continue
-            if not force and self._is_fresh(self._payload(market), market, edition, now):
+            current = self._payload(market)
+            fresh = self._is_fresh(current, market, edition, now) or self._is_fresh(
+                self._archived_payload(market), market, edition, now
+            )
+            if not force and fresh:
                 logger.info(
                     "brief already fresh; skipping regeneration",
                     extra={"market": market, "edition": edition},
@@ -241,7 +305,11 @@ class BriefCycleCoordinator:
                 continue
             brief = None
             try:
-                refresh()
+                self._bounded_call(
+                    (market, "refresh"),
+                    refresh,
+                    self.refresh_timeout_s,
+                )
                 payload = self._payload(market)
                 if not payload:
                     raise RuntimeError("research refresh produced no brief")
@@ -257,11 +325,15 @@ class BriefCycleCoordinator:
                     status="pending",
                 )
                 brief.publication = publication
-                narrative = self.writer.write(
-                    brief,
-                    market_id=market.upper(),
-                    market_label=_LABELS[market],
-                    language="zh-CN",
+                narrative = self._bounded_call(
+                    (market, "writer"),
+                    lambda: self.writer.write(
+                        brief,
+                        market_id=market.upper(),
+                        market_label=_LABELS[market],
+                        language="zh-CN",
+                    ),
+                    self.writer_timeout_s,
                 )
                 if narrative is None:
                     failure = "主模型简报生成失败：未返回完整、可验证的研报 JSON"
@@ -291,7 +363,7 @@ class BriefCycleCoordinator:
                 )
                 self._notify(f"{_EDITION_LABELS[edition]}\n{text}")
                 result["completed"].append(market)
-            except Exception:
+            except Exception as exc:
                 logger.exception(
                     "brief cycle market failed",
                     extra={"edition": edition, "market": market},
@@ -300,7 +372,7 @@ class BriefCycleCoordinator:
                 # structured packet and expose the failure. Never restore old
                 # prose over a newer market snapshot.
                 if brief is not None:
-                    failure = "研报发布流程异常；本版叙事不可用"
+                    failure = f"研报发布流程异常：{str(exc)[:160]}；本版叙事不可用"
                     brief.narrative = None
                     brief.publication = ResearchPublication(
                         edition_id=_edition_id(market, edition, due),
@@ -312,6 +384,12 @@ class BriefCycleCoordinator:
                     )
                     brief.uncertainty.append(failure)
                     self._store(market, brief.model_dump(mode="json"))
+                else:
+                    failure = f"研究证据刷新失败：{str(exc)[:160]}"
+                self._notify(
+                    f"⚠️ {_LABELS[market]} {_EDITION_LABELS[edition]}未完成："
+                    f"{failure}。已继续处理下一个市场。"
+                )
                 result["failed"].append(market)
         logger.info("brief cycle complete", extra=result)
         return result
@@ -320,6 +398,16 @@ class BriefCycleCoordinator:
         if market == "us":
             return self.runtime.latest_brief
         return self.runtime.latest_briefs.get(market)
+
+    def _archived_payload(self, market: str) -> Optional[dict]:
+        store = getattr(self.runtime, "brief_store", None)
+        if store is None:
+            return None
+        try:
+            return store.get_latest(market)
+        except Exception:
+            logger.warning("latest brief archive read failed", extra={"market": market})
+            return None
 
     def _store(self, market: str, payload: dict) -> None:
         if market == "us":

@@ -170,7 +170,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     from swing_trader.api import FinanceRuntime, create_app
     from swing_trader.config import BrokerBackend, Mode
     from swing_trader.dailyloop import DailyLoop, TelegramSurfaceAdapter
-    from swing_trader.datafeed import RetryingFeed, YFinanceFeed
+    from swing_trader.datafeed import CachedFeed, RetryingFeed, YFinanceFeed
     from swing_trader.ledger import Ledger
     from swing_trader.llm import LLMAnalyst, llm_settings_from_env
     from swing_trader.scheduler import (
@@ -223,14 +223,13 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     )
     rehydration = rehydrate_from_ledger(broker, ledger, settings.mode)
     print(rehydration.summary(), flush=True)
-    # Phase 0.8 (resilience): wrap the live feed in RetryingFeed so transient
-    # yfinance errors (rate limits / network blips) retry with backoff instead
-    # of surfacing as a hard DataFeedError to the loop and /v1/analyze.
-    # The on-demand API and US loop share this feed.  Prefer Yahoo's bounded
-    # query2 chart endpoint so K-line requests do not wait on yfinance's
-    # crumb/cookie path; yfinance remains the adapter's fallback.
+    # Scheduled research uses the bounded chart endpoint and a short-lived
+    # process cache. A free-provider outage therefore degrades explicitly
+    # instead of multiplying slow yfinance fallbacks across every stage.
+    # News remains available through the same adapter and is fetched only for
+    # the dynamically selected deep-analysis set.
     api_feed = YFinanceFeed(prefer_chart=True, chart_only=True)
-    feed = RetryingFeed(YFinanceFeed(prefer_chart=True))
+    feed = CachedFeed(RetryingFeed(YFinanceFeed(prefer_chart=True, chart_only=True), retries=0))
     # Real fundamentals (Loop.md Phase 0.75 thrust A): yfinance-backed, cached,
     # fail-None. Feeds the scheduled FundamentalAgent AND on-demand /v1/analyze.
     from swing_trader.earnings import YFinanceEarnings
@@ -863,7 +862,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         from swing_trader.scheduler import CN_SCHEDULE, CN_TRADING_SCHEDULE
 
         cn_wl = build_mainland_watchlist(settings.cn_symbols)
-        cn_feed = RetryingFeed(YFinanceFeed())
+        cn_feed = CachedFeed(
+            RetryingFeed(YFinanceFeed(prefer_chart=True, chart_only=True), retries=0)
+        )
         cn_discovery = MarketDiscoveryScanner(
             cn_feed,
             discovery_universe,
@@ -970,7 +971,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         from swing_trader.scheduler import HK_SCHEDULE, HK_TRADING_SCHEDULE
 
         hk_wl = build_hk_watchlist(settings.hk_symbols)
-        hk_feed = RetryingFeed(YFinanceFeed())
+        hk_feed = CachedFeed(
+            RetryingFeed(YFinanceFeed(prefer_chart=True, chart_only=True), retries=0)
+        )
         if settings.hk_orders_enabled:
             hk_broker = CurrencyBrokerView(broker, "HKD")
             # ORDER-CAPABLE HK session on the SHARED (HKD-funded) broker + ledger,
@@ -1092,7 +1095,9 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         kr_session = ResearchSession(
             market_id="KR",
             market_label="Korea semiconductors",
-            feed=RetryingFeed(YFinanceFeed()),
+            feed=CachedFeed(
+                RetryingFeed(YFinanceFeed(prefer_chart=True, chart_only=True), retries=0)
+            ),
             ledger=ledger,  # never read (research-only); satisfies brief signature
             symbols=kr_wl.symbols,
             watchlist_lookup=kr_wl.lookup,

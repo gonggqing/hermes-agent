@@ -244,6 +244,57 @@ class TestReads:
         runtime.latest_brief = {"as_of": "2026-07-14T15:00:00Z"}
         assert client.get("/v1/market").json() == {"status": "no snapshot yet"}
 
+    def test_research_brief_keeps_latest_publication_during_intraday_refresh(
+        self, env, tmp_path
+    ):
+        from swing_trader.brief_store import BriefStore
+
+        _, _, runtime, client = env
+        runtime.brief_store = BriefStore(url=f"sqlite:///{tmp_path / 'published.db'}")
+        runtime.brief_store.save(
+            "us",
+            {
+                "as_of": "2026-07-13T14:45:00Z",
+                "trading_date": "2026-07-13",
+                "mode": "paper",
+                "freshness": {"warnings": []},
+                "uncertainty": [],
+                "narrative": {
+                    "generated_at": "2026-07-13T14:45:00Z",
+                    "market": "US",
+                    "language": "zh-CN",
+                    "model": "primary",
+                    "headline": "已发布研报",
+                    "summary": "正式版本",
+                    "sections": [],
+                    "watch_next": [],
+                    "edition": "morning",
+                    "prompt_version": "test",
+                    "evidence_hash": "abc",
+                },
+                "publication": {
+                    "edition_id": "2026-07-13:morning:us",
+                    "edition": "morning",
+                    "scheduled_for": "2026-07-13T13:00:00Z",
+                    "evidence_as_of": "2026-07-13T14:45:00Z",
+                    "status": "complete",
+                    "failure": "",
+                },
+            },
+        )
+        runtime.latest_brief = {
+            "as_of": "2026-07-14T14:45:00Z",
+            "trading_date": "2026-07-14",
+            "mode": "paper",
+            "freshness": {"warnings": []},
+            "uncertainty": ["intraday evidence"],
+        }
+
+        body = client.get("/v1/research/brief").json()
+
+        assert body["narrative"]["headline"] == "已发布研报"
+        assert body["publication"]["status"] == "complete"
+
     def test_empty_collections(self, env):
         _, _, _, client = env
         for path in ("/v1/orders", "/v1/fills", "/v1/trades", "/v1/snapshots"):

@@ -675,6 +675,7 @@ class MarketDiscoveryScanner:
         min_adv: float,
         min_score: float = 45.0,
         max_candidates: int = 12,
+        max_workers: int = 8,
         max_bar_age_days: int = 10,
         max_evidence_age_days: int = 730,
         instrument_validator: Optional[Callable[[DiscoverySeed], bool]] = None,
@@ -686,6 +687,7 @@ class MarketDiscoveryScanner:
         self.min_adv = min_adv
         self.min_score = min_score
         self.max_candidates = max_candidates
+        self.max_workers = max(1, max_workers)
         self.max_bar_age_days = max_bar_age_days
         self.max_evidence_age_days = max_evidence_age_days
         self.instrument_validator = instrument_validator or (lambda seed: seed.instrument_resolved)
@@ -711,6 +713,7 @@ class MarketDiscoveryScanner:
         )
 
         seen: set[str] = set()
+        valid: list[DiscoverySeed] = []
         for seed in seeds:
             if seed.symbol in seen:
                 rejected.append(
@@ -724,69 +727,18 @@ class MarketDiscoveryScanner:
             if reason:
                 rejected.append(RejectedDiscovery(symbol=seed.symbol, reason=reason))
                 continue
-            try:
-                bars = self.feed.get_bars(seed.symbol, "1d", limit=80)
-            except (DataFeedError, ValueError) as exc:
-                rejected.append(
-                    RejectedDiscovery(symbol=seed.symbol, reason=f"market data unavailable: {exc}")
-                )
-                continue
-            if len(bars) < 21:
-                rejected.append(
-                    RejectedDiscovery(symbol=seed.symbol, reason="fewer than 21 daily bars")
-                )
-                continue
-            bars = sorted(bars, key=lambda bar: bar.ts)
-            bar_age = (now - bars[-1].ts).total_seconds() / 86400.0
-            if bar_age > self.max_bar_age_days:
-                rejected.append(
-                    RejectedDiscovery(
-                    symbol=seed.symbol, reason=f"last bar is {bar_age:.1f} days old"
-                    )
-                )
-                continue
-            adv = _adv20(bars)
-            if adv < self.min_adv:
-                rejected.append(
-                    RejectedDiscovery(
-                    symbol=seed.symbol,
-                    reason=f"ADV20 {adv:.0f} below minimum {self.min_adv:.0f}",
-                    )
-                )
-                continue
-            try:
-                news = self.feed.get_news(seed.symbol, limit=20)
-            except (DataFeedError, ValueError):
-                news = []
-            recent = _recent_news(news, now)
-            features = self._features(seed, bars, recent, benchmark_return)
-            score = self._score(features)
-            if score < self.min_score:
-                rejected.append(
-                    RejectedDiscovery(
-                    symbol=seed.symbol,
-                    reason=f"score {score:.1f} below threshold {self.min_score:.1f}",
-                    )
-                )
-                continue
-            accepted.append(
-                DiscoveryCandidate(
-                symbol=seed.symbol,
-                display_name=seed.display_name,
-                market=seed.market,
-                exchange=seed.exchange,
-                currency=seed.currency,
-                theme=seed.theme,
-                theme_verified=seed.theme_verified,
-                component=seed.component,
-                relationship=seed.relationship,
-                score=score,
-                rank=1,
-                reasons=self._reasons(features),
-                features=features,
-                evidence=sorted(seed.evidence, key=lambda e: (e.kind.value, e.url)),
-                )
-            )
+            valid.append(seed)
+
+        workers = min(self.max_workers, len(valid)) if valid else 1
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="finance-discovery") as pool:
+            for candidate, rejection in pool.map(
+                lambda seed: self._evaluate_seed(seed, market, now, benchmark_return),
+                valid,
+            ):
+                if candidate is not None:
+                    accepted.append(candidate)
+                if rejection is not None:
+                    rejected.append(rejection)
 
         accepted.sort(key=lambda item: (-item.score, item.symbol))
         accepted = accepted[: self.max_candidates]
@@ -799,6 +751,70 @@ class MarketDiscoveryScanner:
             source_count=len(seeds),
             status="complete",
         )
+
+    def _evaluate_seed(
+        self,
+        seed: DiscoverySeed,
+        market: str,
+        now: datetime,
+        benchmark_return: float,
+    ) -> tuple[Optional[DiscoveryCandidate], Optional[RejectedDiscovery]]:
+        """Evaluate one independent seed; caller restores deterministic order."""
+
+        try:
+            bars = self.feed.get_bars(seed.symbol, "1d", limit=80)
+        except (DataFeedError, ValueError) as exc:
+            return None, RejectedDiscovery(
+                symbol=seed.symbol, reason=f"market data unavailable: {exc}"
+            )
+        if len(bars) < 21:
+            return None, RejectedDiscovery(
+                symbol=seed.symbol, reason="fewer than 21 daily bars"
+            )
+        bars = sorted(bars, key=lambda bar: bar.ts)
+        bar_age = (now - bars[-1].ts).total_seconds() / 86400.0
+        if bar_age > self.max_bar_age_days:
+            return None, RejectedDiscovery(
+                symbol=seed.symbol, reason=f"last bar is {bar_age:.1f} days old"
+            )
+        adv = _adv20(bars)
+        if adv < self.min_adv:
+            return None, RejectedDiscovery(
+                symbol=seed.symbol,
+                reason=f"ADV20 {adv:.0f} below minimum {self.min_adv:.0f}",
+            )
+        try:
+            news = self.feed.get_news(seed.symbol, limit=20)
+        except (DataFeedError, ValueError):
+            news = []
+        features = self._features(
+            seed,
+            bars,
+            _recent_news(news, now),
+            benchmark_return,
+        )
+        score = self._score(features)
+        if score < self.min_score:
+            return None, RejectedDiscovery(
+                symbol=seed.symbol,
+                reason=f"score {score:.1f} below threshold {self.min_score:.1f}",
+            )
+        return DiscoveryCandidate(
+            symbol=seed.symbol,
+            display_name=seed.display_name,
+            market=seed.market,
+            exchange=seed.exchange,
+            currency=seed.currency,
+            theme=seed.theme,
+            theme_verified=seed.theme_verified,
+            component=seed.component,
+            relationship=seed.relationship,
+            score=score,
+            rank=1,
+            reasons=self._reasons(features),
+            features=features,
+            evidence=sorted(seed.evidence, key=lambda e: (e.kind.value, e.url)),
+        ), None
 
     def _benchmark_return(self) -> float:
         try:

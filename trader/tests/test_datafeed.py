@@ -20,6 +20,7 @@ import pytest
 
 from swing_trader.datafeed import (
     MARKET_PROXY_SYMBOL,
+    CachedFeed,
     DataFeedError,
     RetryingFeed,
     StubPaidFeed,
@@ -660,3 +661,27 @@ def test_retrying_feed_zero_retries_reraises_immediately() -> None:
     with pytest.raises(DataFeedError):
         feed.get_quote("NVDA")
     assert inner.calls == 1
+
+
+def test_cached_feed_reuses_success_and_short_lived_failure() -> None:
+    now = [0.0]
+    successful = FlakyFeed(fail_times=0)
+    cached = CachedFeed(successful, ttl_s=10, clock=lambda: now[0])
+    assert cached.get_bars("nvda", "1d", 3) == cached.get_bars("NVDA", "1d", 3)
+    assert successful.calls == 1
+
+    failing = FlakyFeed(fail_times=2)
+    cached_failure = CachedFeed(
+        failing,
+        failure_ttl_s=5,
+        clock=lambda: now[0],
+    )
+    with pytest.raises(DataFeedError):
+        cached_failure.get_quote("NVDA")
+    with pytest.raises(DataFeedError):
+        cached_failure.get_quote("NVDA")
+    assert failing.calls == 1
+    now[0] = 6.0
+    with pytest.raises(DataFeedError):
+        cached_failure.get_quote("NVDA")
+    assert failing.calls == 2

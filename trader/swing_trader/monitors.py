@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,7 +72,12 @@ RISK_OFF_VIX_MIN = 28.0
 DEFAULT_INDEX_SYMBOLS: tuple[str, ...] = ("SPY", "QQQ", "DIA")
 
 #: Bars fetched per watch/breadth symbol (enough for SMA50 / ATR14 / ADV20).
-WATCH_BARS_LIMIT = 60
+WATCH_BARS_LIMIT = 120
+
+# Provider calls are I/O-bound and individually timeout-bounded. A modest pool
+# keeps one slow symbol from turning a broad-market snapshot into an hours-long
+# serial workflow while remaining gentle on free endpoints.
+MONITOR_FETCH_WORKERS = 8
 
 #: Bars fetched per index (enough for the 200dma risk-off check).
 INDEX_BARS_LIMIT = 200
@@ -339,6 +345,33 @@ class _BaseMonitor:
             self._sink.write(self.kind, snapshot.model_dump(mode="json"))
 
 
+def _parallel_bars(
+    feed: DataFeed,
+    symbols: Sequence[str],
+    *,
+    limit: int,
+) -> tuple[dict[str, list[Bar]], dict[str, str]]:
+    """Fetch independent symbol paths concurrently with deterministic output."""
+
+    unique = list(dict.fromkeys(symbols))
+    if not unique:
+        return {}, {}
+    bars: dict[str, list[Bar]] = {}
+    errors: dict[str, str] = {}
+    workers = min(MONITOR_FETCH_WORKERS, len(unique))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="finance-bars") as pool:
+        futures = {
+            pool.submit(feed.get_bars, symbol, "1d", limit): symbol for symbol in unique
+        }
+        for future in as_completed(futures):
+            symbol = futures[future]
+            try:
+                bars[symbol] = future.result()
+            except (DataFeedError, ValueError) as exc:
+                errors[symbol] = str(exc)
+    return bars, errors
+
+
 class MarketMonitor(_BaseMonitor):
     """Indices, VIX, breadth, and risk-on/off regime (Loop.md §5.2).
 
@@ -452,11 +485,18 @@ class MarketMonitor(_BaseMonitor):
         """
         above = 0
         considered = 0
+        paths, errors = _parallel_bars(
+            self._feed,
+            self._breadth_symbols,
+            limit=WATCH_BARS_LIMIT,
+        )
         for symbol in self._breadth_symbols:
-            try:
-                bars = self._feed.get_bars(symbol, "1d", limit=WATCH_BARS_LIMIT)
-            except DataFeedError:
-                logger.debug("breadth: skipping symbol", extra={"symbol": symbol})
+            bars = paths.get(symbol)
+            if bars is None:
+                logger.debug(
+                    "breadth: skipping symbol",
+                    extra={"symbol": symbol, "error": errors.get(symbol, "")[:160]},
+                )
                 continue
             closes = [b.close for b in bars]
             sma50 = _sma(closes, 50)
@@ -536,13 +576,17 @@ class PortfolioMonitor(_BaseMonitor):
 
         watch: dict[str, WatchState] = {}
         active_symbols = list(symbols) if symbols is not None else self._symbols
+        paths, errors = _parallel_bars(
+            self._feed,
+            active_symbols,
+            limit=WATCH_BARS_LIMIT,
+        )
         for symbol in active_symbols:
-            try:
-                bars = self._feed.get_bars(symbol, "1d", limit=WATCH_BARS_LIMIT)
-            except DataFeedError as exc:
+            bars = paths.get(symbol)
+            if bars is None:
                 logger.warning(
                     "watch bars unavailable, skipping",
-                    extra={"symbol": symbol, "error": str(exc)},
+                    extra={"symbol": symbol, "error": errors.get(symbol, "")},
                 )
                 continue
             if not bars:
@@ -595,7 +639,12 @@ class NewsMonitor(_BaseMonitor):
         super().__init__(sink, clock)
         self._feed = feed
 
-    def poll(self, symbols: list[str] | None = None) -> NewsSnapshot:
+    def poll(
+        self,
+        symbols: list[str] | None = None,
+        *,
+        include_market: bool = False,
+    ) -> NewsSnapshot:
         """Fetch news (market-wide when ``symbols`` is None), score, snapshot.
 
         Symbols whose news fetch fails with DataFeedError are skipped.
@@ -608,14 +657,23 @@ class NewsMonitor(_BaseMonitor):
             except DataFeedError as exc:
                 logger.warning("market news unavailable", extra={"error": str(exc)})
         else:
-            for symbol in symbols:
-                try:
-                    collected.extend(self._feed.get_news(symbol))
-                except DataFeedError as exc:
-                    logger.warning(
-                        "news unavailable, skipping symbol",
-                        extra={"symbol": symbol, "error": str(exc)},
-                    )
+            targets: list[str | None] = [None] if include_market else []
+            targets.extend(dict.fromkeys(symbols))
+            workers = min(MONITOR_FETCH_WORKERS, len(targets)) if targets else 1
+            with ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="finance-news",
+            ) as pool:
+                futures = {pool.submit(self._feed.get_news, target): target for target in targets}
+                for future in as_completed(futures):
+                    symbol = futures[future]
+                    try:
+                        collected.extend(future.result())
+                    except DataFeedError as exc:
+                        logger.warning(
+                            "news unavailable, skipping symbol",
+                            extra={"symbol": symbol or "MARKET", "error": str(exc)},
+                        )
 
         items: list[dict] = []
         sentiments: dict[str, list[float]] = {}
