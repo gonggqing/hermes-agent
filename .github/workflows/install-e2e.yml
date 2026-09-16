@@ -172,7 +172,7 @@ jobs:
     # The update/installer route choices map to the linux update methods;
     # either way the whole linux matrix runs (legs are cheap and the
     # distinction wasn't worth a filter layer in the generator).
-    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "both", "update", "installer"]'), inputs.route)
+    if: needs.generate-matrix.result == 'success' && (github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "both", "update", "installer"]'), inputs.route))
     needs: generate-matrix
     strategy:
       # One leg breaking is worth knowing about even if another already
@@ -189,7 +189,7 @@ jobs:
 
   windows:
     name: ${{ matrix.name }}
-    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
+    if: needs.generate-matrix.result == 'success' && (github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route))
     needs: generate-matrix
     strategy:
       fail-fast: false
@@ -204,7 +204,7 @@ jobs:
 
   macos:
     name: ${{ matrix.name }}
-    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "macos-desktop"]'), inputs.route)
+    if: needs.generate-matrix.result == 'success' && (github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "macos-desktop"]'), inputs.route))
     needs: generate-matrix
     strategy:
       fail-fast: false
@@ -228,6 +228,7 @@ jobs:
   # looks it up by that name.
   leg-player:
     name: Upload leg player
+    if: github.event_name != 'schedule' || github.repository == 'NousResearch/hermes-agent'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -251,7 +252,7 @@ jobs:
   # the per-OS aggregates.
   report:
     name: Result chart
-    if: always()
+    if: always() && needs.pick-releases.result == 'success'
     needs: [leg-player, pick-releases, linux, windows, macos]
     runs-on: ubuntu-latest
     timeout-minutes: 5
