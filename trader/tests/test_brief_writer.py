@@ -222,6 +222,67 @@ def test_writer_supplies_prior_recurrence_and_signal_delta_to_primary_model() ->
     assert '"current_direction": "long"' in packet
 
 
+def test_writer_bounds_repeated_history_without_losing_decision_state() -> None:
+    prompts: list[str] = []
+    long_text = "material evidence " * 500
+    history = [
+        {
+            "trading_date": f"2026-07-{14 - index:02d}",
+            "narrative": {
+                "edition": "evening",
+                "headline": f"prior-{index}",
+                "summary": long_text,
+                "action_views": [
+                    {
+                        "symbol": "TEST",
+                        "stance": "watch",
+                        "thesis_state": "unchanged",
+                        "confidence": 0.5,
+                        "horizon_sessions": 5,
+                        "what_changed": long_text,
+                        "rationale": long_text,
+                        "invalidation": long_text,
+                        "evidence_refs": [long_text],
+                    }
+                ],
+                "claims": [
+                    {
+                        "entity_type": "instrument",
+                        "entity_key": "TEST",
+                        "claim_type": "swing_direction",
+                        "direction": "neutral",
+                        "confidence": 0.5,
+                        "horizons": [5],
+                        "thesis": long_text,
+                        "invalidation": long_text,
+                        "evidence_refs": [long_text],
+                    }
+                ],
+            },
+        }
+        for index in range(6)
+    ]
+
+    def complete(_settings, _system, prompt):
+        prompts.append(prompt)
+        return _reply()
+
+    writer = ResearchBriefWriter(
+        SETTINGS,
+        complete=complete,
+        history_loader=lambda _market, _before, _limit: history,
+    )
+    assert writer.write(_brief(), market_id="US", market_label="United States")
+
+    packet = json.loads(prompts[0].split("EVIDENCE_PACKET=", 1)[1])
+    prior = packet["history_and_delta"]["prior_publications"]
+    assert [row["headline"] for row in prior] == ["prior-0", "prior-1"]
+    assert len(prior[0]["summary"]) == 500
+    assert len(prior[0]["action_views"][0]["what_changed"]) == 240
+    assert "rationale" not in prior[0]["action_views"][0]
+    assert len(prompts[0]) < 15_000
+
+
 def test_writer_rejects_an_invented_action_symbol() -> None:
     bad = _reply().replace('"symbol": "TEST"', '"symbol": "INVENTED"')
     writer = ResearchBriefWriter(

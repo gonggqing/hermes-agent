@@ -31,7 +31,29 @@ logger = get_logger(__name__)
 
 __all__ = ["ResearchBriefWriter"]
 
-_PROMPT_VERSION = "finance-daily-brief-v3"
+_PROMPT_VERSION = "finance-daily-brief-v4"
+
+_SIGNAL_FEATURE_KEYS = {
+    "close",
+    "rsi",
+    "sma20",
+    "sma50",
+    "dist_sma50_pct",
+    "return_5d_pct",
+    "return_20d_pct",
+    "drawdown_20d_pct",
+    "realized_vol_20d_pct",
+    "volume_ratio_20d",
+    "up_days_10",
+    "net_weight",
+    "long_weight",
+    "short_weight",
+    "disagreement_penalty",
+    "source_agents",
+    "nontechnical_long_sources",
+    "n_headlines",
+    "n_research",
+}
 
 _SYSTEM = """You are the senior investment strategist writing the daily market brief for a private investor.
 
@@ -103,7 +125,16 @@ def _compact_evidence(brief: ResearchBrief, market_id: str, market_label: str) -
         discovery["candidates"] = discovery.get("candidates", [])[:8]
         discovery["rejected"] = discovery.get("rejected", [])[:5]
 
-    signals = [row.model_dump(mode="json") for row in brief.signals_today]
+    signals = []
+    for signal in brief.signals_today:
+        row = signal.model_dump(mode="json")
+        row["thesis"] = str(row.get("thesis") or "")[:600]
+        row["features"] = {
+            key: value
+            for key, value in (row.get("features") or {}).items()
+            if key in _SIGNAL_FEATURE_KEYS
+        }
+        signals.append(row)
     # Debate/LLM synthesis carries more cross-factor information than the
     # underlying single-factor voices; retain it first, then cap prompt size.
     signals.sort(
@@ -243,18 +274,49 @@ def _build_history_context(
         )
 
     prior_publications = []
-    for payload in history[:4]:
+    for payload in history[:2]:
         narrative = payload.get("narrative")
         if not isinstance(narrative, dict):
             continue
+        action_views = []
+        for row in narrative.get("action_views") or []:
+            if not isinstance(row, dict):
+                continue
+            action_views.append(
+                {
+                    "symbol": row.get("symbol"),
+                    "stance": row.get("stance"),
+                    "thesis_state": row.get("thesis_state"),
+                    "confidence": row.get("confidence"),
+                    "horizon_sessions": row.get("horizon_sessions"),
+                    "what_changed": str(row.get("what_changed") or "")[:240],
+                    "invalidation": str(row.get("invalidation") or "")[:240],
+                }
+            )
+        claims = []
+        for row in narrative.get("claims") or []:
+            if not isinstance(row, dict):
+                continue
+            claims.append(
+                {
+                    "entity_type": row.get("entity_type"),
+                    "entity_key": row.get("entity_key"),
+                    "claim_type": row.get("claim_type"),
+                    "direction": row.get("direction"),
+                    "confidence": row.get("confidence"),
+                    "horizons": row.get("horizons"),
+                    "thesis": str(row.get("thesis") or "")[:240],
+                    "invalidation": str(row.get("invalidation") or "")[:240],
+                }
+            )
         prior_publications.append(
             {
                 "trading_date": payload.get("trading_date"),
                 "edition": narrative.get("edition"),
                 "headline": narrative.get("headline"),
-                "summary": str(narrative.get("summary") or "")[:700],
-                "action_views": (narrative.get("action_views") or [])[:8],
-                "claims": (narrative.get("claims") or [])[:10],
+                "summary": str(narrative.get("summary") or "")[:500],
+                "action_views": action_views[:6],
+                "claims": claims[:8],
             }
         )
 
