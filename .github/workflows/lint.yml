@@ -49,7 +49,11 @@ jobs:
       - name: Install ruff + ty
         uses: ./.github/actions/retry
         with:
-          command: uv tool install ruff && uv tool install ty
+          # Keep CI diagnostics byte-for-byte aligned with the dev extra and
+          # uv.lock. Ruff 0.16 expanded its default rule set, so resolving
+          # latest here turned the intentionally narrow blocking gate into a
+          # repository-wide migration without a source change.
+          command: uv tool install ruff==0.15.10 && uv tool install ty==0.0.21
 
       - name: Determine base ref
         id: base
@@ -143,7 +147,7 @@ jobs:
       - name: Install ruff
         uses: ./.github/actions/retry
         with:
-          command: uv tool install ruff
+          command: uv tool install ruff==0.15.10
 
       - name: ruff check .
         # No --exit-zero, no || true. Exit code propagates to the job,
