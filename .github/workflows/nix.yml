@@ -23,7 +23,9 @@ permissions:
 # merge would leave the next PR to build from nothing.
 concurrency:
   group: nix-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Preserve every main cache-producing build in the publishing repository,
+  # but let a fork's newest push replace stale queued work.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.repository != 'NousResearch/hermes-agent' }}
 
 jobs:
   # A `paths:` filter cannot gate this workflow correctly. The flake packages
@@ -54,7 +56,10 @@ jobs:
     # takes minutes and not seconds when the cache misses. `nix flake check`
     # builds 21 checks, and --max-jobs defaults to the core count. It uses the
     # wider runner with no more configuration.
-    runs-on: ubuntu-latest-32-core
+    # The 32-core larger runner is configured for the publishing repository;
+    # forks fall back to GitHub's standard hosted runner instead of queuing
+    # forever for a label they do not own.
+    runs-on: ${{ github.repository == 'NousResearch/hermes-agent' && 'ubuntu-latest-32-core' || 'ubuntu-latest' }}
     timeout-minutes: 60
     steps:
       - name: Checkout code

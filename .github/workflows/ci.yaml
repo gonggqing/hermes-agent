@@ -27,7 +27,11 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # The publishing repository keeps every main run because those runs own
+  # release/cache evidence.  A fork does not publish that evidence, and can
+  # otherwise remain blocked indefinitely behind an older push whose matrix
+  # is waiting for runners the fork cannot use.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.repository != 'NousResearch/hermes-agent' }}
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────
