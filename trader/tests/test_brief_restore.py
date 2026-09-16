@@ -6,6 +6,7 @@ from swing_trader.__main__ import (
     _backfill_brief_narratives,
     _markets_missing_today,
     _restore_latest_briefs,
+    _run_startup_research,
 )
 from swing_trader.api import FinanceRuntime
 from swing_trader.brief import NarrativeSection, ResearchNarrative, build_research_brief
@@ -75,6 +76,20 @@ def test_current_beijing_edition_avoids_restart_refresh_at_us_date_rollover(tmp_
     missing = _markets_missing_today(runtime, {"us": "America/New_York"})
 
     assert missing == []
+
+
+def test_scheduled_catch_up_owns_startup_research_refresh(tmp_path):
+    runtime = _runtime(tmp_path)
+    raw_refreshes: list[str] = []
+    runtime.run_research["us"] = lambda: raw_refreshes.append("us")
+
+    class Coordinator:
+        def catch_up_if_due(self):
+            return True
+
+    assert _run_startup_research(runtime, ["us"], Coordinator()) is True
+    assert raw_refreshes == []
+    assert runtime.research_running == set()
 
 
 def test_backfill_adds_runtime_narrative_without_noncanonical_archive(tmp_path):

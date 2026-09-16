@@ -138,6 +138,29 @@ def _backfill_brief_narratives(runtime, writer, markets) -> list[str]:
     return enriched
 
 
+def _run_startup_research(runtime, missing_markets, brief_cycle) -> bool:
+    """Start the canonical catch-up or fall back to raw evidence refreshes.
+
+    A brief cycle already calls each market's research refresh. Running the
+    raw refresh loop first doubles provider/model work and delays the formal
+    publication after a restart.
+    """
+
+    if brief_cycle is not None and brief_cycle.catch_up_if_due():
+        return True
+    for market in missing_markets:
+        if market in runtime.research_running:
+            continue
+        runtime.research_running.add(market)
+        try:
+            runtime.run_research[market]()
+        except Exception:
+            logger.exception("startup research refresh failed", extra={"market": market})
+        finally:
+            runtime.research_running.discard(market)
+    return False
+
+
 def _cmd_simulate(args: argparse.Namespace) -> None:
     from swing_trader.schemas import Mode
     from swing_trader.simulate import run_simulation
@@ -1224,18 +1247,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                     hk_loop.recover_confirmation_state()
                 except Exception:
                     logger.exception("startup HK confirmation recovery failed")
-            for market in missing_markets:
-                if market in runtime.research_running:
-                    continue
-                runtime.research_running.add(market)
-                try:
-                    runtime.run_research[market]()
-                except Exception:
-                    logger.exception("startup research refresh failed", extra={"market": market})
-                finally:
-                    runtime.research_running.discard(market)
-            if brief_cycle is not None:
-                brief_cycle.catch_up_if_due()
+            _run_startup_research(runtime, missing_markets, brief_cycle)
             # Rebuilds after a regional close automatically fill any still-due
             # forecast checkpoints. This is non-blocking and never touches the
             # broker, confirmation service, or trading ledger.
