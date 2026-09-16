@@ -550,12 +550,10 @@ def _cmd_serve(args: argparse.Namespace) -> None:
         brief_writer = ResearchBriefWriter(
             replace(
                 brief_llm_settings,
-                # The full cross-industry CN packet contains dozens of bounded
-                # signals. MiniMax-M3 has exceeded 180s on a valid 39-signal
-                # packet, so retain a five-minute ceiling rather than dropping
-                # evidence or using a weaker model. This isolated worker cannot
-                # delay Telegram callbacks or order execution.
-                timeout=max(300.0, brief_llm_settings.timeout),
+                # One non-thinking M3 synthesis or strict JSON retry must fit
+                # inside the coordinator's 240s market-stage boundary. The
+                # HTTP stream also enforces this as a total request deadline.
+                timeout=max(60.0, min(100.0, brief_llm_settings.timeout)),
             ),
             history_loader=lambda market, before, limit: (
                 runtime.brief_store.get_recent_distinct(

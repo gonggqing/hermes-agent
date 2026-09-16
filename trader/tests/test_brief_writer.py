@@ -222,6 +222,59 @@ def test_writer_supplies_prior_recurrence_and_signal_delta_to_primary_model() ->
     assert '"current_direction": "long"' in packet
 
 
+def test_writer_prefers_consensus_and_nontechnical_support_over_duplicate_technicals() -> None:
+    prompts: list[str] = []
+    brief = _brief().model_copy(
+        update={
+            "signals_today": [
+                SignalView(
+                    symbol="TEST",
+                    direction="long",
+                    confidence=0.8,
+                    source_agent="debate",
+                    thesis="technical and fundamental evidence agree",
+                ),
+                SignalView(
+                    symbol="TEST",
+                    direction="long",
+                    confidence=0.8,
+                    source_agent="technical",
+                    thesis="duplicate technical detail",
+                ),
+                SignalView(
+                    symbol="TEST",
+                    direction="long",
+                    confidence=0.6,
+                    source_agent="fundamental",
+                    thesis="revenue evidence",
+                ),
+                SignalView(
+                    symbol="SECOND",
+                    direction="short",
+                    confidence=0.7,
+                    source_agent="technical",
+                    thesis="uncovered technical warning",
+                ),
+            ]
+        }
+    )
+
+    def complete(_settings, _system, prompt):
+        prompts.append(prompt)
+        return _reply()
+
+    assert ResearchBriefWriter(SETTINGS, complete=complete).write(
+        brief, market_id="US", market_label="United States"
+    )
+
+    packet = json.loads(prompts[0].split("EVIDENCE_PACKET=", 1)[1])
+    selected = {(row["symbol"], row["source_agent"]) for row in packet["signals"]}
+    assert ("TEST", "debate") in selected
+    assert ("TEST", "fundamental") in selected
+    assert ("TEST", "technical") not in selected
+    assert ("SECOND", "technical") in selected
+
+
 def test_writer_bounds_repeated_history_without_losing_decision_state() -> None:
     prompts: list[str] = []
     long_text = "material evidence " * 500
@@ -276,9 +329,9 @@ def test_writer_bounds_repeated_history_without_losing_decision_state() -> None:
 
     packet = json.loads(prompts[0].split("EVIDENCE_PACKET=", 1)[1])
     prior = packet["history_and_delta"]["prior_publications"]
-    assert [row["headline"] for row in prior] == ["prior-0", "prior-1"]
-    assert len(prior[0]["summary"]) == 500
-    assert len(prior[0]["action_views"][0]["what_changed"]) == 240
+    assert [row["headline"] for row in prior] == ["prior-0"]
+    assert len(prior[0]["summary"]) == 320
+    assert len(prior[0]["action_views"][0]["what_changed"]) == 160
     assert "rationale" not in prior[0]["action_views"][0]
     assert len(prompts[0]) < 15_000
 

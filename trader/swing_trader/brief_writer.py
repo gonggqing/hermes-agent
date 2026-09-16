@@ -31,7 +31,7 @@ logger = get_logger(__name__)
 
 __all__ = ["ResearchBriefWriter"]
 
-_PROMPT_VERSION = "finance-daily-brief-v4"
+_PROMPT_VERSION = "finance-daily-brief-v5"
 
 _SIGNAL_FEATURE_KEYS = {
     "close",
@@ -108,13 +108,81 @@ _MARKET_LENSES = {
 
 
 def _default_complete(settings: LLMSettings, system: str, prompt: str) -> str:
-    # Reasoning providers spend a substantial part of the output budget on
-    # reasoning BEFORE emitting the JSON, and that reasoning counts against
-    # max_tokens. Production CN packets with 39 bounded signals have also used
-    # the entire 12k budget before closing the JSON object. The isolated brief
-    # worker has a five-minute ceiling, so reserve enough room for reasoning +
-    # one complete 4-7 section report rather than publishing a truncated draft.
-    return http_complete(settings, system, prompt, max_tokens=20000)
+    # The deterministic agents already performed the expensive collection and
+    # factor debate. The primary model's job here is bounded synthesis, so M3's
+    # non-thinking mode is both more reliable and still preserves the user's
+    # configured primary-model tier. Stop as soon as one complete brief object
+    # has streamed instead of paying for trailing prose.
+    def complete(raw: str) -> bool:
+        try:
+            _extract_object(raw)
+        except ValueError:
+            return False
+        return True
+
+    return http_complete(
+        settings,
+        system,
+        prompt,
+        max_tokens=8192,
+        thinking="disabled",
+        stop_when=complete,
+    )
+
+
+def _selected_signals(brief: ResearchBrief) -> list[dict]:
+    """Keep consensus plus non-technical evidence, without factor duplication."""
+
+    rows = [signal.model_dump(mode="json") for signal in brief.signals_today]
+
+    def rank(row: dict) -> tuple:
+        return (
+            0 if row.get("direction") != "neutral" else 1,
+            -float(row.get("confidence") or 0),
+            str(row.get("symbol") or ""),
+        )
+
+    debates = sorted(
+        (row for row in rows if row.get("source_agent") == "debate"),
+        key=rank,
+    )[:12]
+    represented = {str(row.get("symbol")) for row in debates}
+    nontechnical = sorted(
+        (
+            row
+            for row in rows
+            if row.get("source_agent") in {"fundamental", "sentiment"}
+            or str(row.get("source_agent") or "").startswith("llm:")
+        ),
+        key=lambda row: (
+            0 if str(row.get("symbol")) in represented else 1,
+            *rank(row),
+        ),
+    )[:6]
+    # Some thin markets may not produce a debate signal. Preserve a few of
+    # those uncovered voices, but do not repeat raw technical rows for symbols
+    # whose debate already summarizes them.
+    uncovered = sorted(
+        (
+            row
+            for row in rows
+            if row.get("source_agent") != "debate"
+            and str(row.get("symbol")) not in represented
+            and row not in nontechnical
+        ),
+        key=rank,
+    )[:4]
+
+    selected = []
+    for row in [*debates, *nontechnical, *uncovered]:
+        row["thesis"] = str(row.get("thesis") or "")[:360]
+        row["features"] = {
+            key: value
+            for key, value in (row.get("features") or {}).items()
+            if key in _SIGNAL_FEATURE_KEYS
+        }
+        selected.append(row)
+    return selected
 
 
 def _compact_evidence(brief: ResearchBrief, market_id: str, market_label: str) -> dict:
@@ -125,26 +193,7 @@ def _compact_evidence(brief: ResearchBrief, market_id: str, market_label: str) -
         discovery["candidates"] = discovery.get("candidates", [])[:8]
         discovery["rejected"] = discovery.get("rejected", [])[:5]
 
-    signals = []
-    for signal in brief.signals_today:
-        row = signal.model_dump(mode="json")
-        row["thesis"] = str(row.get("thesis") or "")[:600]
-        row["features"] = {
-            key: value
-            for key, value in (row.get("features") or {}).items()
-            if key in _SIGNAL_FEATURE_KEYS
-        }
-        signals.append(row)
-    # Debate/LLM synthesis carries more cross-factor information than the
-    # underlying single-factor voices; retain it first, then cap prompt size.
-    signals.sort(
-        key=lambda row: (
-            0 if row["source_agent"] == "debate" else 1,
-            0 if str(row["source_agent"]).startswith("llm:") else 1,
-            -float(row["confidence"]),
-            row["symbol"],
-        )
-    )
+    signals = _selected_signals(brief)
 
     return {
         "market": {"id": market_id.upper(), "label": market_label},
@@ -179,7 +228,7 @@ def _compact_evidence(brief: ResearchBrief, market_id: str, market_label: str) -
             "future_items_excluded": brief.news.future_items_excluded,
             "duplicate_items_excluded": brief.news.duplicate_items_excluded,
         },
-        "signals": signals[:24],
+        "signals": signals,
         "events": brief.events.model_dump(mode="json"),
         "candidate_flow": brief.candidates_today.model_dump(mode="json"),
         "uncertainty": brief.uncertainty[:16],
@@ -274,7 +323,7 @@ def _build_history_context(
         )
 
     prior_publications = []
-    for payload in history[:2]:
+    for payload in history[:1]:
         narrative = payload.get("narrative")
         if not isinstance(narrative, dict):
             continue
@@ -289,8 +338,8 @@ def _build_history_context(
                     "thesis_state": row.get("thesis_state"),
                     "confidence": row.get("confidence"),
                     "horizon_sessions": row.get("horizon_sessions"),
-                    "what_changed": str(row.get("what_changed") or "")[:240],
-                    "invalidation": str(row.get("invalidation") or "")[:240],
+                    "what_changed": str(row.get("what_changed") or "")[:160],
+                    "invalidation": str(row.get("invalidation") or "")[:160],
                 }
             )
         claims = []
@@ -305,8 +354,8 @@ def _build_history_context(
                     "direction": row.get("direction"),
                     "confidence": row.get("confidence"),
                     "horizons": row.get("horizons"),
-                    "thesis": str(row.get("thesis") or "")[:240],
-                    "invalidation": str(row.get("invalidation") or "")[:240],
+                    "thesis": str(row.get("thesis") or "")[:180],
+                    "invalidation": str(row.get("invalidation") or "")[:160],
                 }
             )
         prior_publications.append(
@@ -314,9 +363,9 @@ def _build_history_context(
                 "trading_date": payload.get("trading_date"),
                 "edition": narrative.get("edition"),
                 "headline": narrative.get("headline"),
-                "summary": str(narrative.get("summary") or "")[:500],
-                "action_views": action_views[:6],
-                "claims": claims[:8],
+                "summary": str(narrative.get("summary") or "")[:320],
+                "action_views": action_views[:4],
+                "claims": claims[:4],
             }
         )
 
@@ -330,8 +379,8 @@ def _build_history_context(
             "breadth_previous": previous_regime.get("breadth_pct_above_50dma"),
             "breadth_current": current_regime.get("breadth_pct_above_50dma"),
         },
-        "signal_changes": signal_changes[:30],
-        "theme_changes": theme_changes[:10],
+        "signal_changes": signal_changes[:18],
+        "theme_changes": theme_changes[:8],
         "prior_publications": prior_publications,
     }
 

@@ -226,12 +226,26 @@ def test_http_complete_splits_minimax_reasoning_only(monkeypatch):
         model="deepseek-v4-flash",
         api_key="secret",
     )
-    assert http_complete(minimax, "system", "prompt") == '{"ok":true}'
+    assert (
+        http_complete(
+            minimax,
+            "system",
+            "prompt",
+            max_tokens=4096,
+            thinking="disabled",
+            stop_when=lambda content: content.endswith("}"),
+        )
+        == '{"ok":true}'
+    )
     assert http_complete(other, "system", "prompt") == '{"ok":true}'
     assert payloads[0]["reasoning_split"] is True
     assert payloads[0]["stream"] is True
+    assert payloads[0]["thinking"] == {"type": "disabled"}
+    assert payloads[0]["max_completion_tokens"] == 4096
+    assert "max_tokens" not in payloads[0]
     assert "reasoning_split" not in payloads[1]
     assert "stream" not in payloads[1]
+    assert payloads[1]["max_tokens"] == 800
 
 
 def test_http_complete_recovers_provider_reasoning_fields(monkeypatch):

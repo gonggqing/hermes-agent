@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -222,6 +223,8 @@ def http_complete(
     prompt: str,
     *,
     max_tokens: int = 800,
+    thinking: Optional[str] = None,
+    stop_when: Optional[Callable[[str], bool]] = None,
 ) -> str:
     """One stateless OpenAI-compatible completion.
 
@@ -231,6 +234,9 @@ def http_complete(
     """
     import requests
 
+    if thinking not in {None, "adaptive", "disabled"}:
+        raise ValueError("thinking must be adaptive, disabled, or None")
+
     payload = {
         "model": settings.model,
         "messages": [
@@ -238,10 +244,6 @@ def http_complete(
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.2,
-        # Headroom for reasoning models (MiniMax M-series / deepseek-v4)
-        # that spend tokens on <think> before the JSON verdict. Longer
-        # structured tasks (the daily brief writer) opt into a larger cap.
-        "max_tokens": max_tokens,
     }
     # MiniMax's OpenAI-compatible API otherwise places the complete reasoning
     # trace in `content` before the answer. Long HK/CN evidence packets can
@@ -253,13 +255,25 @@ def http_complete(
         "minimax-"
     )
     if is_minimax:
+        # MiniMax's current API deprecates max_tokens in favour of this field.
+        # Using the canonical field matters for M3, whose default output budget
+        # is otherwise large enough to turn a bounded synthesis into minutes of
+        # hidden reasoning.
+        payload["max_completion_tokens"] = max_tokens
         payload["reasoning_split"] = True
         # MiniMax M-series reasoning models are documented to work best with
         # streaming.  A full CN brief can otherwise produce no response bytes
         # until the entire reasoning trace and answer are complete, tripping
         # the read timeout even though generation is still progressing.
         payload["stream"] = True
+        if settings.model.lower().startswith("minimax-m3") and thinking is not None:
+            payload["thinking"] = {"type": thinking}
+    else:
+        # Headroom for other OpenAI-compatible reasoning providers. Longer
+        # structured tasks opt into a larger cap at their call site.
+        payload["max_tokens"] = max_tokens
 
+    started = time.monotonic()
     resp = requests.post(
         f"{settings.base_url}/chat/completions",
         headers={"Authorization": f"Bearer {settings.api_key}"},
@@ -282,34 +296,45 @@ def http_complete(
                 return value
             return current + value
 
-        for raw_line in resp.iter_lines(decode_unicode=True):
-            if isinstance(raw_line, bytes):
-                line = raw_line.decode("utf-8", errors="replace")
-            else:
-                line = str(raw_line or "")
-            if not line.startswith("data:"):
-                continue
-            data = line[5:].strip()
-            if not data or data == "[DONE]":
-                continue
-            try:
-                chunk = json.loads(data)
-                delta = chunk["choices"][0].get("delta") or {}
-            except (KeyError, IndexError, TypeError, json.JSONDecodeError):
-                continue
-            content = merge(content, delta.get("content"))
-            reasoning = merge(reasoning, delta.get("reasoning_content"))
-            details = delta.get("reasoning_details")
-            if isinstance(details, list):
-                for item in details:
-                    if isinstance(item, str):
-                        reasoning = merge(reasoning, item)
-                    elif isinstance(item, dict):
-                        for key in ("text", "content", "reasoning"):
-                            value = item.get(key)
-                            if isinstance(value, str) and value:
-                                reasoning = merge(reasoning, value)
-                                break
+        try:
+            for raw_line in resp.iter_lines(decode_unicode=True):
+                if time.monotonic() - started > settings.timeout:
+                    raise TimeoutError(
+                        f"streaming completion exceeded {settings.timeout:g}s"
+                    )
+                if isinstance(raw_line, bytes):
+                    line = raw_line.decode("utf-8", errors="replace")
+                else:
+                    line = str(raw_line or "")
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if not data or data == "[DONE]":
+                    continue
+                try:
+                    chunk = json.loads(data)
+                    delta = chunk["choices"][0].get("delta") or {}
+                except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+                    continue
+                content = merge(content, delta.get("content"))
+                if stop_when is not None and content and stop_when(content):
+                    return content
+                reasoning = merge(reasoning, delta.get("reasoning_content"))
+                details = delta.get("reasoning_details")
+                if isinstance(details, list):
+                    for item in details:
+                        if isinstance(item, str):
+                            reasoning = merge(reasoning, item)
+                        elif isinstance(item, dict):
+                            for key in ("text", "content", "reasoning"):
+                                value = item.get(key)
+                                if isinstance(value, str) and value:
+                                    reasoning = merge(reasoning, value)
+                                    break
+        finally:
+            close = getattr(resp, "close", None)
+            if callable(close):
+                close()
         if content.strip():
             return content
         if reasoning.strip():
