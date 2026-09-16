@@ -31,7 +31,7 @@ logger = get_logger(__name__)
 
 __all__ = ["ResearchBriefWriter"]
 
-_PROMPT_VERSION = "finance-daily-brief-v5"
+_PROMPT_VERSION = "finance-daily-brief-v6"
 
 _SIGNAL_FEATURE_KEYS = {
     "close",
@@ -72,11 +72,11 @@ Requirements:
 - Distinguish observed facts from your inference. Mention concrete symbols, themes and figures when they support a conclusion.
 - A discovery score is only a research-priority input. Do not describe operational checks, approval status, or screening gates in the prose.
 - If evidence is missing or contradictory, say exactly how that limits the conclusion. Do not pad the report with generic disclaimers.
-- Produce 4-7 substantive sections. Each section should contain analysis specific to today's evidence, not a description of what the UI module does.
+- Produce 4-6 substantive sections. Each section should contain 2-4 analytical sentences specific to today's evidence, not a description of what the UI module does.
 - Include a decision-oriented action map only where evidence supports it. Stances are research guidance, never executable orders: buy_on_confirmation, hold, reduce_on_weakness, exit_if_invalidated, watch, avoid. Technical alignment alone is insufficient for buy_on_confirmation: require at least one non-technical support (fresh catalyst, fundamentals, breadth/relative strength, or a clearly supplied thesis update). If it is absent, use watch/hold/avoid and say what evidence is missing.
 - For every action view, state what changed, the intended trading-session horizon, an observable invalidation, and supplied evidence references. Prioritize current holdings, material thesis changes and the highest-conviction opportunities; do not fill a quota.
 - 'watch_next' must contain 2-6 concrete questions, events, levels, symbols or evidence changes to monitor next.
-- Also emit 0-12 measurable forecast claims. A claim is a research view, not an order. Use instrument horizons 1/3/5/10/20 sessions, market regime 1/3/5, discovery/theme 5/20/60, and event 1/5. Do not emit a claim when the evidence cannot support a direction and confidence.
+- Emit at most 8 action views and 0-8 measurable forecast claims; prioritize material changes over coverage. A claim is a research view, not an order. Use instrument horizons 1/3/5/10/20 sessions, market regime 1/3/5, discovery/theme 5/20/60, and event 1/5. Do not emit a claim when the evidence cannot support a direction and confidence.
 - Classify claims precisely: `instrument` is one listed stock/ETF, `index` is one canonical index ticker, `indicator` is one directly price-observable series such as `^VIX`, `theme` requires a supplied listed-leader basket, and `market` uses the market benchmark. Never encode SMA/RSI labels, dates or prose as ticker-like entity keys.
 - Instrument/index/indicator claims must use an exact provider-resolvable ticker as entity_key. Event claims are only measurable when tied to one listed instrument: emit one claim per affected ticker and use that exact ticker as entity_key; never use event names, dates, joined ticker lists, private-company names, or labels such as "EARNINGS:..." as entity_key. Claims must name an invalidation condition and cite supplied evidence references (ticker, source URL, or signal source_agent).
 
@@ -124,7 +124,7 @@ def _default_complete(settings: LLMSettings, system: str, prompt: str) -> str:
         settings,
         system,
         prompt,
-        max_tokens=8192,
+        max_tokens=6144,
         thinking="disabled",
         stop_when=complete,
     )

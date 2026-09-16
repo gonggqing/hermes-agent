@@ -300,7 +300,8 @@ def http_complete(
             for raw_line in resp.iter_lines(decode_unicode=True):
                 if time.monotonic() - started > settings.timeout:
                     raise TimeoutError(
-                        f"streaming completion exceeded {settings.timeout:g}s"
+                        f"streaming completion exceeded {settings.timeout:g}s "
+                        f"(content_chars={len(content)}, reasoning_chars={len(reasoning)})"
                     )
                 if isinstance(raw_line, bytes):
                     line = raw_line.decode("utf-8", errors="replace")

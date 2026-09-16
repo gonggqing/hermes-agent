@@ -553,7 +553,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
                 # One non-thinking M3 synthesis or strict JSON retry must fit
                 # inside the coordinator's 240s market-stage boundary. The
                 # HTTP stream also enforces this as a total request deadline.
-                timeout=max(60.0, min(100.0, brief_llm_settings.timeout)),
+                timeout=110.0,
             ),
             history_loader=lambda market, before, limit: (
                 runtime.brief_store.get_recent_distinct(
