@@ -25,9 +25,13 @@ import { financeKey, type WatchCurrency } from './lib'
 import { WatchModulePanel, type WatchSymbolConfig } from './watch'
 
 function watchCurrency(currency: null | string): WatchCurrency | null {
-  if (currency === 'USD') {return '$'}
+  if (currency === 'USD') {
+    return '$'
+  }
 
-  if (currency === 'CNY') {return '¥'}
+  if (currency === 'CNY') {
+    return '¥'
+  }
 
   return null
 }
@@ -89,11 +93,12 @@ export function CustomWatchlistPanel({
     [group.members]
   )
 
-  const fail = (error: unknown) =>
-    notifyError(error instanceof Error ? error : new Error(String(error)), copy.readOnly)
+  const fail = (error: unknown) => notifyError(error instanceof Error ? error : new Error(String(error)), copy.readOnly)
 
   const add = async (item: FinanceInstrumentMatch | FinanceResearchWatchlistRecommendation) => {
-    if (!isListedInstrument(item)) {return}
+    if (!isListedInstrument(item)) {
+      return
+    }
     setBusy(true)
 
     try {
@@ -128,7 +133,9 @@ export function CustomWatchlistPanel({
   }
 
   const saveName = async () => {
-    if (!name.trim()) {return}
+    if (!name.trim()) {
+      return
+    }
     setBusy(true)
 
     try {

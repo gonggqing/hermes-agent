@@ -117,7 +117,9 @@ export function FinanceNavRow({
       {leading}
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="flex items-center gap-1.5">
-          <span className={cn('truncate text-[0.8125rem]', active && !disabled ? 'font-medium' : 'font-normal', titleTone)}>
+          <span
+            className={cn('truncate text-[0.8125rem]', active && !disabled ? 'font-medium' : 'font-normal', titleTone)}
+          >
             {title}
           </span>
           {badge}

@@ -314,31 +314,30 @@ export function CommandCenterView({
   )
 
   const navGroups = useMemo(
-    () =>
-      [
-        ...SECTIONS.map(value => ({
-          active: section === value,
-          icon:
-            value === 'sessions'
-              ? MessageCircle
-              : value === 'system'
-                ? Activity
-                : value === 'maintenance'
-                  ? Wrench
-                  : BarChart3,
-          id: value,
-          label: cc.sections[value],
-          onSelect: () => setSection(value)
-        })),
-        {
-          active: false,
-          gapBefore: true,
-          icon: LayoutDashboard,
-          id: 'finance',
-          label: t.finance.title,
-          onSelect: () => onNavigateRoute?.(FINANCE_ROUTE)
-        }
-      ],
+    () => [
+      ...SECTIONS.map(value => ({
+        active: section === value,
+        icon:
+          value === 'sessions'
+            ? MessageCircle
+            : value === 'system'
+              ? Activity
+              : value === 'maintenance'
+                ? Wrench
+                : BarChart3,
+        id: value,
+        label: cc.sections[value],
+        onSelect: () => setSection(value)
+      })),
+      {
+        active: false,
+        gapBefore: true,
+        icon: LayoutDashboard,
+        id: 'finance',
+        label: t.finance.title,
+        onSelect: () => onNavigateRoute?.(FINANCE_ROUTE)
+      }
+    ],
     [cc, onNavigateRoute, section, setSection, t.finance.title]
   )
 

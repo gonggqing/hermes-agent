@@ -4,14 +4,7 @@ import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from 're
 import { StatusDot, type StatusTone } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList
-} from '@/components/ui/command'
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { controlVariants } from '@/components/ui/control'
 import {
   Dialog,
@@ -457,13 +450,7 @@ function ValuationSummary({ totals }: { totals: FinanceValuationTotal[] }) {
 // Manual price mark — set/override 现价 for one holding (esp. a 场外基金 whose NAV
 // has no live feed). Mirrors the EditDraftDialog form house style; the service
 // records the "manual" source and the valuation is reloaded on success.
-function EditMarkDialog({
-  holding,
-  onClose
-}: {
-  holding: FinanceValuationHolding | null
-  onClose: () => void
-}) {
+function EditMarkDialog({ holding, onClose }: { holding: FinanceValuationHolding | null; onClose: () => void }) {
   const { t } = useI18n()
   const copy = t.finance.holdings
   const queryClient = useQueryClient()
@@ -811,7 +798,9 @@ function AccountReconcileTab({ account, enabled }: { account: FinancePortfolioAc
               <FinancePill variant="outline">
                 {copy.reconcileAuthority(enumLabel(t.finance.enums.authority, data.authority))}
               </FinancePill>
-              <span className="text-[0.62rem] tabular-nums text-muted-foreground/70">{copy.asOf(fmtTs(data.as_of))}</span>
+              <span className="text-[0.62rem] tabular-nums text-muted-foreground/70">
+                {copy.asOf(fmtTs(data.as_of))}
+              </span>
             </div>
             {data.summary ? <p className="text-xs leading-5 text-(--ui-text-secondary)">{data.summary}</p> : null}
             {data.note ? <p className="text-[0.65rem] text-muted-foreground/80">{data.note}</p> : null}
@@ -994,11 +983,15 @@ function DraftCard({
       </div>
 
       {draft.original_text ? (
-        <p className="text-[0.7rem] italic leading-4 text-muted-foreground/80">{copy.draftOriginal(draft.original_text)}</p>
+        <p className="text-[0.7rem] italic leading-4 text-muted-foreground/80">
+          {copy.draftOriginal(draft.original_text)}
+        </p>
       ) : null}
 
       {draft.missing.length > 0 && (
-        <p className="text-[0.65rem] leading-4 text-amber-600 dark:text-amber-300">{copy.draftMissing(draft.missing.join(', '))}</p>
+        <p className="text-[0.65rem] leading-4 text-amber-600 dark:text-amber-300">
+          {copy.draftMissing(draft.missing.join(', '))}
+        </p>
       )}
       {draft.ambiguities.length > 0 && (
         <p className="text-[0.65rem] leading-4 text-amber-600 dark:text-amber-300">
@@ -1044,10 +1037,7 @@ function InstrumentCombobox({
   return (
     <Popover onOpenChange={setOpen} open={open}>
       <PopoverTrigger asChild>
-        <button
-          className={cn(controlVariants({}), 'flex items-center justify-between gap-2 text-left')}
-          type="button"
-        >
+        <button className={cn(controlVariants({}), 'flex items-center justify-between gap-2 text-left')} type="button">
           <span className={cn('truncate', value ? 'text-foreground' : 'text-muted-foreground')}>
             {value ? `${value.canonical_symbol} · ${value.display_name}` : copy.instrumentPlaceholder}
           </span>

@@ -34,7 +34,9 @@ const intentKey = (candidateId: string, action: string, edits?: object): string 
  */
 export function randomId(): string {
   if (typeof crypto !== 'undefined') {
-    if (typeof crypto.randomUUID === 'function') {return crypto.randomUUID()}
+    if (typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID()
+    }
 
     if (typeof crypto.getRandomValues === 'function') {
       const b = crypto.getRandomValues(new Uint8Array(16))

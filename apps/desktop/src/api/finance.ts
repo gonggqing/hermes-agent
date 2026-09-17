@@ -35,15 +35,7 @@ export interface FinancePortfolioControls extends FinancePortfolioControlsUpdate
 export type FinanceBreakerState = 'NORMAL' | 'TRIPPED' | 'UNKNOWN'
 
 export type FinanceCandidateStatus =
-  | 'approved'
-  | 'edited'
-  | 'expired'
-  | 'placed'
-  | 'proposed'
-  | 'pushed'
-  | 'rejected'
-  | 'risk_approved'
-  | 'risk_vetoed'
+  'approved' | 'edited' | 'expired' | 'placed' | 'proposed' | 'pushed' | 'rejected' | 'risk_approved' | 'risk_vetoed'
 
 export type FinanceOrderType = 'BRACKET' | 'LMT' | 'LOC' | 'MOC' | 'STP'
 

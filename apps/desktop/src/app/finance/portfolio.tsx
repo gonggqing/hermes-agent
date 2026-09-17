@@ -188,10 +188,14 @@ function PortfolioControlsPanel() {
     let alive = true
     void getFinancePortfolioControls().then(
       next => {
-        if (alive) {setValue(next)}
+        if (alive) {
+          setValue(next)
+        }
       },
       () => {
-        if (alive) {setError(copy.controlsLoadError)}
+        if (alive) {
+          setError(copy.controlsLoadError)
+        }
       }
     )
 
@@ -220,14 +224,18 @@ function PortfolioControlsPanel() {
   const change = (key: NumericControlKey, raw: string) => {
     const number = Number(raw)
 
-    if (!Number.isFinite(number)) {return}
+    if (!Number.isFinite(number)) {
+      return
+    }
     setValue(current => (current ? { ...current, [key]: number } : current))
     setError(null)
     setSaved(false)
   }
 
   const save = async () => {
-    if (!value) {return}
+    if (!value) {
+      return
+    }
     setSaving(true)
     setError(null)
     setSaved(false)

@@ -158,7 +158,10 @@ export function FinanceQueueView({ bottomBar, enabled }: { bottomBar: React.Reac
                     </span>
                   }
                   onSelect={() => setSelectedId(entry.candidate.id)}
-                  subtitle={copy.rowMeta(enumLabel(t.finance.enums.side, entry.candidate.side), fmtQty(entry.candidate.qty))}
+                  subtitle={copy.rowMeta(
+                    enumLabel(t.finance.enums.side, entry.candidate.side),
+                    fmtQty(entry.candidate.qty)
+                  )}
                   title={entry.candidate.symbol}
                 />
               ))}
@@ -272,11 +275,7 @@ function SessionControls({ enabled }: { enabled: boolean }) {
           <p className="text-[0.62rem] leading-4 text-muted-foreground/80">{copy.sessionHint}</p>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <Button
-            disabled={!enabled || runMutation.isPending}
-            onClick={() => runMutation.mutate()}
-            size="xs"
-          >
+          <Button disabled={!enabled || runMutation.isPending} onClick={() => runMutation.mutate()} size="xs">
             {runMutation.isPending ? copy.sessionRunning : copy.sessionRun}
           </Button>
           <Button

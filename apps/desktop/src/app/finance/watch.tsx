@@ -224,10 +224,7 @@ export function WatchModulePanel({
   const { t } = useI18n()
   const copy = t.finance.watch
 
-  const symbols = useMemo(
-    () => customSymbols ?? (module ? WATCH_MODULE_SYMBOLS[module] : []),
-    [customSymbols, module]
-  )
+  const symbols = useMemo(() => customSymbols ?? (module ? WATCH_MODULE_SYMBOLS[module] : []), [customSymbols, module])
 
   const labels = useMemo(
     () =>

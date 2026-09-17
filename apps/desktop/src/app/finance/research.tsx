@@ -557,7 +557,10 @@ function NarrativeBrief({ brief }: { brief: FinanceResearchBrief }) {
                         <FinanceSectionLabel>{copy.narrativeEvidence}</FinanceSectionLabel>
                         <ul className="mt-1 grid gap-x-4 gap-y-1 sm:grid-cols-2">
                           {(action.evidence_pillars ?? []).map(pillar => (
-                            <li className="text-[0.68rem] leading-5 text-muted-foreground" key={`${pillar.kind}-${pillar.finding}`}>
+                            <li
+                              className="text-[0.68rem] leading-5 text-muted-foreground"
+                              key={`${pillar.kind}-${pillar.finding}`}
+                            >
                               <span className="font-medium text-foreground">
                                 {copy.narrativeEvidenceKinds[pillar.kind] ?? pillar.kind}:
                               </span>{' '}
@@ -645,9 +648,7 @@ function SynthesisSection({ synthesis }: { synthesis: FinanceResearchBrief['cros
           </FinancePill>
         ))}
       </div>
-      {synthesis.headline && (
-        <p className="text-sm font-medium leading-6 text-foreground">{synthesis.headline}</p>
-      )}
+      {synthesis.headline && <p className="text-sm font-medium leading-6 text-foreground">{synthesis.headline}</p>}
       {synthesis.shared_themes.length === 0 ? (
         <div className="py-1 text-xs text-muted-foreground">{copy.synthesisEmpty}</div>
       ) : (
