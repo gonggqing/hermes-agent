@@ -2178,7 +2178,15 @@ export interface Translations {
       narrativeActionMap: string
       narrativeHorizon: (sessions: number) => string
       narrativeInvalidation: string
+      narrativeWhyNow: string
+      narrativeIndustryRole: string
+      narrativeEvidence: string
+      narrativeCatalysts: string
+      narrativeCounterCase: string
+      narrativeAssessment: string
       narrativeStances: Record<string, string>
+      narrativeThesisStates: Record<string, string>
+      narrativeEvidenceKinds: Record<string, string>
       freshMarket: string
       freshNews: string
       freshPortfolio: string

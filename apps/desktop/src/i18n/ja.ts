@@ -14,6 +14,30 @@ export const ja = defineLocale({
     },
     research: {
       briefTitle: '投資リサーチ概要',
+      narrativeActionMap: '注目銘柄と見通しの追跡',
+      narrativeWhyNow: '今注目する理由',
+      narrativeIndustryRole: '市場・サプライチェーンでの役割',
+      narrativeEvidence: '根拠',
+      narrativeCatalysts: '新しい材料',
+      narrativeCounterCase: '反対材料',
+      narrativeAssessment: '総合判断',
+      narrativeThesisStates: {
+        new: '新規見通し',
+        strengthened: '強化',
+        unchanged: '変更なし',
+        weakened: '弱化',
+        invalidated: '無効'
+      },
+      narrativeEvidenceKinds: {
+        fundamental: 'ファンダメンタルズ',
+        valuation: 'バリュエーション',
+        trend: 'トレンド',
+        catalyst: 'カタリスト',
+        positioning: '需給・ポジション',
+        portfolio: 'ポートフォリオ',
+        risk: 'リスク',
+        unknown: '根拠不足'
+      },
       marketsGroup: 'マーケット',
       watchGroup: 'ウォッチ',
       marketChina: '中国',

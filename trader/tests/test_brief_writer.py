@@ -12,6 +12,7 @@ from swing_trader.brief import (
     SignalView,
 )
 from swing_trader.brief_writer import ResearchBriefWriter
+from swing_trader.brief_telegram import render_research_brief
 from swing_trader.discovery import (
     DiscoveryCandidate,
     DiscoveryEvidence,
@@ -64,6 +65,14 @@ def _reply() -> str:
           "confidence": 0.55,
           "horizon_sessions": 5,
           "what_changed": "没有新增基本面证据",
+          "why_now": "趋势仍在，但本版没有新的基本面确认，适合继续跟踪而非行动",
+          "industry_role": "组合中的测试观察标的",
+          "evidence_pillars": [
+            {"kind": "trend", "finding": "技术趋势尚可"},
+            {"kind": "risk", "finding": "非技术证据缺失限制置信度"}
+          ],
+          "catalysts": [],
+          "counter_case": "缺少基本面与新催化，趋势可能只是短期波动",
           "rationale": "技术趋势尚可，但缺少非技术催化支持",
           "invalidation": "跌破已提供的趋势基准",
           "evidence_refs": ["technical"]
@@ -96,6 +105,14 @@ def test_writer_returns_valid_market_specific_narrative_and_caches() -> None:
     assert first.change_summary == ["没有新增催化，原判断保持观察"]
     assert first.action_views[0].stance == "watch"
     assert first.action_views[0].display_name == "测试标的"
+    assert first.action_views[0].why_now.startswith("趋势仍在")
+    assert {row.kind for row in first.action_views[0].evidence_pillars} == {"trend", "risk"}
+    telegram = render_research_brief(
+        _brief().model_copy(update={"narrative": first}),
+        market_label="中国",
+    )
+    assert "重点标的与观点跟踪" in telegram
+    assert "为什么是现在" in telegram and "反方证据" in telegram
     assert len(calls) == 1
     assert "A-share brief" in calls[0]
     assert '"id": "CN"' in calls[0]
@@ -142,7 +159,7 @@ def test_writer_safely_caps_oversized_model_arrays_before_validation() -> None:
     assert len(narrative.change_summary) == 6
     assert len(narrative.sections) == 7
     assert len(narrative.watch_next) == 6
-    assert len(narrative.action_views) == 12
+    assert len(narrative.action_views) == 8
 
 
 def test_writer_supplies_prior_recurrence_and_signal_delta_to_primary_model() -> None:
@@ -293,6 +310,14 @@ def test_writer_bounds_repeated_history_without_losing_decision_state() -> None:
                         "confidence": 0.5,
                         "horizon_sessions": 5,
                         "what_changed": long_text,
+                        "why_now": long_text,
+                        "industry_role": long_text,
+                        "evidence_pillars": [
+                            {"kind": "trend", "finding": long_text},
+                            {"kind": "risk", "finding": long_text},
+                        ],
+                        "catalysts": [],
+                        "counter_case": long_text,
                         "rationale": long_text,
                         "invalidation": long_text,
                         "evidence_refs": [long_text],
@@ -332,6 +357,8 @@ def test_writer_bounds_repeated_history_without_losing_decision_state() -> None:
     assert [row["headline"] for row in prior] == ["prior-0"]
     assert len(prior[0]["summary"]) == 320
     assert len(prior[0]["action_views"][0]["what_changed"]) == 160
+    assert len(prior[0]["action_views"][0]["why_now"]) == 160
+    assert len(prior[0]["action_views"][0]["counter_case"]) == 160
     assert "rationale" not in prior[0]["action_views"][0]
     assert len(prompts[0]) < 15_000
 
@@ -341,6 +368,17 @@ def test_writer_rejects_an_invented_action_symbol() -> None:
     writer = ResearchBriefWriter(
         SETTINGS,
         complete=lambda _settings, _system, _prompt: bad,
+    )
+
+    assert writer.write(_brief(), market_id="CN", market_label="Mainland China") is None
+
+
+def test_writer_rejects_unexplained_action_view() -> None:
+    payload = json.loads(_reply().split("</think>", 1)[1])
+    payload["action_views"][0]["why_now"] = ""
+    writer = ResearchBriefWriter(
+        SETTINGS,
+        complete=lambda _settings, _system, _prompt: json.dumps(payload),
     )
 
     assert writer.write(_brief(), market_id="CN", market_label="Mainland China") is None

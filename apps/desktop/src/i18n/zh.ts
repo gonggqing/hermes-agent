@@ -2698,9 +2698,15 @@ export const zh: Translations = {
       narrativeFailure: reason => `本版主模型生成失败：${reason}`,
       narrativeWatchNext: '接下来关注',
       narrativeSincePrior: '相较上一版的变化',
-      narrativeActionMap: '趋势行动图',
+      narrativeActionMap: '重点标的与观点跟踪',
       narrativeHorizon: sessions => `${sessions} 个交易日`,
       narrativeInvalidation: '失效条件',
+      narrativeWhyNow: '为什么是现在',
+      narrativeIndustryRole: '市场与产业链位置',
+      narrativeEvidence: '支持证据',
+      narrativeCatalysts: '新增催化',
+      narrativeCounterCase: '反方证据',
+      narrativeAssessment: '综合判断',
       narrativeStances: {
         buy_on_confirmation: '确认后考虑买入',
         hold: '持有',
@@ -2708,6 +2714,23 @@ export const zh: Translations = {
         exit_if_invalidated: '失效退出',
         watch: '观察',
         avoid: '回避'
+      },
+      narrativeThesisStates: {
+        new: '新观点',
+        strengthened: '观点增强',
+        unchanged: '观点未变',
+        weakened: '观点转弱',
+        invalidated: '观点失效'
+      },
+      narrativeEvidenceKinds: {
+        fundamental: '基本面',
+        valuation: '估值',
+        trend: '趋势',
+        catalyst: '催化',
+        positioning: '资金与持仓',
+        portfolio: '组合影响',
+        risk: '风险',
+        unknown: '证据缺口'
       },
       freshMarket: '市场',
       freshNews: '新闻',

@@ -73,6 +73,7 @@ __all__ = [
     "RegimeView",
     "ResearchBrief",
     "ResearchNarrative",
+    "ThesisEvidence",
     "ThesisAction",
     "RiskView",
     "SignalView",
@@ -362,6 +363,17 @@ class ForecastClaim(BaseModel):
         return normalized
 
 
+class ThesisEvidence(BaseModel):
+    """One decision-relevant evidence pillar behind a thesis action."""
+
+    kind: str = Field(
+        pattern=(
+            r"^(fundamental|valuation|trend|catalyst|positioning|portfolio|risk|unknown)$"
+        )
+    )
+    finding: str = Field(min_length=1, max_length=400)
+
+
 class ThesisAction(BaseModel):
     """Human-readable trend stance; research guidance, never an order."""
 
@@ -378,6 +390,13 @@ class ThesisAction(BaseModel):
     horizon_sessions: int = Field(ge=1, le=60)
     what_changed: str = Field(min_length=1, max_length=500)
     rationale: str = Field(min_length=1, max_length=1000)
+    # Added in finance-daily-brief-v7. Defaults keep v6 archives readable;
+    # the writer validates these fields for every newly generated action.
+    why_now: str = Field(default="", max_length=600)
+    industry_role: str = Field(default="", max_length=500)
+    evidence_pillars: list[ThesisEvidence] = Field(default_factory=list, max_length=6)
+    catalysts: list[str] = Field(default_factory=list, max_length=5)
+    counter_case: str = Field(default="", max_length=600)
     invalidation: str = Field(min_length=1, max_length=600)
     evidence_refs: list[str] = Field(min_length=1, max_length=12)
 

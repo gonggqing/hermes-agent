@@ -495,6 +495,15 @@ class PredictionCloseEvaluator:
         dated = [(bar.ts.astimezone(schedule.tz).date(), bar) for bar in bars]
         end_candidates = [(day, bar) for day, bar in dated if day <= due]
         if not end_candidates or end_candidates[-1][0] != due:
+            # A later returned bar proves the provider has moved beyond this
+            # date. The exact session is therefore a suspension/non-trading
+            # gap or a permanent source omission, not a transient close that
+            # will appear on the next ten-minute retry.
+            if any(day > due for day, _bar in dated):
+                raise PermanentUnscorable(
+                    f"{symbol} has no adjusted close on {due}; later bars confirm a "
+                    "non-trading, suspension, or source-data gap"
+                )
             raise DataFeedError(f"{symbol} adjusted close for {due} is not available")
         baseline_candidates = [(day, bar) for day, bar in dated if day <= start]
         if fixed_baseline is not None and fixed_baseline > 0:

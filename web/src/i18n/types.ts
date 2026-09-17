@@ -63,7 +63,15 @@ export interface FinanceTranslations {
       actionMap: string;
       horizonSessions: string;
       invalidation: string;
+      whyNow: string;
+      industryRole: string;
+      evidence: string;
+      catalysts: string;
+      counterCase: string;
+      assessment: string;
       stances: Record<string, string>;
+      thesisStates: Record<string, string>;
+      evidenceKinds: Record<string, string>;
     };
     risk: {
       title: string;

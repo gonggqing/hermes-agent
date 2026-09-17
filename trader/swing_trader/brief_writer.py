@@ -31,7 +31,7 @@ logger = get_logger(__name__)
 
 __all__ = ["ResearchBriefWriter"]
 
-_PROMPT_VERSION = "finance-daily-brief-v6"
+_PROMPT_VERSION = "finance-daily-brief-v7"
 
 _SIGNAL_FEATURE_KEYS = {
     "close",
@@ -74,14 +74,14 @@ Requirements:
 - If evidence is missing or contradictory, say exactly how that limits the conclusion. Do not pad the report with generic disclaimers.
 - Produce 4-6 substantive sections. Each section should contain 2-4 analytical sentences specific to today's evidence, not a description of what the UI module does.
 - Include a decision-oriented action map only where evidence supports it. Stances are research guidance, never executable orders: buy_on_confirmation, hold, reduce_on_weakness, exit_if_invalidated, watch, avoid. Technical alignment alone is insufficient for buy_on_confirmation: require at least one non-technical support (fresh catalyst, fundamentals, breadth/relative strength, or a clearly supplied thesis update). If it is absent, use watch/hold/avoid and say what evidence is missing.
-- For every action view, state what changed, the intended trading-session horizon, an observable invalidation, and supplied evidence references. Prioritize current holdings, material thesis changes and the highest-conviction opportunities; do not fill a quota.
+- For every action view, make the selection logic independently reviewable: state what changed, why the instrument matters NOW, its industry/supply-chain or portfolio role, 2-6 evidence pillars, fresh catalysts (an empty list is valid), the strongest counter-case, the intended trading-session horizon, an observable invalidation, and supplied evidence references. Do not hide these behind a generic score or a technical-indicator paragraph. If the packet cannot support at least two distinct evidence pillars, omit the action view. Prioritize current holdings, material thesis changes and the highest-conviction opportunities; do not fill a quota.
 - 'watch_next' must contain 2-6 concrete questions, events, levels, symbols or evidence changes to monitor next.
 - Emit at most 8 action views and 0-8 measurable forecast claims; prioritize material changes over coverage. A claim is a research view, not an order. Use instrument horizons 1/3/5/10/20 sessions, market regime 1/3/5, discovery/theme 5/20/60, and event 1/5. Do not emit a claim when the evidence cannot support a direction and confidence.
 - Classify claims precisely: `instrument` is one listed stock/ETF, `index` is one canonical index ticker, `indicator` is one directly price-observable series such as `^VIX`, `theme` requires a supplied listed-leader basket, and `market` uses the market benchmark. Never encode SMA/RSI labels, dates or prose as ticker-like entity keys.
 - Instrument/index/indicator claims must use an exact provider-resolvable ticker as entity_key. Event claims are only measurable when tied to one listed instrument: emit one claim per affected ticker and use that exact ticker as entity_key; never use event names, dates, joined ticker lists, private-company names, or labels such as "EARNINGS:..." as entity_key. Claims must name an invalidation condition and cite supplied evidence references (ticker, source URL, or signal source_agent).
 
 Return ONLY one JSON object with this exact shape:
-{"headline":"concise market-specific conclusion","summary":"2-4 paragraph executive synthesis","change_summary":["material change since prior brief"],"action_views":[{"symbol":"exact ticker","display_name":"optional supplied name","stance":"buy_on_confirmation|hold|reduce_on_weakness|exit_if_invalidated|watch|avoid","thesis_state":"new|strengthened|unchanged|weakened|invalidated","confidence":0.0,"horizon_sessions":5,"what_changed":"specific delta","rationale":"multi-factor reasoning","invalidation":"observable condition","evidence_refs":["supplied reference"]}],"sections":[{"title":"market-specific section title","analysis":"2-5 analytical sentences"}],"watch_next":["concrete follow-up"],"claims":[{"entity_type":"market|instrument|index|indicator|theme|event","entity_key":"exact identifier","claim_type":"regime|swing_direction|discovery|theme|event","direction":"long|short|neutral|risk_on|risk_off|positive|negative","confidence":0.0,"horizons":[1,3,5],"thesis":"evidence-bound claim","invalidation":"observable invalidation","benchmark":"optional ticker","expected_condition":"measurable expected state","evidence_refs":["supplied reference"]}]}
+{"headline":"concise market-specific conclusion","summary":"2-4 paragraph executive synthesis","change_summary":["material change since prior brief"],"action_views":[{"symbol":"exact ticker","display_name":"optional supplied name","stance":"buy_on_confirmation|hold|reduce_on_weakness|exit_if_invalidated|watch|avoid","thesis_state":"new|strengthened|unchanged|weakened|invalidated","confidence":0.0,"horizon_sessions":5,"what_changed":"specific delta","why_now":"why this deserves attention in this edition","industry_role":"industry, supply-chain, market-exposure or portfolio role","evidence_pillars":[{"kind":"fundamental|valuation|trend|catalyst|positioning|portfolio|risk|unknown","finding":"specific supplied finding"}],"catalysts":["fresh supplied catalyst"],"counter_case":"strongest conflicting evidence or missing proof","rationale":"integrated multi-factor conclusion","invalidation":"observable condition","evidence_refs":["supplied reference"]}],"sections":[{"title":"market-specific section title","analysis":"2-5 analytical sentences"}],"watch_next":["concrete follow-up"],"claims":[{"entity_type":"market|instrument|index|indicator|theme|event","entity_key":"exact identifier","claim_type":"regime|swing_direction|discovery|theme|event","direction":"long|short|neutral|risk_on|risk_off|positive|negative","confidence":0.0,"horizons":[1,3,5],"thesis":"evidence-bound claim","invalidation":"observable invalidation","benchmark":"optional ticker","expected_condition":"measurable expected state","evidence_refs":["supplied reference"]}]}
 """
 
 _MARKET_LENSES = {
@@ -339,6 +339,8 @@ def _build_history_context(
                     "confidence": row.get("confidence"),
                     "horizon_sessions": row.get("horizon_sessions"),
                     "what_changed": str(row.get("what_changed") or "")[:160],
+                    "why_now": str(row.get("why_now") or "")[:160],
+                    "counter_case": str(row.get("counter_case") or "")[:160],
                     "invalidation": str(row.get("invalidation") or "")[:160],
                 }
             )
@@ -448,6 +450,12 @@ def _validate_action_views(rows: list, brief: ResearchBrief) -> list[ThesisActio
     actions: list[ThesisAction] = []
     for raw in rows:
         action = ThesisAction.model_validate(raw)
+        if not action.why_now.strip() or not action.industry_role.strip():
+            raise ValueError(f"action lacks why-now or role context: {action.symbol}")
+        if len({pillar.kind for pillar in action.evidence_pillars}) < 2:
+            raise ValueError(f"action lacks two distinct evidence pillars: {action.symbol}")
+        if not action.counter_case.strip():
+            raise ValueError(f"action lacks a counter-case: {action.symbol}")
         if action.symbol not in allowed_symbols:
             raise ValueError(f"action symbol not present in evidence: {action.symbol}")
         if action.stance == "buy_on_confirmation" and not (
@@ -549,7 +557,7 @@ class ResearchBriefWriter:
                 change_summary=[
                     str(row).strip() for row in data.get("change_summary", []) if str(row).strip()
                 ][:6],
-                action_views=_validate_action_views(data.get("action_views", [])[:12], brief)[:12],
+                action_views=_validate_action_views(data.get("action_views", [])[:8], brief)[:8],
                 sections=sections,
                 watch_next=[
                     str(row).strip() for row in data.get("watch_next", []) if str(row).strip()
@@ -582,8 +590,8 @@ class ResearchBriefWriter:
                         for row in data.get("change_summary", [])
                         if str(row).strip()
                     ][:6],
-                    action_views=_validate_action_views(data.get("action_views", [])[:12], brief)[
-                        :12
+                    action_views=_validate_action_views(data.get("action_views", [])[:8], brief)[
+                        :8
                     ],
                     sections=[NarrativeSection.model_validate(row) for row in data["sections"][:7]],
                     watch_next=[

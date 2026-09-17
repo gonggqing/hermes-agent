@@ -2538,9 +2538,15 @@ export const en: Translations = {
       narrativeFailure: reason => `Primary-model synthesis failed for this edition: ${reason}`,
       narrativeWatchNext: 'What to watch next',
       narrativeSincePrior: 'What changed since the prior brief',
-      narrativeActionMap: 'Trend action map',
+      narrativeActionMap: 'Priority ideas and thesis tracking',
       narrativeHorizon: sessions => `${sessions} sessions`,
       narrativeInvalidation: 'Invalidation',
+      narrativeWhyNow: 'Why it matters now',
+      narrativeIndustryRole: 'Role in the market',
+      narrativeEvidence: 'Evidence',
+      narrativeCatalysts: 'Fresh catalysts',
+      narrativeCounterCase: 'Counter-case',
+      narrativeAssessment: 'Integrated view',
       narrativeStances: {
         buy_on_confirmation: 'Consider buying on confirmation',
         hold: 'Hold',
@@ -2548,6 +2554,23 @@ export const en: Translations = {
         exit_if_invalidated: 'Exit if invalidated',
         watch: 'Watch',
         avoid: 'Avoid'
+      },
+      narrativeThesisStates: {
+        new: 'New view',
+        strengthened: 'Strengthened',
+        unchanged: 'Unchanged',
+        weakened: 'Weakened',
+        invalidated: 'Invalidated'
+      },
+      narrativeEvidenceKinds: {
+        fundamental: 'Fundamentals',
+        valuation: 'Valuation',
+        trend: 'Trend',
+        catalyst: 'Catalyst',
+        positioning: 'Positioning',
+        portfolio: 'Portfolio',
+        risk: 'Risk',
+        unknown: 'Evidence gap'
       },
       freshMarket: 'market',
       freshNews: 'news',

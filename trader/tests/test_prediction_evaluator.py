@@ -127,6 +127,26 @@ def test_latest_closed_session_observes_market_delay_and_weekend():
     assert latest_closed_trading_date(
         "US", datetime(2026, 7, 17, 21, 0, tzinfo=timezone.utc)
     ) == date(2026, 7, 17)
+
+
+def test_missing_due_close_with_later_bar_is_retired_instead_of_retried(tmp_path):
+    class GapFeed(_Feed):
+        def get_bars(self, symbol: str, timeframe: str = "1d", limit: int = 100):
+            rows = super().get_bars(symbol, timeframe, limit)
+            if symbol == "VST":
+                return [rows[0], _bar("VST", 20, 170.0, high=171.0, low=169.0)]
+            if symbol == "SPY":
+                return [rows[0], _bar("SPY", 20, 104.0, high=105.0, low=103.0)]
+            return rows
+
+    ledger = PredictionLedger(f"sqlite:///{tmp_path / 'predictions.db'}")
+    ledger.record_brief("us", _brief())
+
+    report = PredictionCloseEvaluator(ledger, GapFeed()).run_market("us", "2026-07-20")
+
+    assert report.due == 2
+    assert report.unscorable == 2
+    assert report.deferred == 0
     assert latest_closed_trading_date(
         "US", datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
     ) == date(2026, 7, 17)

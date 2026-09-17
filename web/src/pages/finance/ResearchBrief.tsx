@@ -25,6 +25,7 @@ import type {
   FinanceKnowledgeHit,
   FinanceResearchBrief,
   FinanceResearchMarket,
+  FinanceThesisAction,
 } from "@/lib/api";
 import { discoveryCandidates } from "./research-compat";
 import { cn } from "@/lib/utils";
@@ -59,6 +60,23 @@ const SEARCH_DEBOUNCE_MS = 350;
 const SEARCH_MIN_CHARS = 2;
 /** Results requested per search. */
 const SEARCH_K = 5;
+
+const THESIS_STATE_ORDER: Record<FinanceThesisAction["thesis_state"], number> = {
+  invalidated: 0,
+  weakened: 1,
+  new: 2,
+  strengthened: 3,
+  unchanged: 4,
+};
+
+function thesisStateTone(
+  state: FinanceThesisAction["thesis_state"],
+): "destructive" | "warning" | "success" | "outline" {
+  if (state === "invalidated") return "destructive";
+  if (state === "weakened") return "warning";
+  if (state === "new" || state === "strengthened") return "success";
+  return "outline";
+}
 
 function interpolate(
   template: string,
@@ -137,6 +155,12 @@ function NarrativeBrief({
 }) {
   const copy = ft.brief.summary;
   const narrative = brief.narrative;
+  const actions = [...(narrative?.action_views ?? [])].sort(
+    (left, right) =>
+      THESIS_STATE_ORDER[left.thesis_state] -
+        THESIS_STATE_ORDER[right.thesis_state] ||
+      right.confidence - left.confidence,
+  );
 
   return (
     <Card className="border-primary/30 bg-primary/[0.03]">
@@ -199,16 +223,16 @@ function NarrativeBrief({
                 </ul>
               </section>
             )}
-            {(narrative.action_views ?? []).length > 0 && (
+            {actions.length > 0 && (
               <section className="border-t border-border pt-4">
                 <h4 className="text-xs uppercase tracking-wide text-text-tertiary">
                   {copy.actionMap}
                 </h4>
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  {(narrative.action_views ?? []).map((action) => (
-                    <div
+                <div className="mt-3 divide-y divide-border">
+                  {actions.map((action) => (
+                    <article
                       key={`${action.symbol}-${action.stance}`}
-                      className="border border-border p-3"
+                      className="py-4 first:pt-0 last:pb-0"
                     >
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-mono-ui text-sm font-semibold">
@@ -222,6 +246,10 @@ function NarrativeBrief({
                         <Badge tone="outline">
                           {copy.stances[action.stance] ?? action.stance}
                         </Badge>
+                        <Badge tone={thesisStateTone(action.thesis_state)}>
+                          {copy.thesisStates[action.thesis_state] ??
+                            action.thesis_state}
+                        </Badge>
                         <span className="text-xs text-text-tertiary">
                           {interpolate(copy.horizonSessions, {
                             n: action.horizon_sessions,
@@ -229,18 +257,80 @@ function NarrativeBrief({
                           · {Math.round(action.confidence * 100)}%
                         </span>
                       </div>
-                      <p className="mt-2 font-mondwest normal-case text-sm leading-6 text-foreground">
+                      <p className="mt-3 border-l-2 border-primary/30 pl-3 font-mondwest normal-case text-sm leading-6 text-foreground">
                         {action.what_changed}
                       </p>
-                      <p className="mt-1 font-mondwest normal-case text-xs leading-5 text-muted-foreground">
-                        {action.rationale}
-                      </p>
-                      {action.invalidation && (
-                        <p className="mt-2 text-xs text-text-tertiary">
-                          {copy.invalidation}: {action.invalidation}
+                      <div className="mt-3 grid gap-x-6 gap-y-3 md:grid-cols-2">
+                        <div>
+                          <h5 className="text-xs font-semibold text-text-tertiary">
+                            {copy.whyNow}
+                          </h5>
+                          <p className="mt-1 font-mondwest normal-case text-sm leading-6 text-foreground">
+                            {action.why_now || action.rationale}
+                          </p>
+                        </div>
+                        {action.industry_role && (
+                          <div>
+                            <h5 className="text-xs font-semibold text-text-tertiary">
+                              {copy.industryRole}
+                            </h5>
+                            <p className="mt-1 font-mondwest normal-case text-sm leading-6 text-foreground">
+                              {action.industry_role}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                      {(action.evidence_pillars ?? []).length > 0 && (
+                        <div className="mt-3">
+                          <h5 className="text-xs font-semibold text-text-tertiary">
+                            {copy.evidence}
+                          </h5>
+                          <ul className="mt-1 grid gap-x-6 gap-y-1 md:grid-cols-2">
+                            {(action.evidence_pillars ?? []).map((pillar) => (
+                              <li
+                                key={`${pillar.kind}-${pillar.finding}`}
+                                className="font-mondwest normal-case text-xs leading-5 text-muted-foreground"
+                              >
+                                <span className="font-semibold text-foreground">
+                                  {copy.evidenceKinds[pillar.kind] ?? pillar.kind}:
+                                </span>{" "}
+                                {pillar.finding}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      <div className="mt-3 grid gap-x-6 gap-y-3 md:grid-cols-2">
+                        <div>
+                          <h5 className="text-xs font-semibold text-text-tertiary">
+                            {copy.assessment}
+                          </h5>
+                          <p className="mt-1 font-mondwest normal-case text-xs leading-5 text-muted-foreground">
+                            {action.rationale}
+                          </p>
+                        </div>
+                        <div>
+                          <h5 className="text-xs font-semibold text-text-tertiary">
+                            {copy.counterCase}
+                          </h5>
+                          <p className="mt-1 font-mondwest normal-case text-xs leading-5 text-muted-foreground">
+                            {action.counter_case || action.invalidation}
+                          </p>
+                        </div>
+                      </div>
+                      {(action.catalysts ?? []).length > 0 && (
+                        <p className="mt-3 font-mondwest normal-case text-xs leading-5 text-muted-foreground">
+                          <span className="font-semibold text-foreground">
+                            {copy.catalysts}:
+                          </span>{" "}
+                          {(action.catalysts ?? []).join(" · ")}
                         </p>
                       )}
-                    </div>
+                      <p className="mt-2 font-mondwest normal-case text-xs leading-5 text-text-tertiary">
+                        <span className="font-semibold">{copy.invalidation}:</span>{" "}
+                        {action.invalidation}
+                      </p>
+                    </article>
                   ))}
                 </div>
               </section>

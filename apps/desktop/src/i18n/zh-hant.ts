@@ -14,6 +14,30 @@ export const zhHant = defineLocale({
     },
     research: {
       briefTitle: '投資研究簡報',
+      narrativeActionMap: '重點標的與觀點追蹤',
+      narrativeWhyNow: '為什麼是現在',
+      narrativeIndustryRole: '市場與產業鏈位置',
+      narrativeEvidence: '支持證據',
+      narrativeCatalysts: '新增催化',
+      narrativeCounterCase: '反方證據',
+      narrativeAssessment: '綜合判斷',
+      narrativeThesisStates: {
+        new: '新觀點',
+        strengthened: '觀點增強',
+        unchanged: '觀點未變',
+        weakened: '觀點轉弱',
+        invalidated: '觀點失效'
+      },
+      narrativeEvidenceKinds: {
+        fundamental: '基本面',
+        valuation: '估值',
+        trend: '趨勢',
+        catalyst: '催化',
+        positioning: '資金與持倉',
+        portfolio: '組合影響',
+        risk: '風險',
+        unknown: '證據缺口'
+      },
       marketsGroup: '市場',
       watchGroup: '關注',
       marketChina: '中國',

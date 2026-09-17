@@ -21,6 +21,7 @@ import {
   type FinanceRiskView,
   type FinanceSignalView,
   type FinanceThemeView,
+  type FinanceThesisAction,
   getFinanceResearchBrief,
   getResearchWatchlists,
   postFinanceResearchRun,
@@ -65,6 +66,32 @@ const BRIEF_POLL_MS = 60_000
 
 // Knowledge search results per query (server clamps k to 1..25).
 const SEARCH_K = 5
+
+const THESIS_STATE_ORDER: Record<FinanceThesisAction['thesis_state'], number> = {
+  invalidated: 0,
+  weakened: 1,
+  new: 2,
+  strengthened: 3,
+  unchanged: 4
+}
+
+function thesisStateVariant(
+  state: FinanceThesisAction['thesis_state']
+): 'destructive' | 'warn' | 'success' | 'outline' {
+  if (state === 'invalidated') {
+    return 'destructive'
+  }
+
+  if (state === 'weakened') {
+    return 'warn'
+  }
+
+  if (state === 'new' || state === 'strengthened') {
+    return 'success'
+  }
+
+  return 'outline'
+}
 
 type ResearchCopy = ReturnType<typeof useI18n>['t']['finance']['research']
 
@@ -439,6 +466,12 @@ function NarrativeBrief({ brief }: { brief: FinanceResearchBrief }) {
   const copy = t.finance.research
   const narrative = brief.narrative
 
+  const actions = [...(narrative?.action_views ?? [])].sort(
+    (left, right) =>
+      THESIS_STATE_ORDER[left.thesis_state] - THESIS_STATE_ORDER[right.thesis_state] ||
+      right.confidence - left.confidence
+  )
+
   return (
     <FinanceCard className="space-y-5 border-primary/30 bg-primary/5">
       <div className="flex items-start gap-2.5">
@@ -483,12 +516,12 @@ function NarrativeBrief({ brief }: { brief: FinanceResearchBrief }) {
               </ul>
             </section>
           )}
-          {(narrative.action_views ?? []).length > 0 && (
+          {actions.length > 0 && (
             <section className="border-t border-(--ui-stroke-tertiary) pt-3">
               <FinanceSectionLabel>{copy.narrativeActionMap}</FinanceSectionLabel>
-              <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                {(narrative.action_views ?? []).map(action => (
-                  <FinanceCard className="space-y-2" key={`${action.symbol}-${action.stance}`}>
+              <div className="mt-2 divide-y divide-(--ui-stroke-tertiary)">
+                {actions.map(action => (
+                  <article className="space-y-3 py-3 first:pt-0 last:pb-0" key={`${action.symbol}-${action.stance}`}>
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-xs font-semibold text-foreground">{action.symbol}</span>
                       {action.display_name && (
@@ -497,18 +530,66 @@ function NarrativeBrief({ brief }: { brief: FinanceResearchBrief }) {
                       <FinancePill variant="outline">
                         {copy.narrativeStances[action.stance] ?? action.stance}
                       </FinancePill>
+                      <FinancePill variant={thesisStateVariant(action.thesis_state)}>
+                        {copy.narrativeThesisStates[action.thesis_state] ?? action.thesis_state}
+                      </FinancePill>
                       <span className="text-[0.62rem] text-muted-foreground">
                         {copy.narrativeHorizon(action.horizon_sessions)} · {Math.round(action.confidence * 100)}%
                       </span>
                     </div>
-                    <p className="text-xs leading-5 text-foreground">{action.what_changed}</p>
-                    <p className="text-[0.68rem] leading-5 text-muted-foreground">{action.rationale}</p>
-                    {action.invalidation && (
-                      <p className="text-[0.62rem] leading-5 text-muted-foreground">
-                        {copy.narrativeInvalidation}: {action.invalidation}
+                    <p className="border-l-2 border-primary/30 pl-3 text-xs leading-5 text-foreground">
+                      {action.what_changed}
+                    </p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <FinanceSectionLabel>{copy.narrativeWhyNow}</FinanceSectionLabel>
+                        <p className="mt-1 text-xs leading-5 text-foreground">{action.why_now || action.rationale}</p>
+                      </div>
+                      {action.industry_role && (
+                        <div>
+                          <FinanceSectionLabel>{copy.narrativeIndustryRole}</FinanceSectionLabel>
+                          <p className="mt-1 text-xs leading-5 text-foreground">{action.industry_role}</p>
+                        </div>
+                      )}
+                    </div>
+                    {(action.evidence_pillars ?? []).length > 0 && (
+                      <div>
+                        <FinanceSectionLabel>{copy.narrativeEvidence}</FinanceSectionLabel>
+                        <ul className="mt-1 grid gap-x-4 gap-y-1 sm:grid-cols-2">
+                          {(action.evidence_pillars ?? []).map(pillar => (
+                            <li className="text-[0.68rem] leading-5 text-muted-foreground" key={`${pillar.kind}-${pillar.finding}`}>
+                              <span className="font-medium text-foreground">
+                                {copy.narrativeEvidenceKinds[pillar.kind] ?? pillar.kind}:
+                              </span>{' '}
+                              {pillar.finding}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <FinanceSectionLabel>{copy.narrativeAssessment}</FinanceSectionLabel>
+                        <p className="mt-1 text-[0.68rem] leading-5 text-muted-foreground">{action.rationale}</p>
+                      </div>
+                      <div>
+                        <FinanceSectionLabel>{copy.narrativeCounterCase}</FinanceSectionLabel>
+                        <p className="mt-1 text-[0.68rem] leading-5 text-muted-foreground">
+                          {action.counter_case || action.invalidation}
+                        </p>
+                      </div>
+                    </div>
+                    {(action.catalysts ?? []).length > 0 && (
+                      <p className="text-[0.68rem] leading-5 text-muted-foreground">
+                        <span className="font-medium text-foreground">{copy.narrativeCatalysts}:</span>{' '}
+                        {(action.catalysts ?? []).join(' · ')}
                       </p>
                     )}
-                  </FinanceCard>
+                    <p className="text-[0.62rem] leading-5 text-muted-foreground">
+                      <span className="font-medium text-foreground">{copy.narrativeInvalidation}:</span>{' '}
+                      {action.invalidation}
+                    </p>
+                  </article>
                 ))}
               </div>
             </section>

@@ -3841,6 +3841,14 @@ export interface FinanceThesisAction {
   horizon_sessions: number;
   what_changed: string;
   rationale: string;
+  why_now?: string;
+  industry_role?: string;
+  evidence_pillars?: Array<{
+    kind: string;
+    finding: string;
+  }>;
+  catalysts?: string[];
+  counter_case?: string;
   invalidation: string;
   evidence_refs: string[];
 }

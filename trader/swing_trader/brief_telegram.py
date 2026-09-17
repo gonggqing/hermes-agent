@@ -27,7 +27,7 @@ _TOP_NEWS = 4
 _TOP_SIGNALS = 4
 _TOP_DISCOVERY = 3
 _MAX_WARNINGS = 3
-_MAX_ACTIONS = 6
+_MAX_ACTIONS = 4
 
 _STANCE_ZH = {
     "buy_on_confirmation": "确认后考虑买入",
@@ -36,6 +36,14 @@ _STANCE_ZH = {
     "exit_if_invalidated": "失效退出",
     "watch": "观察",
     "avoid": "回避",
+}
+
+_THESIS_STATE_ZH = {
+    "new": "新观点",
+    "strengthened": "观点增强",
+    "unchanged": "观点未变",
+    "weakened": "观点转弱",
+    "invalidated": "观点失效",
 }
 
 _L = {
@@ -55,6 +63,11 @@ _L = {
         "none": "无",
         "source": "数据源",
         "stale": "⚠️ 数据陈旧/缺失",
+        "action_map": "重点标的与观点跟踪",
+        "sessions": "个交易日",
+        "why_now": "为什么是现在",
+        "counter_case": "反方证据",
+        "invalidation": "失效条件",
     },
     "en": {
         "title": "Investment Research Brief",
@@ -72,6 +85,11 @@ _L = {
         "none": "none",
         "source": "Source",
         "stale": "⚠️ stale/missing data",
+        "action_map": "Priority ideas and thesis tracking",
+        "sessions": "sessions",
+        "why_now": "Why now",
+        "counter_case": "Counter-case",
+        "invalidation": "Invalidation",
     },
 }
 
@@ -125,13 +143,23 @@ def render_research_brief(
             lines.extend(f"· {item}" for item in narrative.change_summary)
         if narrative.action_views:
             lines.append("")
-            lines.append("【趋势行动图】" if lang == "zh" else "【Trend action map】")
+            lines.append(f"【{t['action_map']}】")
             for action in narrative.action_views[:_MAX_ACTIONS]:
                 stance = _STANCE_ZH.get(action.stance, action.stance) if lang == "zh" else action.stance
+                state = (
+                    _THESIS_STATE_ZH.get(action.thesis_state, action.thesis_state)
+                    if lang == "zh"
+                    else action.thesis_state
+                )
                 lines.append(
-                    f"· {action.symbol} · {stance} · {action.horizon_sessions}日 "
-                    f"({action.confidence:.0%}) — {action.what_changed}；"
-                    f"失效条件：{action.invalidation or '未形成'}"
+                    f"· {action.symbol} · {stance} · {state} · "
+                    f"{action.horizon_sessions} {t['sessions']} ({action.confidence:.0%})"
+                )
+                lines.append(f"  {action.what_changed}")
+                lines.append(f"  {t['why_now']}：{action.why_now or action.rationale}")
+                lines.append(
+                    f"  {t['counter_case']}：{action.counter_case or action.invalidation}；"
+                    f"{t['invalidation']}：{action.invalidation}"
                 )
         for section in narrative.sections:
             lines.append("")
